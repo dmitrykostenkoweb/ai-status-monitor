@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ai_agent_status_lib.status_model import agent_semantic
 
 CACHE_DIR = Path.home() / ".cache" / "ai-cli-status-monitor"
 LAST_PAYLOADS_DIR = CACHE_DIR / "last_payloads"
@@ -37,14 +38,6 @@ def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def lower_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.lower()
-    return json.dumps(value, ensure_ascii=False, default=str).lower()
-
-
 def first_string(payload: dict[str, Any], keys: tuple[str, ...], fallback: str = "") -> str:
     for key in keys:
         value = payload.get(key)
@@ -68,18 +61,6 @@ def detected_tool_name(payload: dict[str, Any]) -> str:
                 return nested
 
     return ""
-
-
-def payload_search_text(payload: dict[str, Any]) -> str:
-    parts: list[str] = []
-    for key in ("notification", "message", "content", "reason", "title", "body"):
-        if key in payload:
-            parts.append(lower_text(payload[key]))
-    return " ".join(parts)
-
-
-def contains_any(value: str, needles: tuple[str, ...]) -> bool:
-    return any(needle in value for needle in needles)
 
 
 def fallback_session_key(agent: str, payload: dict[str, Any]) -> str:
@@ -109,63 +90,6 @@ def stable_session_id(agent: str, payload: dict[str, Any]) -> str:
         raw = fallback_session_key(agent, payload)
     digest = hashlib.sha1(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
     return f"{agent}-{digest}"
-
-
-def claude_status(event: str, tool: str, payload: dict[str, Any]) -> str:
-    event_l = event.lower()
-    tool_l = tool.lower()
-    agent = "Claude"
-
-    if event_l == "userpromptsubmit":
-        return f"{agent}: myśli"
-    if event_l == "pretooluse":
-        if contains_any(tool_l, ("askuserquestion", "ask_user", "question", "input")):
-            return f"{agent}: czeka na Ciebie"
-        if contains_any(tool_l, ("edit", "write", "multiedit", "notebookedit", "todowrite")):
-            return f"{agent}: koduje"
-        if contains_any(tool_l, ("bash", "shell", "command")):
-            return f"{agent}: wykonuje komendę"
-        if contains_any(tool_l, ("read", "grep", "glob", "ls", "search", "webfetch", "websearch")):
-            return f"{agent}: czyta kod"
-        return f"{agent}: wykonuje akcję"
-    if event_l == "posttooluse":
-        return f"{agent}: analizuje wynik"
-    if event_l == "notification":
-        text = payload_search_text(payload)
-        if contains_any(text, ("permission", "approval", "approve", "allow", "confirm", "trust", "zgod")):
-            return f"{agent}: czeka na zgodę"
-        if contains_any(text, ("idle", "input", "response", "user", "waiting", "czeka")):
-            return f"{agent}: czeka na Ciebie"
-    if event_l == "stop":
-        return f"{agent}: zakończył"
-    if event_l == "stopfailure":
-        return f"{agent}: błąd"
-    return f"{agent}: {event}"
-
-
-def codex_status(event: str, tool: str, payload: dict[str, Any]) -> str:
-    event_l = event.lower()
-    tool_l = tool.lower()
-    agent = "Codex"
-
-    if event_l == "userpromptsubmit":
-        return f"{agent}: myśli"
-    if event_l == "pretooluse":
-        if contains_any(tool_l, ("shell", "bash", "exec", "command", "terminal")):
-            return f"{agent}: wykonuje komendę"
-        if contains_any(tool_l, ("apply_patch", "patch", "edit", "write")):
-            return f"{agent}: koduje"
-        if contains_any(tool_l, ("read", "search", "rg", "grep", "find", "open", "cat", "sed", "ls")):
-            return f"{agent}: czyta kod"
-    if event_l == "permissionrequest":
-        return f"{agent}: czeka na zgodę"
-    if event_l == "posttooluse":
-        return f"{agent}: analizuje wynik"
-    if event_l == "stop":
-        return f"{agent}: zakończył"
-    if event_l == "subagentstop":
-        return "Codex subagent: zakończył"
-    return f"{agent}: {event}"
 
 
 def parse_payload(raw: str, agent: str) -> tuple[dict[str, Any], Path]:
@@ -216,15 +140,13 @@ def build_status(agent: str, payload: dict[str, Any], raw_payload_path: Path) ->
     cwd = first_string(payload, ("cwd",), os.getcwd())
     project = Path(cwd).name if cwd else ""
 
-    if agent == "claude":
-        status = claude_status(event, tool, payload)
-    else:
-        status = codex_status(event, tool, payload)
+    semantic = agent_semantic(agent, event, tool, payload)
 
     return {
         "id": stable_session_id(agent, payload),
         "agent": agent,
-        "status": status,
+        "kind": semantic["kind"],
+        "status": semantic["status"],
         "event": event,
         "tool": tool,
         "project": project,

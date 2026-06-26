@@ -45,6 +45,9 @@ for script in "${scripts[@]}"; do
   chmod +x "$bin_dir/$script"
 done
 
+rm -rf "$bin_dir/ai_agent_status_lib"
+cp -R "$project_dir/bin/ai_agent_status_lib" "$bin_dir/ai_agent_status_lib"
+
 cp "$project_dir/assets/ai-cli-status-widget.svg" "$icon_file"
 cp "$project_dir/assets/ai-cli-status-widget.png" "$png_icon_file"
 cp "$project_dir/assets/notification.mp3" "$notification_sound_file"

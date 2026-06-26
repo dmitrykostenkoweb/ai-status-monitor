@@ -12,6 +12,12 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
+from ai_agent_status_lib.status_model import IN_PROGRESS_KINDS
+from ai_agent_status_lib.status_model import INACTIVE_KINDS
+from ai_agent_status_lib.status_model import classify_status_text
+from ai_agent_status_lib.status_model import normalize_kind
+from ai_agent_status_lib.status_model import StatusKind
+
 
 CACHE_DIR = Path.home() / ".cache" / "ai-cli-status-monitor"
 CONFIG_DIR = Path.home() / ".config" / "ai-cli-status-monitor"
@@ -47,7 +53,8 @@ AGENT_NAME_COLORS = {"claude": "#FF9B7A", "codex": "#7DD3FC"}
 ACCENT = "#2DD4BF"
 META_COLOR = "#566173"
 TITLE_COLOR = "#E6EDF3"
-IN_PROGRESS = {"thinking", "reading", "coding", "command", "analyzing"}
+IN_PROGRESS = IN_PROGRESS_KINDS
+INACTIVE = INACTIVE_KINDS
 
 DEFAULT_CONFIG = {
     "sound_enabled": True,
@@ -98,30 +105,7 @@ def hex_to_rgb(value: str) -> tuple[float, float, float]:
 
 def classify(status: str) -> str:
     """Map a Polish status string to a state kind used for colour and animation."""
-    text = status.lower()
-    if any(word in text for word in ("not running", "nie uruchomiony")):
-        return "idle"
-    if any(word in text for word in ("czeka", "zgod", "permission", "approval")):
-        return "waiting"
-    if any(word in text for word in ("błąd", "error", "failure", "malformed")):
-        return "error"
-    if "myśl" in text:
-        return "thinking"
-    if "czyta" in text:
-        return "reading"
-    if "koduje" in text:
-        return "coding"
-    if "wykon" in text or "komend" in text:
-        return "command"
-    if "analiz" in text:
-        return "analyzing"
-    if "kończył" in text or "done" in text or "finished" in text:
-        return "done"
-    if "brak nowych" in text:
-        return "stale"
-    if "idle" in text or "bezczynny" in text:
-        return "idle"
-    return "neutral"
+    return classify_status_text(status)
 
 
 class StatusDot(Gtk.DrawingArea):
@@ -525,19 +509,30 @@ class StatusWidget(Gtk.Window):
             return sessions
         return self.read_combined_sessions()
 
-    def make_session(self, agent: str, status: str, project: str, hhmm: str,
-                     cwd: str = "", client_pids: list[int] | None = None) -> dict[str, object]:
-        kind = classify(status)
+    def make_session(
+        self,
+        agent: str,
+        status: str,
+        project: str,
+        hhmm: str,
+        cwd: str = "",
+        client_pids: list[int] | None = None,
+        kind: StatusKind | str | None = None,
+        source_kind: StatusKind | str | None = None,
+    ) -> dict[str, object]:
+        normalized_kind = normalize_kind(kind, status)
+        original_kind = normalize_kind(source_kind if source_kind is not None else normalized_kind, status)
         return {
             "agent": agent if agent in AGENT_NAME_COLORS else "",
             "name": agent.capitalize() if agent else "AI",
             "status": status,
-            "kind": kind,
+            "kind": normalized_kind,
+            "source_kind": original_kind,
             "project": project,
             "time": hhmm,
             "cwd": cwd,
             "client_pids": client_pids or [],
-            "color": STATE_COLORS.get(kind, STATE_COLORS["neutral"]),
+            "color": STATE_COLORS.get(normalized_kind, STATE_COLORS["neutral"]),
         }
 
     def read_structured_sessions(self) -> list[dict[str, object]] | None:
@@ -560,22 +555,25 @@ class StatusWidget(Gtk.Window):
             hhmm = str(data.get("timestamp_hhmm") or "")
             agent = str(data.get("agent") or path.stem).lower()
             cwd = str(data.get("cwd") or "")
+            source_kind = normalize_kind(data.get("kind"), status)
+            display_kind: StatusKind = source_kind
             raw_pids = data.get("client_pids")
             client_pids = [p for p in raw_pids if isinstance(p, int)] if isinstance(raw_pids, list) else []
             age = self.status_age(str(data.get("timestamp_iso") or ""))
             if age is not None:
-                if self.should_hide_status(status, age):
+                if self.should_hide_status(source_kind, status, age):
                     continue
                 if age >= self.config_timedelta("hide_stale_after_seconds"):
                     continue
                 if age >= self.config_timedelta("idle_after_seconds"):
-                    status, project = f"{agent.capitalize()}: idle", ""
+                    status, project, display_kind = f"{agent.capitalize()}: idle", "", "idle"
                 elif age >= self.config_timedelta("stale_after_seconds"):
                     status = f"{agent.capitalize()}: brak nowych eventów"
+                    display_kind = "stale"
             if not status:
                 continue
             name, clean = self.split_agent_status(status, agent)
-            session = self.make_session(agent, clean, project, hhmm, cwd, client_pids)
+            session = self.make_session(agent, clean, project, hhmm, cwd, client_pids, display_kind, source_kind)
             session["name"] = name
             sessions.append(session)
         return sessions
@@ -641,8 +639,8 @@ class StatusWidget(Gtk.Window):
             return None
         return datetime.now() - timestamp
 
-    def should_hide_status(self, status: str, age: timedelta) -> bool:
-        if "kończył" not in status.lower():
+    def should_hide_status(self, kind: StatusKind, status: str, age: timedelta) -> bool:
+        if kind != "done" and classify(status) != "done":
             return False
         return age >= self.config_timedelta("hide_done_after_seconds")
 
@@ -665,11 +663,11 @@ class StatusWidget(Gtk.Window):
             return True  # the startup lockup owns the body until end_intro()
         sessions = self.order_sessions(self.collect_sessions())
         visible = sessions[:MAX_ROWS]
-        hidden_done = sum(1 for s in sessions[MAX_ROWS:] if s["kind"] in ("done", "idle", "stale"))
+        hidden_done = sum(1 for s in sessions[MAX_ROWS:] if s["kind"] in INACTIVE)
 
         waiting = any(s["kind"] == "waiting" for s in visible)
         waiting_count = sum(1 for s in visible if s["kind"] == "waiting")
-        done = bool(visible) and all(s["kind"] in ("done", "idle", "stale") for s in visible)
+        done = bool(visible) and all(s["kind"] in INACTIVE for s in visible)
 
         self.set_waiting_style(waiting)
         self.set_badge(bool(visible), waiting_count)
@@ -723,7 +721,7 @@ class StatusWidget(Gtk.Window):
         row.set_name("row")
         if waiting:
             row.get_style_context().add_class("alertRow")
-        dim = kind in ("done", "idle", "stale")
+        dim = kind in INACTIVE
 
         dot = StatusDot()
         dot.configure_dot(color, waiting)
