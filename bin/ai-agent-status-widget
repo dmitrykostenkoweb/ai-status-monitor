@@ -369,8 +369,6 @@ class StatusWidget(Gtk.Window):
         }
         .dim { opacity: 0.55; }
         #logoBox { border-radius: 7px; }
-        #logoBox.claude { background: linear-gradient(135deg,#3a241c,#291611); border: 1px solid rgba(255,138,101,0.28); }
-        #logoBox.codex  { background: linear-gradient(135deg,#1c2530,#141b24); border: 1px solid rgba(255,255,255,0.10); }
         #agentName {
           font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
           font-size: 12.5px;
