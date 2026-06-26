@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+
+CACHE_DIR = Path.home() / ".cache" / "ai-cli-status-monitor"
+LAST_PAYLOADS_DIR = CACHE_DIR / "last_payloads"
+DEBUG_DIR = CACHE_DIR / "debug_payloads"
+STATUS_DIR = CACHE_DIR / "statuses"
+
+AGENTS = ("claude", "codex")
+
+
+def ensure_dirs() -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    LAST_PAYLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    STATUS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def write_text(path: Path, value: str) -> None:
+    path.write_text(value, encoding="utf-8")
+
+
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def lower_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.lower()
+    return json.dumps(value, ensure_ascii=False, default=str).lower()
+
+
+def first_string(payload: dict[str, Any], keys: tuple[str, ...], fallback: str = "") -> str:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+        if value is not None and not isinstance(value, (dict, list)):
+            return str(value)
+    return fallback
+
+
+def detected_tool_name(payload: dict[str, Any]) -> str:
+    direct = first_string(payload, ("tool_name", "tool", "name"), "")
+    if direct:
+        return direct
+
+    for object_key in ("tool", "tool_use", "toolUse", "tool_call", "toolCall"):
+        value = payload.get(object_key)
+        if isinstance(value, dict):
+            nested = first_string(value, ("tool_name", "name", "type"), "")
+            if nested:
+                return nested
+
+    return ""
+
+
+def payload_search_text(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in ("notification", "message", "content", "reason", "title", "body"):
+        if key in payload:
+            parts.append(lower_text(payload[key]))
+    return " ".join(parts)
+
+
+def contains_any(value: str, needles: tuple[str, ...]) -> bool:
+    return any(needle in value for needle in needles)
+
+
+def fallback_session_key(agent: str, payload: dict[str, Any]) -> str:
+    """No explicit session id in the payload (e.g. Codex sends only cwd + event).
+
+    Key on the POSIX session leader (`getsid`) — the terminal's shell. It is stable for the
+    whole session and unique per window/tab, and unlike `ppid` it survives the transient
+    per-event wrapper process that spawns the hook. Falls back to ppid+cwd only if getsid fails.
+    """
+    try:
+        sid = os.getsid(0)
+    except OSError:
+        sid = 0
+    if sid > 0:
+        return f"{agent}:sid{sid}"
+    cwd = first_string(payload, ("cwd",), os.getcwd())
+    return f"{agent}:{os.getppid()}:{cwd}"
+
+
+def stable_session_id(agent: str, payload: dict[str, Any]) -> str:
+    for key in ("session_id", "sessionId", "conversation_id", "conversationId", "transcript_path", "transcriptPath"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            raw = value.strip()
+            break
+    else:
+        raw = fallback_session_key(agent, payload)
+    digest = hashlib.sha1(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
+    return f"{agent}-{digest}"
+
+
+def claude_status(event: str, tool: str, payload: dict[str, Any]) -> str:
+    event_l = event.lower()
+    tool_l = tool.lower()
+    agent = "Claude"
+
+    if event_l == "userpromptsubmit":
+        return f"{agent}: myśli"
+    if event_l == "pretooluse":
+        if contains_any(tool_l, ("askuserquestion", "ask_user", "question", "input")):
+            return f"{agent}: czeka na Ciebie"
+        if contains_any(tool_l, ("edit", "write", "multiedit", "notebookedit", "todowrite")):
+            return f"{agent}: koduje"
+        if contains_any(tool_l, ("bash", "shell", "command")):
+            return f"{agent}: wykonuje komendę"
+        if contains_any(tool_l, ("read", "grep", "glob", "ls", "search", "webfetch", "websearch")):
+            return f"{agent}: czyta kod"
+        return f"{agent}: wykonuje akcję"
+    if event_l == "posttooluse":
+        return f"{agent}: analizuje wynik"
+    if event_l == "notification":
+        text = payload_search_text(payload)
+        if contains_any(text, ("permission", "approval", "approve", "allow", "confirm", "trust", "zgod")):
+            return f"{agent}: czeka na zgodę"
+        if contains_any(text, ("idle", "input", "response", "user", "waiting", "czeka")):
+            return f"{agent}: czeka na Ciebie"
+    if event_l == "stop":
+        return f"{agent}: zakończył"
+    if event_l == "stopfailure":
+        return f"{agent}: błąd"
+    return f"{agent}: {event}"
+
+
+def codex_status(event: str, tool: str, payload: dict[str, Any]) -> str:
+    event_l = event.lower()
+    tool_l = tool.lower()
+    agent = "Codex"
+
+    if event_l == "userpromptsubmit":
+        return f"{agent}: myśli"
+    if event_l == "pretooluse":
+        if contains_any(tool_l, ("shell", "bash", "exec", "command", "terminal")):
+            return f"{agent}: wykonuje komendę"
+        if contains_any(tool_l, ("apply_patch", "patch", "edit", "write")):
+            return f"{agent}: koduje"
+        if contains_any(tool_l, ("read", "search", "rg", "grep", "find", "open", "cat", "sed", "ls")):
+            return f"{agent}: czyta kod"
+    if event_l == "permissionrequest":
+        return f"{agent}: czeka na zgodę"
+    if event_l == "posttooluse":
+        return f"{agent}: analizuje wynik"
+    if event_l == "stop":
+        return f"{agent}: zakończył"
+    if event_l == "subagentstop":
+        return "Codex subagent: zakończył"
+    return f"{agent}: {event}"
+
+
+def parse_payload(raw: str, agent: str) -> tuple[dict[str, Any], Path]:
+    last_payload_path = LAST_PAYLOADS_DIR / f"{agent}.json"
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError as error:
+        debug_path = DEBUG_DIR / f"{agent}-malformed-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        write_text(debug_path, raw)
+        write_json(last_payload_path, {"malformed": True, "error": str(error), "raw": raw, "debug_path": str(debug_path)})
+        return {"event": "malformed_json", "cwd": os.getcwd()}, last_payload_path
+
+    if not isinstance(parsed, dict):
+        debug_path = DEBUG_DIR / f"{agent}-unexpected-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        write_text(debug_path, raw)
+        write_json(last_payload_path, {"unexpected": True, "raw": raw, "debug_path": str(debug_path)})
+        return {"event": "unexpected_payload", "cwd": os.getcwd()}, last_payload_path
+
+    write_json(last_payload_path, parsed)
+    return parsed, last_payload_path
+
+
+def ancestor_pids() -> list[int]:
+    """Walk the process tree up from this hook so the widget can match the terminal window by PID."""
+    pids: list[int] = []
+    pid = os.getpid()
+    for _ in range(12):
+        pids.append(pid)
+        ppid = 0
+        try:
+            with open(f"/proc/{pid}/status", "r", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("PPid:"):
+                        ppid = int(line.split()[1])
+                        break
+        except (OSError, ValueError):
+            break
+        if ppid <= 1:
+            break
+        pid = ppid
+    return pids
+
+
+def build_status(agent: str, payload: dict[str, Any], raw_payload_path: Path) -> dict[str, Any]:
+    now = datetime.now()
+    event = first_string(payload, ("hook_event_name", "event", "type"), "unknown")
+    tool = detected_tool_name(payload)
+    cwd = first_string(payload, ("cwd",), os.getcwd())
+    project = Path(cwd).name if cwd else ""
+
+    if agent == "claude":
+        status = claude_status(event, tool, payload)
+    else:
+        status = codex_status(event, tool, payload)
+
+    return {
+        "id": stable_session_id(agent, payload),
+        "agent": agent,
+        "status": status,
+        "event": event,
+        "tool": tool,
+        "project": project,
+        "cwd": cwd,
+        "timestamp_iso": now.isoformat(timespec="seconds"),
+        "timestamp_hhmm": now.strftime("%H:%M"),
+        "client_pids": ancestor_pids(),
+        "raw_payload_path": str(raw_payload_path),
+    }
+
+
+def format_panel_line(status: dict[str, Any]) -> str:
+    project = status.get("project") or ""
+    hhmm = status.get("timestamp_hhmm") or ""
+    return f"{status.get('status', '')} [{project}] {hhmm}".strip()
+
+
+def status_timestamp(status: dict[str, Any]) -> str:
+    value = status.get("timestamp_iso")
+    return value if isinstance(value, str) else ""
+
+
+def read_status_files() -> list[dict[str, Any]]:
+    statuses: list[dict[str, Any]] = []
+    paths = list(STATUS_DIR.glob("*.json")) if STATUS_DIR.exists() else []
+    if not paths:
+        paths = [CACHE_DIR / f"{agent}.json" for agent in AGENTS]
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            status = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(status, dict):
+            statuses.append(status)
+    statuses.sort(key=status_timestamp, reverse=True)
+    return statuses
+
+
+def update_combined() -> str:
+    lines = [format_panel_line(status) for status in read_status_files()]
+    combined = "\n".join(line for line in lines if line)
+    write_text(CACHE_DIR / "combined.txt", combined + ("\n" if combined else ""))
+    return combined
+
+
+def handle_payload(agent: str, raw: str) -> dict[str, Any]:
+    ensure_dirs()
+    payload, raw_payload_path = parse_payload(raw, agent)
+    status = build_status(agent, payload, raw_payload_path)
+    status_id = str(status["id"])
+    write_json(STATUS_DIR / f"{status_id}.json", status)
+    write_json(CACHE_DIR / f"{agent}.json", status)
+    write_text(CACHE_DIR / f"{agent}.txt", format_panel_line(status) + "\n")
+    update_combined()
+    return status
+
+
+def run_test(agent: str) -> None:
+    samples = {
+        "claude": [
+            {"hook_event_name": "UserPromptSubmit", "cwd": os.getcwd()},
+            {"hook_event_name": "PreToolUse", "tool_name": "Read", "cwd": os.getcwd()},
+            {"hook_event_name": "PreToolUse", "tool_name": "Edit", "cwd": os.getcwd()},
+            {"hook_event_name": "Notification", "message": "Permission approval required", "cwd": os.getcwd()},
+            {"hook_event_name": "Stop", "cwd": os.getcwd()},
+        ],
+        "codex": [
+            {"hook_event_name": "UserPromptSubmit", "cwd": os.getcwd()},
+            {"hook_event_name": "PreToolUse", "tool_name": "functions.exec_command", "cwd": os.getcwd()},
+            {"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "cwd": os.getcwd()},
+            {"hook_event_name": "PermissionRequest", "tool_name": "Bash", "cwd": os.getcwd()},
+            {"hook_event_name": "Stop", "cwd": os.getcwd()},
+        ],
+    }
+    for payload in samples[agent]:
+        handle_payload(agent, json.dumps(payload))
+    print(update_combined() or "AI agents: idle")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Update local AI CLI agent status from hook JSON.")
+    parser.add_argument("--agent", choices=AGENTS, required=True)
+    parser.add_argument("--test", action="store_true", help="simulate example events and print panel output")
+    args = parser.parse_args()
+
+    if args.test:
+        run_test(args.agent)
+        return 0
+
+    raw = os.sys.stdin.read()
+    handle_payload(args.agent, raw)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

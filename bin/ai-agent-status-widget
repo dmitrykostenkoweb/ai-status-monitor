@@ -1,0 +1,1138 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import math
+import os
+import shutil
+import subprocess
+from datetime import datetime
+from datetime import timedelta
+from pathlib import Path
+
+
+CACHE_DIR = Path.home() / ".cache" / "ai-cli-status-monitor"
+CONFIG_DIR = Path.home() / ".config" / "ai-cli-status-monitor"
+DATA_DIR = Path.home() / ".local" / "share" / "ai-cli-status-monitor"
+STATUS_FILE = CACHE_DIR / "combined.txt"
+AGENT_STATUS_FILES = (CACHE_DIR / "claude.json", CACHE_DIR / "codex.json")
+STATUS_DIR = CACHE_DIR / "statuses"
+WIDGET_CONFIG = CONFIG_DIR / "widget.json"
+LOG_FILE = CACHE_DIR / "widget.log"
+PID_FILE = CACHE_DIR / "widget.pid"
+NOTIFICATION_SOUND = DATA_DIR / "notification.mp3"
+OPENAI_LOGO = DATA_DIR / "openai-logo.svg"
+ANTHROPIC_LOGO = DATA_DIR / "anthropic-logo.png"
+TITLE = "AI Agents Status"
+CARD_WIDTH = 344
+MAX_ROWS = 5
+
+# Per-state palette, taken straight from the design legend.
+STATE_COLORS = {
+    "thinking": "#A78BFA",
+    "reading": "#38BDF8",
+    "coding": "#4ADE80",
+    "command": "#2DD4BF",
+    "analyzing": "#FBBF24",
+    "waiting": "#FB7060",
+    "error": "#FB7060",
+    "done": "#6B7785",
+    "idle": "#6B7785",
+    "stale": "#566173",
+    "neutral": "#9AA4B2",
+}
+AGENT_NAME_COLORS = {"claude": "#FF9B7A", "codex": "#7DD3FC"}
+ACCENT = "#2DD4BF"
+META_COLOR = "#566173"
+TITLE_COLOR = "#E6EDF3"
+IN_PROGRESS = {"thinking", "reading", "coding", "command", "analyzing"}
+
+DEFAULT_CONFIG = {
+    "sound_enabled": True,
+    "stale_after_seconds": 180,
+    "hide_done_after_seconds": 180,
+    "idle_after_seconds": 600,
+    "hide_stale_after_seconds": 900,
+    "theme": "dark",
+}
+
+
+def log(message: str) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with LOG_FILE.open("a", encoding="utf-8") as handle:
+            handle.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
+    except OSError:
+        pass
+
+
+try:
+    import gi
+
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
+except Exception as error:  # pragma: no cover - exercised on systems without GTK
+    log(f"GTK import failed: {error}")
+    print("GTK/PyGObject is not available.")
+    print("Install on Linux Mint with:")
+    print("  sudo apt install python3-gi gir1.2-gtk-3.0 wmctrl")
+    raise SystemExit(1)
+
+try:
+    import cairo
+
+    CAIRO_OK = True
+except Exception as error:  # pragma: no cover
+    log(f"cairo import failed, using flat dots: {error}")
+    CAIRO_OK = False
+
+
+def hex_to_rgb(value: str) -> tuple[float, float, float]:
+    value = value.lstrip("#")
+    return tuple(int(value[i : i + 2], 16) / 255.0 for i in (0, 2, 4))  # type: ignore[return-value]
+
+
+def classify(status: str) -> str:
+    """Map a Polish status string to a state kind used for colour and animation."""
+    text = status.lower()
+    if any(word in text for word in ("not running", "nie uruchomiony")):
+        return "idle"
+    if any(word in text for word in ("czeka", "zgod", "permission", "approval")):
+        return "waiting"
+    if any(word in text for word in ("błąd", "error", "failure", "malformed")):
+        return "error"
+    if "myśl" in text:
+        return "thinking"
+    if "czyta" in text:
+        return "reading"
+    if "koduje" in text:
+        return "coding"
+    if "wykon" in text or "komend" in text:
+        return "command"
+    if "analiz" in text:
+        return "analyzing"
+    if "kończył" in text or "done" in text or "finished" in text:
+        return "done"
+    if "brak nowych" in text:
+        return "stale"
+    if "idle" in text or "bezczynny" in text:
+        return "idle"
+    return "neutral"
+
+
+class StatusDot(Gtk.DrawingArea):
+    """A glowing status dot. Falls back to a flat disc when cairo is missing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.set_size_request(14, 20)
+        self.rgb = hex_to_rgb(STATE_COLORS["neutral"])
+        self.waiting = False
+        self.phase = 0.0
+        if CAIRO_OK:
+            self.connect("draw", self.on_draw)
+
+    def configure_dot(self, color: str, waiting: bool) -> None:
+        self.rgb = hex_to_rgb(color)
+        self.waiting = waiting
+        self.queue_draw()
+
+    def on_draw(self, _area: Gtk.DrawingArea, cr: "cairo.Context") -> bool:
+        width = self.get_allocated_width()
+        height = self.get_allocated_height()
+        cx, cy = width / 2.0, height / 2.0
+        r, g, b = self.rgb
+        if self.waiting:
+            radius = 3.4 + self.phase * 7.0
+            cr.set_source_rgba(r, g, b, max(0.0, (1.0 - self.phase) * 0.55))
+            cr.set_line_width(1.6)
+            cr.arc(cx, cy, radius, 0, 2 * math.pi)
+            cr.stroke()
+        else:
+            glow = cairo.RadialGradient(cx, cy, 1.0, cx, cy, 8.5)
+            glow.add_color_stop_rgba(0.0, r, g, b, 0.42)
+            glow.add_color_stop_rgba(1.0, r, g, b, 0.0)
+            cr.set_source(glow)
+            cr.arc(cx, cy, 8.5, 0, 2 * math.pi)
+            cr.fill()
+        cr.set_source_rgb(r, g, b)
+        cr.arc(cx, cy, 3.4, 0, 2 * math.pi)
+        cr.fill()
+        return False
+
+
+class LogoMark(Gtk.DrawingArea):
+    """The AI Status Monitor radar logo, drawn in a 0-100 viewBox scaled to any size.
+
+    Variants: 'full' (teal rings + rotating sweep wedge + colored blips + core) used in the
+    horizontal lockup, and 'mono' (single-colour rings + wedge + core) used in the header.
+    Optional rounded tile background and rotating sweep.
+    """
+
+    BLIPS = (((65, 32), "#4ADE80"), ((22, 70), "#FBBF24"), ((59, 58), "#FF8A65"))
+
+    def __init__(self, size: int, variant: str = "full", sweep: bool = False,
+                 tile: bool = False, mono_color: str = "#E6EDF3") -> None:
+        super().__init__()
+        self.set_size_request(size, size)
+        self.variant = variant
+        self.sweep = sweep
+        self.tile = tile
+        self.mono_rgb = hex_to_rgb(mono_color)
+        self.angle = 0.0
+        if CAIRO_OK:
+            self.connect("draw", self.on_draw)
+
+    def on_draw(self, _area: Gtk.DrawingArea, cr: "cairo.Context") -> bool:
+        size = min(self.get_allocated_width(), self.get_allocated_height())
+        if size <= 0:
+            return False
+        cr.translate((self.get_allocated_width() - size) / 2.0,
+                     (self.get_allocated_height() - size) / 2.0)
+        cr.scale(size / 100.0, size / 100.0)
+        if self.tile:
+            self._draw_tile(cr)
+        if self.variant == "mono":
+            self._draw_mono(cr)
+        else:
+            self._draw_full(cr)
+        return False
+
+    def _rounded_rect(self, cr: "cairo.Context", x: float, y: float, w: float, h: float, r: float) -> None:
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
+        cr.close_path()
+
+    def _draw_tile(self, cr: "cairo.Context") -> None:
+        self._rounded_rect(cr, 1, 1, 98, 98, 22)
+        grad = cairo.LinearGradient(0, 0, 100, 100)
+        grad.add_color_stop_rgb(0.0, *hex_to_rgb("#17242f"))
+        grad.add_color_stop_rgb(1.0, *hex_to_rgb("#0b121a"))
+        cr.set_source(grad)
+        cr.fill_preserve()
+        cr.set_source_rgba(1, 1, 1, 0.08)
+        cr.set_line_width(1.0)
+        cr.stroke()
+
+    def _draw_full(self, cr: "cairo.Context") -> None:
+        teal = hex_to_rgb("#2DD4BF")
+        core = hex_to_rgb("#5EEAD4")
+        cr.set_line_width(1.2)
+        for radius, alpha in ((34, 0.20), (23, 0.24), (12, 0.32)):
+            cr.set_source_rgba(*teal, alpha)
+            cr.arc(50, 50, radius, 0, 2 * math.pi)
+            cr.stroke()
+        cr.save()
+        cr.translate(50, 50)
+        cr.rotate(self.angle)
+        cr.set_source_rgba(*teal, 0.32)
+        cr.move_to(0, 0)
+        cr.arc(0, 0, 34, -math.pi / 2, math.radians(-50))
+        cr.close_path()
+        cr.fill()
+        cr.set_source_rgba(*core, 0.85)
+        cr.set_line_width(1.4)
+        cr.move_to(0, 0)
+        cr.line_to(0, -34)
+        cr.stroke()
+        cr.restore()
+        for (bx, by), color in self.BLIPS:
+            cr.set_source_rgba(*hex_to_rgb(color), 0.22)
+            cr.arc(bx, by, 5.2, 0, 2 * math.pi)
+            cr.fill()
+            cr.set_source_rgb(*hex_to_rgb(color))
+            cr.arc(bx, by, 2.6, 0, 2 * math.pi)
+            cr.fill()
+        cr.set_source_rgba(*core, 0.25)
+        cr.arc(50, 50, 6, 0, 2 * math.pi)
+        cr.fill()
+        cr.set_source_rgb(*core)
+        cr.arc(50, 50, 3.4, 0, 2 * math.pi)
+        cr.fill()
+
+    def _draw_mono(self, cr: "cairo.Context") -> None:
+        r, g, b = self.mono_rgb
+        cr.set_line_width(3.0)
+        cr.set_source_rgba(r, g, b, 0.35)
+        cr.arc(50, 50, 34, 0, 2 * math.pi)
+        cr.stroke()
+        cr.set_source_rgba(r, g, b, 0.55)
+        cr.arc(50, 50, 20, 0, 2 * math.pi)
+        cr.stroke()
+        cr.set_source_rgba(r, g, b, 0.5)
+        cr.move_to(50, 50)
+        cr.arc(50, 50, 38, -math.pi / 2, math.radians(-45))
+        cr.close_path()
+        cr.fill()
+        cr.set_source_rgb(r, g, b)
+        cr.arc(50, 50, 6, 0, 2 * math.pi)
+        cr.fill()
+
+
+class StatusWidget(Gtk.Window):
+    def __init__(self, demo: bool = False) -> None:
+        super().__init__(title=TITLE)
+        self.set_name("window")
+        self.demo = demo
+        self.demo_index = 0
+        self.config = self.load_config()
+        self.was_waiting_for_interaction = False
+        self.was_done = False
+        self.anim_frame = 0
+        self.signature = None
+        self.anim_dot_labels: list[Gtk.Label] = []
+        self.waiting_dots: list[StatusDot] = []
+        self.spinning: list[LogoMark] = []
+        self.intro = True
+        self.logo_pixbufs = self.load_logos()
+        self.demo_scenarios = [
+            [("claude", "czyta kod", "unitbox-front", "22:16"),
+             ("codex", "analizuje wynik", "ai-cli-status-monitor", "22:16")],
+            [("claude", "koduje", "backend-api", "22:17"),
+             ("codex", "czeka na zgodę", "ai-cli-status-monitor", "22:17")],
+            [("claude", "myśli", "backend-api", "22:14"),
+             ("codex", "wykonuje komendę", "infra-scripts", "22:15"),
+             ("claude", "czyta kod", "unitbox-front", "22:16"),
+             ("codex", "zakończył", "docs-site", "22:11")],
+            [],
+        ]
+
+        self.set_app_paintable(True)
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual is not None and screen.is_composited():
+            self.set_visual(visual)
+        self.set_resizable(False)
+        self.set_decorated(False)
+        self.set_keep_above(True)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.stick()
+        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        self.set_position(Gtk.WindowPosition.NONE)
+        self.restore_position()
+
+        self._build_ui()
+        self.connect("delete-event", self.on_delete)
+        self.connect("button-press-event", self.on_button_press)
+        self.connect("key-press-event", self.on_key_press)
+        self.connect("configure-event", self.on_configure)
+
+        self.build_intro()
+        GLib.timeout_add_seconds(3, self.end_intro)
+        GLib.timeout_add_seconds(1, self.refresh_status)
+        GLib.timeout_add(200, self.tick_animation)
+        GLib.timeout_add_seconds(2, self.apply_wmctrl_hints)
+
+    def _build_ui(self) -> None:
+        css = b"""
+        #window { background: transparent; }
+        #card {
+          background: rgba(13,19,26,0.96);
+          border: 1px solid rgba(255,255,255,0.09);
+          border-radius: 14px;
+        }
+        #card.waiting { border: 1px solid rgba(251,112,96,0.40); }
+        #card.waitingPulse { border: 1px solid rgba(251,112,96,0.82); }
+        #header {
+          border-bottom: 1px solid rgba(255,255,255,0.055);
+          padding: 10px 12px 9px;
+        }
+        #headerTitle {
+          color: #E6EDF3;
+          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        #badge {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 9px;
+          font-weight: 600;
+          padding: 3px 7px;
+          border-radius: 6px;
+        }
+        #badge.live { color: #4ADE80; background: rgba(74,222,128,0.10); border: 1px solid rgba(74,222,128,0.22); }
+        #badge.alert { color: #FB7060; background: rgba(251,112,96,0.12); border: 1px solid rgba(251,112,96,0.30); }
+        #badge.idle  { color: #6B7785; background: rgba(107,119,133,0.10); border: 1px solid rgba(107,119,133,0.22); }
+        #close { color: #7a8493; font-size: 15px; padding: 0 3px; }
+        #row { padding: 4px 8px; border-radius: 9px; }
+        #row.alertRow {
+          background: linear-gradient(90deg, rgba(251,112,96,0.13), rgba(251,112,96,0.03));
+          border: 1px solid rgba(251,112,96,0.22);
+        }
+        .dim { opacity: 0.55; }
+        #logoBox { border-radius: 7px; }
+        #logoBox.claude { background: linear-gradient(135deg,#3a241c,#291611); border: 1px solid rgba(255,138,101,0.28); }
+        #logoBox.codex  { background: linear-gradient(135deg,#1c2530,#141b24); border: 1px solid rgba(255,255,255,0.10); }
+        #agentName {
+          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
+          font-size: 12.5px;
+          font-weight: 600;
+        }
+        #statusText, #meta, #footer, #altPill, #idleSub {
+          font-family: 'IBM Plex Mono', monospace;
+        }
+        #statusText { font-size: 11px; }
+        #meta { font-size: 10px; color: #566173; }
+        #footer { font-size: 9.5px; color: #4a5462; padding: 5px 0 2px; }
+        #altText {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 10px; font-weight: 600; color: #79828f;
+          background: transparent; background-image: none;
+          border: none; box-shadow: none; outline: none;
+          min-height: 0; padding: 2px 4px;
+        }
+        #altText:hover { color: #ffffff; }
+        #idleTitle {
+          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
+          font-size: 12.5px; font-weight: 600; color: #AEB6C0;
+        }
+        #idleSub { font-size: 10px; color: #566173; }
+        #lockupTitle {
+          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
+          font-size: 19px; font-weight: 600;
+        }
+        #lockupSub {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 9.5px; font-weight: 500; color: #566173;
+        }
+        """
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+
+        event_box = Gtk.EventBox()
+        event_box.set_visible_window(False)
+        self.add(event_box)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.card = card
+        card.set_name("card")
+        card.set_size_request(CARD_WIDTH, -1)
+        for setter in (card.set_margin_top, card.set_margin_bottom, card.set_margin_start, card.set_margin_end):
+            setter(8)
+        event_box.add(card)
+
+        # ---- header ----
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        header.set_name("header")
+        card.pack_start(header, False, False, 0)
+
+        self.header_icon = LogoMark(17, variant="mono", mono_color="#E6EDF3")
+        icon_align = Gtk.Box()
+        icon_align.set_valign(Gtk.Align.CENTER)
+        icon_align.pack_start(self.header_icon, False, False, 0)
+        header.pack_start(icon_align, False, False, 0)
+
+        title = Gtk.Label(label=TITLE)
+        title.set_name("headerTitle")
+        title.set_xalign(0)
+        header.pack_start(title, True, True, 0)
+
+        self.badge = Gtk.Label()
+        self.badge.set_name("badge")
+        self.badge.set_valign(Gtk.Align.CENTER)
+        header.pack_start(self.badge, False, False, 0)
+
+        close = Gtk.Button(label="×")
+        close.set_name("close")
+        close.set_relief(Gtk.ReliefStyle.NONE)
+        close.set_can_focus(False)
+        close.set_focus_on_click(False)
+        close.set_valign(Gtk.Align.CENTER)
+        close.connect("clicked", self.quit)
+        header.pack_start(close, False, False, 0)
+
+        # ---- body (rows or empty state) ----
+        self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.body.set_margin_top(6)
+        self.body.set_margin_bottom(6)
+        self.body.set_margin_start(6)
+        self.body.set_margin_end(6)
+        card.pack_start(self.body, True, True, 0)
+
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+
+    # ----------------------------- config -----------------------------
+    def load_config(self) -> dict[str, object]:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        config = dict(DEFAULT_CONFIG)
+        try:
+            data = json.loads(WIDGET_CONFIG.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for key, default in DEFAULT_CONFIG.items():
+                    value = data.get(key)
+                    if isinstance(default, bool) and isinstance(value, bool):
+                        config[key] = value
+                    elif isinstance(default, int) and isinstance(value, int) and value >= 0:
+                        config[key] = value
+                    elif isinstance(default, str) and isinstance(value, str):
+                        config[key] = value
+        except FileNotFoundError:
+            self.write_config(config)
+        except (json.JSONDecodeError, OSError) as error:
+            log(f"failed to load widget config: {error}")
+        return config
+
+    def write_config(self, values: dict[str, object]) -> None:
+        try:
+            current = {}
+            if WIDGET_CONFIG.exists():
+                loaded = json.loads(WIDGET_CONFIG.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    current = loaded
+            current.update(values)
+            WIDGET_CONFIG.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+        except (json.JSONDecodeError, OSError) as error:
+            log(f"failed to write widget config: {error}")
+
+    def load_logos(self) -> dict[str, GdkPixbuf.Pixbuf]:
+        logos: dict[str, GdkPixbuf.Pixbuf] = {}
+        for agent, path in (("claude", ANTHROPIC_LOGO), ("codex", OPENAI_LOGO)):
+            if not path.exists():
+                log(f"logo missing for {agent}: {path}")
+                continue
+            try:
+                logos[agent] = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 14, 14, True)
+            except Exception as error:
+                log(f"failed to load logo for {agent}: {error}")
+        return logos
+
+    def config_seconds(self, key: str) -> int:
+        value = self.config.get(key, DEFAULT_CONFIG[key])
+        return value if isinstance(value, int) else int(DEFAULT_CONFIG[key])
+
+    def config_timedelta(self, key: str) -> timedelta:
+        return timedelta(seconds=self.config_seconds(key))
+
+    # ----------------------------- data -----------------------------
+    def collect_sessions(self) -> list[dict[str, object]]:
+        if self.demo:
+            scenario = self.demo_scenarios[self.demo_index % len(self.demo_scenarios)]
+            return [self.make_session(agent, status, project, hhmm)
+                    for agent, status, project, hhmm in scenario]
+        sessions = self.read_structured_sessions()
+        if sessions is not None:
+            return sessions
+        return self.read_combined_sessions()
+
+    def make_session(self, agent: str, status: str, project: str, hhmm: str,
+                     cwd: str = "", client_pids: list[int] | None = None) -> dict[str, object]:
+        kind = classify(status)
+        return {
+            "agent": agent if agent in AGENT_NAME_COLORS else "",
+            "name": agent.capitalize() if agent else "AI",
+            "status": status,
+            "kind": kind,
+            "project": project,
+            "time": hhmm,
+            "cwd": cwd,
+            "client_pids": client_pids or [],
+            "color": STATE_COLORS.get(kind, STATE_COLORS["neutral"]),
+        }
+
+    def read_structured_sessions(self) -> list[dict[str, object]] | None:
+        paths = self.status_file_paths()
+        if not paths:
+            return None
+        sessions: list[dict[str, object]] = []
+        for path in paths:
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as error:
+                log(f"failed to read status json {path}: {error}")
+                continue
+            if not isinstance(data, dict):
+                continue
+            status = str(data.get("status") or "")
+            project = str(data.get("project") or "")
+            hhmm = str(data.get("timestamp_hhmm") or "")
+            agent = str(data.get("agent") or path.stem).lower()
+            cwd = str(data.get("cwd") or "")
+            raw_pids = data.get("client_pids")
+            client_pids = [p for p in raw_pids if isinstance(p, int)] if isinstance(raw_pids, list) else []
+            age = self.status_age(str(data.get("timestamp_iso") or ""))
+            if age is not None:
+                if self.should_hide_status(status, age):
+                    continue
+                if age >= self.config_timedelta("hide_stale_after_seconds"):
+                    continue
+                if age >= self.config_timedelta("idle_after_seconds"):
+                    status, project = f"{agent.capitalize()}: idle", ""
+                elif age >= self.config_timedelta("stale_after_seconds"):
+                    status = f"{agent.capitalize()}: brak nowych eventów"
+            if not status:
+                continue
+            name, clean = self.split_agent_status(status, agent)
+            session = self.make_session(agent, clean, project, hhmm, cwd, client_pids)
+            session["name"] = name
+            sessions.append(session)
+        return sessions
+
+    def read_combined_sessions(self) -> list[dict[str, object]]:
+        try:
+            raw = STATUS_FILE.read_text(encoding="utf-8").strip()
+        except OSError:
+            return []
+        sessions: list[dict[str, object]] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            project, hhmm = "", ""
+            text = line
+            if "[" in text and "]" in text:
+                before, _, rest = text.partition("[")
+                project, _, after = rest.partition("]")
+                text = before.strip()
+                hhmm = after.strip()
+            agent = "claude" if "claude" in line.lower() else ("codex" if "codex" in line.lower() else "")
+            name, clean = self.split_agent_status(text, agent)
+            session = self.make_session(agent, clean, project.strip(), hhmm)
+            session["name"] = name
+            sessions.append(session)
+        return sessions
+
+    def split_agent_status(self, status: str, agent: str) -> tuple[str, str]:
+        name = agent.capitalize() if agent in AGENT_NAME_COLORS else "AI"
+        clean = status
+        for prefix in ("Claude:", "Codex subagent:", "Codex:"):
+            if clean.startswith(prefix):
+                if prefix == "Codex subagent:":
+                    name = "Codex subagent"
+                clean = clean[len(prefix):]
+                break
+        return name, " ".join(clean.split())
+
+    def status_file_paths(self) -> list[Path]:
+        paths = list(STATUS_DIR.glob("*.json")) if STATUS_DIR.exists() else []
+        if paths:
+            paths.sort(key=self.status_file_timestamp, reverse=True)
+            return paths
+        return [path for path in AGENT_STATUS_FILES if path.exists()]
+
+    def status_file_timestamp(self, path: Path) -> str:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        value = data.get("timestamp_iso")
+        return value if isinstance(value, str) else ""
+
+    def status_age(self, timestamp_iso: str) -> timedelta | None:
+        if not timestamp_iso:
+            return None
+        try:
+            timestamp = datetime.fromisoformat(timestamp_iso)
+        except ValueError:
+            return None
+        return datetime.now() - timestamp
+
+    def should_hide_status(self, status: str, age: timedelta) -> bool:
+        if "kończył" not in status.lower():
+            return False
+        return age >= self.config_timedelta("hide_done_after_seconds")
+
+    # ----------------------------- render -----------------------------
+    def order_sessions(self, sessions: list[dict[str, object]]) -> list[dict[str, object]]:
+        priority = {"waiting": 0, "error": 1}
+
+        def rank(session: dict[str, object]) -> tuple[int, int]:
+            kind = str(session["kind"])
+            if kind in priority:
+                return (priority[kind], 0)
+            if kind in IN_PROGRESS:
+                return (2, 0)
+            return (3, 0)  # done / idle / stale last
+
+        return sorted(sessions, key=rank)
+
+    def refresh_status(self) -> bool:
+        if self.intro:
+            return True  # the startup lockup owns the body until end_intro()
+        sessions = self.order_sessions(self.collect_sessions())
+        visible = sessions[:MAX_ROWS]
+        hidden_done = sum(1 for s in sessions[MAX_ROWS:] if s["kind"] in ("done", "idle", "stale"))
+
+        waiting = any(s["kind"] == "waiting" for s in visible)
+        waiting_count = sum(1 for s in visible if s["kind"] == "waiting")
+        done = bool(visible) and all(s["kind"] in ("done", "idle", "stale") for s in visible)
+
+        self.set_waiting_style(waiting)
+        self.set_badge(bool(visible), waiting_count)
+
+        signature = json.dumps(
+            [[s["name"], s["status"], s["project"], s["time"], s["kind"]] for s in visible] + [hidden_done],
+            ensure_ascii=False,
+        )
+        if signature != self.signature:
+            self.signature = signature
+            self.rebuild_body(visible, hidden_done)
+
+        if waiting and not self.was_waiting_for_interaction and self.config.get("sound_enabled") is True:
+            self.play_notification_sound()
+        elif done and not self.was_done and self.config.get("sound_enabled") is True:
+            self.play_notification_sound()
+        self.was_waiting_for_interaction = waiting
+        self.was_done = done
+
+        if self.demo:
+            self.demo_index += 1
+        return True
+
+    def rebuild_body(self, sessions: list[dict[str, object]], hidden_done: int) -> None:
+        for child in self.body.get_children():
+            self.body.remove(child)
+        self.anim_dot_labels = []
+        self.waiting_dots = []
+        self.spinning = []
+
+        if not sessions:
+            self.build_empty_state()
+        else:
+            for session in sessions:
+                self.body.pack_start(self.build_row(session), False, False, 0)
+            if hidden_done > 0:
+                footer = Gtk.Label(label=f"+{hidden_done} zakończone ukryte automatycznie")
+                footer.set_name("footer")
+                self.body.pack_start(footer, False, False, 0)
+
+        self.body.show_all()
+        self.resize_to_content()
+
+    def build_row(self, session: dict[str, object]) -> Gtk.Widget:
+        kind = str(session["kind"])
+        color = str(session["color"])
+        agent = str(session["agent"])
+        waiting = kind == "waiting"
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=11)
+        row.set_name("row")
+        if waiting:
+            row.get_style_context().add_class("alertRow")
+        dim = kind in ("done", "idle", "stale")
+
+        dot = StatusDot()
+        dot.configure_dot(color, waiting)
+        if waiting:
+            self.waiting_dots.append(dot)
+        dot.set_valign(Gtk.Align.START)
+        dot.set_margin_top(4)
+        row.pack_start(dot, False, False, 0)
+
+        logo_box = Gtk.Box()
+        logo_box.set_name("logoBox")
+        if agent in ("claude", "codex"):
+            logo_box.get_style_context().add_class(agent)
+        logo_box.set_size_request(24, 24)
+        logo_box.set_valign(Gtk.Align.START)
+        logo_box.set_halign(Gtk.Align.CENTER)
+        pixbuf = self.logo_pixbufs.get(agent)
+        if pixbuf is not None:
+            image = Gtk.Image.new_from_pixbuf(pixbuf)
+            image.set_halign(Gtk.Align.CENTER)
+            image.set_valign(Gtk.Align.CENTER)
+            logo_box.pack_start(image, True, True, 0)
+        if dim:
+            logo_box.get_style_context().add_class("dim")
+        row.pack_start(logo_box, False, False, 0)
+
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        if dim:
+            text_box.get_style_context().add_class("dim")
+        row.pack_start(text_box, True, True, 0)
+
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        text_box.pack_start(top, False, False, 0)
+
+        name = Gtk.Label()
+        name.set_name("agentName")
+        name.set_xalign(0)
+        name.set_markup(self.markup(str(session["name"]), AGENT_NAME_COLORS.get(agent, "#9AA4B2")))
+        top.pack_start(name, False, False, 0)
+
+        status = Gtk.Label()
+        status.set_name("statusText")
+        status.set_xalign(0)
+        status.set_ellipsize(Pango.EllipsizeMode.END)
+        status.set_markup(self.markup(str(session["status"]), color))
+        top.pack_start(status, False, False, 0)
+
+        if kind in IN_PROGRESS:
+            dots = Gtk.Label()
+            dots.set_name("statusText")
+            dots.set_xalign(0)
+            dots.set_markup(self.markup("", color))
+            dots.base_color = color  # type: ignore[attr-defined]
+            self.anim_dot_labels.append(dots)
+            top.pack_start(dots, False, False, 0)
+
+        meta_text = " · ".join(part for part in (str(session["project"]), str(session["time"])) if part)
+        if meta_text:
+            meta = Gtk.Label(label=meta_text)
+            meta.set_name("meta")
+            meta.set_xalign(0)
+            meta.set_ellipsize(Pango.EllipsizeMode.END)
+            text_box.pack_start(meta, False, False, 0)
+
+        # `→` is shown on every row (not just alerts) and wired to this session.
+        switch = Gtk.Button(label="→")
+        switch.set_name("altText")
+        switch.set_relief(Gtk.ReliefStyle.NONE)
+        switch.set_can_focus(False)
+        switch.set_focus_on_click(False)
+        switch.set_valign(Gtk.Align.CENTER)
+        switch.set_margin_end(2)
+        switch.set_tooltip_text("Przełącz na okno tej sesji")
+        project_name = str(session["project"])
+        cwd = str(session["cwd"])
+        pids = list(session["client_pids"]) if isinstance(session["client_pids"], list) else []
+        switch.connect(
+            "clicked",
+            lambda _b, p=project_name, c=cwd, ids=pids: self.switch_to_session(p, c, ids),
+        )
+        row.pack_end(switch, False, False, 0)
+
+        return row
+
+    def build_lockup(self, subtitle: str) -> Gtk.Widget:
+        """Horizontal lockup: full radar logo + 'AI Status Monitor' + a subtitle line.
+
+        Reused for the startup intro and the idle state (different subtitle each time)."""
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        box.set_halign(Gtk.Align.CENTER)
+        box.set_margin_top(22)
+        box.set_margin_bottom(24)
+        box.set_margin_start(18)
+        box.set_margin_end(18)
+
+        logo = LogoMark(54, variant="full", sweep=True, tile=True)
+        logo.set_valign(Gtk.Align.CENTER)
+        self.spinning.append(logo)
+        box.pack_start(logo, False, False, 0)
+
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        text.set_valign(Gtk.Align.CENTER)
+        title = Gtk.Label()
+        title.set_name("lockupTitle")
+        title.set_xalign(0)
+        title.set_markup('<span foreground="#E6EDF3">AI Status</span>'
+                         '<span foreground="#2DD4BF"> Monitor</span>')
+        text.pack_start(title, False, False, 0)
+        sub = Gtk.Label(label=subtitle)
+        sub.set_name("lockupSub")
+        sub.set_xalign(0)
+        text.pack_start(sub, False, False, 0)
+        box.pack_start(text, False, False, 0)
+        return box
+
+    def build_empty_state(self) -> None:
+        self.body.pack_start(self.build_lockup("brak aktywnych agentów"), True, True, 0)
+
+    def build_intro(self) -> None:
+        for child in self.body.get_children():
+            self.body.remove(child)
+        self.anim_dot_labels = []
+        self.waiting_dots = []
+        self.spinning = []
+        self.body.pack_start(self.build_lockup("CLI agent activity"), True, True, 0)
+        self.set_badge(False, 0)
+        self.body.show_all()
+        self.resize_to_content()
+
+    def end_intro(self) -> bool:
+        self.intro = False
+        self.signature = None  # force a rebuild from real sessions
+        self.refresh_status()
+        return False  # one-shot
+
+    def resize_to_content(self) -> None:
+        try:
+            _minimum, natural = self.get_preferred_size()
+            self.resize(max(natural.width, CARD_WIDTH + 16), max(natural.height, 1))
+        except Exception as error:
+            log(f"resize failed: {error}")
+
+    def markup(self, value: str, color: str) -> str:
+        return f'<span foreground="{color}">{html.escape(value)}</span>'
+
+    def set_badge(self, has_sessions: bool, waiting_count: int) -> None:
+        context = self.badge.get_style_context()
+        for cls in ("live", "alert", "idle"):
+            context.remove_class(cls)
+        if waiting_count > 0:
+            context.add_class("alert")
+            self.badge.set_markup(self.markup(f"▲ {waiting_count} ALERT", "#FB7060"))
+        elif has_sessions:
+            context.add_class("live")
+            alpha = "#4ADE80" if self.anim_frame % 8 < 4 else "#2f9c5a"
+            self.badge.set_markup(self.markup("● LIVE", alpha))
+        else:
+            context.add_class("idle")
+            self.badge.set_markup(self.markup("● IDLE", "#6B7785"))
+
+    def set_waiting_style(self, enabled: bool) -> None:
+        context = self.card.get_style_context()
+        if enabled:
+            context.add_class("waiting")
+        else:
+            context.remove_class("waiting")
+            context.remove_class("waitingPulse")
+
+    def tick_animation(self) -> bool:
+        self.anim_frame += 1
+
+        # trailing "..." for in-progress rows, cycling every ~400ms
+        count = (self.anim_frame // 2) % 4
+        for label in self.anim_dot_labels:
+            color = getattr(label, "base_color", STATE_COLORS["neutral"])
+            label.set_markup(self.markup("." * count, color))
+
+        # expanding ring on waiting dots
+        if self.waiting_dots:
+            phase = (self.anim_frame % 8) / 8.0
+            for dot in self.waiting_dots:
+                dot.phase = phase
+                dot.queue_draw()
+
+        # red border pulse when waiting
+        context = self.card.get_style_context()
+        if context.has_class("waiting"):
+            if self.anim_frame % 8 < 4:
+                context.add_class("waitingPulse")
+            else:
+                context.remove_class("waitingPulse")
+
+        # rotating sweep on the lockup logo (startup intro + idle state)
+        if self.spinning:
+            angle = (self.anim_frame * 0.12) % (2 * math.pi)
+            for logo in self.spinning:
+                logo.angle = angle
+                logo.queue_draw()
+
+        # subtle LIVE badge pulse
+        if "live" in self.badge.get_style_context().list_classes():
+            alpha = "#4ADE80" if self.anim_frame % 8 < 4 else "#2f9c5a"
+            self.badge.set_markup(self.markup("● LIVE", alpha))
+        return True
+
+    # ----------------------------- sound -----------------------------
+    def play_notification_sound(self) -> None:
+        if not NOTIFICATION_SOUND.exists():
+            log(f"notification sound missing: {NOTIFICATION_SOUND}")
+            return
+        commands = [
+            ("mpv", ["mpv", "--no-video", "--really-quiet", str(NOTIFICATION_SOUND)]),
+            ("ffplay", ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(NOTIFICATION_SOUND)]),
+            ("mpg123", ["mpg123", "-q", str(NOTIFICATION_SOUND)]),
+            ("gst-play-1.0", ["gst-play-1.0", "-q", str(NOTIFICATION_SOUND)]),
+            ("paplay", ["paplay", str(NOTIFICATION_SOUND)]),
+        ]
+        for binary, command in commands:
+            if shutil.which(binary):
+                try:
+                    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    log(f"notification sound played with {binary}")
+                    return
+                except OSError as error:
+                    log(f"failed to play notification with {binary}: {error}")
+        log("no supported audio player found for notification.mp3")
+
+    # ----------------------------- window plumbing -----------------------------
+    def on_button_press(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 1:
+            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
+            return True
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
+            self.show_menu(event)
+            return True
+        return False
+
+    def on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> bool:
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter, Gdk.KEY_Escape):
+            return True
+        return False
+
+    def show_menu(self, event: Gdk.EventButton) -> None:
+        menu = Gtk.Menu()
+        reload_item = Gtk.MenuItem(label="Reload")
+        logs_item = Gtk.MenuItem(label="Open logs folder")
+        quit_item = Gtk.MenuItem(label="Quit")
+        reload_item.connect("activate", lambda _item: self.refresh_status())
+        logs_item.connect("activate", lambda _item: self.open_logs_folder())
+        quit_item.connect("activate", self.quit)
+        for item in (reload_item, logs_item, quit_item):
+            menu.append(item)
+        menu.show_all()
+        menu.popup_at_pointer(event)
+
+    def open_logs_folder(self) -> None:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        opener = shutil.which("xdg-open")
+        if opener:
+            subprocess.Popen([opener, str(CACHE_DIR)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            log("xdg-open is not available")
+
+    def restore_position(self) -> None:
+        try:
+            data = json.loads(WIDGET_CONFIG.read_text(encoding="utf-8"))
+            x = int(data.get("x", 40))
+            y = int(data.get("y", 80))
+        except Exception:
+            x, y = 40, 80
+        self.move(x, y)
+
+    def save_position(self) -> None:
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            x, y = self.get_position()
+            self.write_config({"x": x, "y": y})
+        except OSError as error:
+            log(f"failed to save position: {error}")
+
+    def on_configure(self, _widget: Gtk.Widget, _event: Gdk.EventConfigure) -> bool:
+        self.save_position()
+        return False
+
+    def on_delete(self, *_args: object) -> bool:
+        self.save_position()
+        Gtk.main_quit()
+        return True
+
+    def quit(self, *_args: object) -> None:
+        self.save_position()
+        Gtk.main_quit()
+
+    def switch_to_session(self, project: str, cwd: str, client_pids: list[int]) -> None:
+        """Raise the terminal window of a session.
+
+        PID match narrows to the windows owned by this session's process tree. When one
+        emulator process owns several windows (e.g. gnome-terminal), the window title is
+        used to disambiguate. Falls back to a title-only match when no PID matches.
+        """
+        wmctrl = shutil.which("wmctrl")
+        if not wmctrl:
+            log("switch_to_session: wmctrl is not available")
+            return
+        windows = self.list_windows(wmctrl)
+        if not windows:
+            log("switch_to_session: no windows reported by wmctrl -lp")
+            return
+
+        target = (project or (Path(cwd).name if cwd else "")).lower()
+        pidset = set(client_pids)
+        candidates = [w for w in windows if w["pid"] in pidset]
+
+        chosen = None
+        if len(candidates) == 1:
+            chosen = candidates[0]
+        elif len(candidates) > 1:
+            titled = [w for w in candidates if target and target in str(w["title"]).lower()]
+            if titled:
+                chosen = titled[0]
+            else:
+                chosen = candidates[0]
+                log(f"switch_to_session: {len(candidates)} windows share the emulator PID and none "
+                    f"match title '{target}'; raising first (one-process-per-window terminal needed "
+                    f"for exact targeting)")
+        if chosen is None and target:
+            titled = [w for w in windows if target in str(w["title"]).lower()]
+            if titled:
+                chosen = titled[0]
+
+        if chosen is None:
+            log(f"switch_to_session: no window matched pids {client_pids} or title '{target}'")
+            return
+        self.activate_window(wmctrl, str(chosen["id"]))
+
+    def list_windows(self, wmctrl: str) -> list[dict[str, object]]:
+        """Parse `wmctrl -lp` into [{id, pid, title}]."""
+        try:
+            listing = subprocess.run(
+                [wmctrl, "-lp"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            ).stdout
+        except OSError as error:
+            log(f"wmctrl -lp failed: {error}")
+            return []
+        windows: list[dict[str, object]] = []
+        for line in listing.splitlines():
+            parts = line.split(None, 4)  # winid, desktop, pid, host, title
+            if len(parts) < 4:
+                continue
+            try:
+                pid = int(parts[2])
+            except ValueError:
+                continue
+            windows.append({"id": parts[0], "pid": pid, "title": parts[4] if len(parts) >= 5 else ""})
+        return windows
+
+    def activate_window(self, wmctrl: str, window_id: str) -> None:
+        try:
+            subprocess.run(
+                [wmctrl, "-i", "-a", window_id],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError as error:
+            log(f"wmctrl activate {window_id} failed: {error}")
+
+    def apply_wmctrl_hints(self) -> bool:
+        wmctrl = shutil.which("wmctrl")
+        if not wmctrl:
+            return False
+        try:
+            subprocess.run(
+                [wmctrl, "-r", TITLE, "-b", "add,above,sticky,skip_taskbar"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError as error:
+            log(f"wmctrl failed: {error}")
+        return False
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Floating GTK widget for ai-cli-status-monitor.")
+    parser.add_argument("--demo", action="store_true", help="cycle through demo states")
+    args = parser.parse_args()
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    PID_FILE.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    widget = StatusWidget(demo=args.demo)
+    widget.show_all()
+    log("widget started" + (" in demo mode" if args.demo else ""))
+    Gtk.main()
+    log("widget stopped")
+    try:
+        PID_FILE.unlink()
+    except OSError:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

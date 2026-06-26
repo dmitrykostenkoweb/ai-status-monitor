@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -u
+
+status_file="${HOME}/.cache/ai-cli-status-monitor/combined.txt"
+
+if [[ -s "$status_file" ]]; then
+  cat "$status_file"
+else
+  printf 'AI agents: idle\n'
+fi

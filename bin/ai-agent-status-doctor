@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+from datetime import datetime, timedelta
+from pathlib import Path
+
+
+HOME = Path.home()
+BIN = HOME / ".local" / "bin"
+CACHE_DIR = HOME / ".cache" / "ai-cli-status-monitor"
+AUTOSTART = HOME / ".config" / "autostart" / "ai-cli-status-widget.desktop"
+CLAUDE_SETTINGS = HOME / ".claude" / "settings.json"
+CODEX_HOOKS = HOME / ".codex" / "hooks.json"
+CODEX_STATUS = CACHE_DIR / "codex.json"
+STATUS_DIR = CACHE_DIR / "statuses"
+HOOK_CLAUDE = f"{BIN}/ai-agent-status-hook --agent claude"
+HOOK_CODEX = f"{BIN}/ai-agent-status-hook --agent codex"
+STALE_AFTER = timedelta(minutes=3)
+
+
+def ok(label: str) -> None:
+    print(f"✅ {label}")
+
+
+def warn(label: str) -> None:
+    print(f"⚠️ {label}")
+
+
+def has_hook(path: Path, command: str, events: tuple[str, ...]) -> bool:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    if not isinstance(hooks, dict):
+        return False
+    for event in events:
+        groups = hooks.get(event)
+        if not isinstance(groups, list):
+            return False
+        found = False
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            handlers = group.get("hooks")
+            if not isinstance(handlers, list):
+                continue
+            if any(isinstance(handler, dict) and handler.get("command") == command for handler in handlers):
+                found = True
+                break
+        if not found:
+            return False
+    return True
+
+
+def gtk_available() -> bool:
+    try:
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def test_mode_writes_status() -> bool:
+    hook = BIN / "ai-agent-status-hook"
+    if not hook.exists():
+        return False
+    result = subprocess.run([str(hook), "--agent", "codex", "--test"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return result.returncode == 0 and (CACHE_DIR / "combined.txt").exists()
+
+
+def status_age(path: Path) -> timedelta | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        timestamp_iso = data.get("timestamp_iso") if isinstance(data, dict) else None
+        if not isinstance(timestamp_iso, str):
+            return None
+        return datetime.now() - datetime.fromisoformat(timestamp_iso)
+    except Exception:
+        return None
+
+
+def latest_status_age(agent: str) -> timedelta | None:
+    candidates = list(STATUS_DIR.glob(f"{agent}-*.json")) if STATUS_DIR.exists() else []
+    candidates.append(CACHE_DIR / f"{agent}.json")
+    ages = [age for age in (status_age(path) for path in candidates) if age is not None]
+    return min(ages) if ages else None
+
+
+def main() -> int:
+    if (BIN / "ai-agent-status-hook").exists():
+        ok("Hook script installed")
+    else:
+        warn("Hook script missing")
+
+    if (BIN / "ai-agent-status-widget").exists():
+        ok("Widget script installed")
+    else:
+        warn("Widget script missing")
+
+    if (BIN / "ai-agent-status-widget").is_file() and (BIN / "ai-agent-status-widget").stat().st_mode & 0o111:
+        ok("Widget executable")
+    else:
+        warn("Widget is not executable")
+
+    if CACHE_DIR.exists():
+        ok("Cache dir exists")
+    else:
+        warn("Cache dir missing")
+
+    if AUTOSTART.exists():
+        ok("Autostart installed")
+    else:
+        warn("Autostart desktop file missing")
+
+    claude_events = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure")
+    if CLAUDE_SETTINGS.exists() and has_hook(CLAUDE_SETTINGS, HOOK_CLAUDE, claude_events):
+        ok("Claude hooks installed")
+    elif CLAUDE_SETTINGS.exists():
+        warn("Claude settings found, but monitor hooks are incomplete")
+    else:
+        warn("Claude settings file not found")
+
+    codex_events = ("UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "SubagentStop", "Stop")
+    if CODEX_HOOKS.exists() and has_hook(CODEX_HOOKS, HOOK_CODEX, codex_events):
+        ok("Codex hooks installed")
+    elif CODEX_HOOKS.exists():
+        warn("Codex hooks file found, but monitor hooks are incomplete")
+    else:
+        warn("Codex hooks file not found")
+
+    if shutil.which("wmctrl"):
+        ok("wmctrl available")
+    else:
+        warn("wmctrl missing")
+
+    if gtk_available():
+        ok("GTK available")
+    else:
+        warn("GTK missing: sudo apt install python3-gi gir1.2-gtk-3.0 wmctrl")
+
+    age = latest_status_age("codex")
+    if age is None:
+        warn("Codex live status timestamp unavailable")
+    elif age > STALE_AFTER:
+        warn("Codex live status is stale: open /hooks in Codex and trust hooks, then restart Codex if needed")
+    else:
+        ok("Codex live status is fresh")
+
+    if test_mode_writes_status():
+        ok("Test mode writes status")
+    else:
+        warn("Test mode failed")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
