@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cache_dir="${HOME}/.cache/ai-cli-status-monitor"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/ai-agent-status-env"
+ai_status_load_env
+
+cache_dir="$AI_STATUS_CACHE_DIR"
 widget="${HOME}/.local/bin/ai-agent-status-widget"
 pid_file="$cache_dir/widget.pid"
 mkdir -p "$cache_dir"

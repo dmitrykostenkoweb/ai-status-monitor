@@ -34,6 +34,8 @@ Domyślnie jest always-on-top, sticky na workspace'ach i ukryty z taskbara.
 
 ```bash
 cd /home/dima/Documents/Personal/Projects/ai-cli-status-monitor
+cp .env.default .env
+# opcjonalnie: edytuj lokalny .env
 ./install.sh
 ```
 
@@ -48,7 +50,8 @@ Installer próbuje skonfigurować hooki automatycznie:
 - dźwięk powiadomienia: `~/.local/share/ai-cli-status-monitor/notification.mp3`
 - logo OpenAI/Codex: `~/.local/share/ai-cli-status-monitor/openai-logo.svg`
 - logo Anthropic/Claude: `~/.local/share/ai-cli-status-monitor/anthropic-logo.png`
-- config widgetu: `~/.config/ai-cli-status-monitor/widget.json`
+- konfiguracja runtime: `~/.config/ai-cli-status-monitor/.env`
+- pozycja okna i zgodność ze starszą konfiguracją: `~/.config/ai-cli-status-monitor/widget.json`
 
 Jeśli GTK albo `wmctrl` nie są dostępne, installer nie używa `sudo`. Wypisze komendę:
 
@@ -115,20 +118,30 @@ Installer tworzy:
 
 Widget powinien startować automatycznie po zalogowaniu do Cinnamon.
 
-## 7a. Widget config
+## 7a. Konfiguracja `.env`
 
-Installer tworzy i zachowuje config:
+Publiczne wartości domyślne są w `.env.default`. Lokalny `.env` jest ignorowany przez Git. Podczas pierwszej instalacji powstaje prywatny plik `~/.config/ai-cli-status-monitor/.env` z uprawnieniami `0600`; kolejne instalacje go nie nadpisują.
 
-```json
-{
-  "sound_enabled": true,
-  "stale_after_seconds": 180,
-  "hide_done_after_seconds": 180,
-  "idle_after_seconds": 600,
-  "hide_stale_after_seconds": 900,
-  "theme": "dark"
-}
+Dostępne zmienne:
+
+- `AI_STATUS_CACHE_DIR`, `AI_STATUS_CONFIG_DIR`, `AI_STATUS_DATA_DIR` — katalogi danych
+- `AI_STATUS_TITLE`, `AI_STATUS_CARD_WIDTH`, `AI_STATUS_MAX_ROWS` — wygląd widgetu
+- `AI_STATUS_SOUND_ENABLED` — `true`/`false`, `yes`/`no`, `on`/`off` albo `1`/`0`
+- `AI_STATUS_STALE_AFTER_SECONDS`, `AI_STATUS_HIDE_DONE_AFTER_SECONDS`, `AI_STATUS_IDLE_AFTER_SECONDS`, `AI_STATUS_HIDE_STALE_AFTER_SECONDS` — timeouty
+- `AI_STATUS_THEME` — nazwa motywu
+- `AI_STATUS_ENV_FILE` — ścieżka do innego pliku runtime; tę zmienną trzeba wyeksportować w procesie, nie jest odczytywana z `.env`
+
+Przykład lokalnego nadpisania:
+
+```dotenv
+AI_STATUS_TITLE="Status agentów"
+AI_STATUS_MAX_ROWS=8
+AI_STATUS_SOUND_ENABLED=false
 ```
+
+Priorytet wartości: zmienna wyeksportowana w procesie → runtime `.env` → starsza wartość z `widget.json` → wartość wbudowana. `widget.json` nadal przechowuje pozycję okna (`x`/`y`); przy pierwszej instalacji istniejące ustawienia widgetu są przenoszone do runtime `.env`.
+
+`.env` zapobiega przypadkowemu commitowi, ale nie szyfruje sekretów. Jeśli credential trafił do Git lub na GitHub, trzeba go unieważnić i zmienić.
 
 Zachowanie:
 

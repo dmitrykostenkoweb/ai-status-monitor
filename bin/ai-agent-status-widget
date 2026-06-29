@@ -12,6 +12,7 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
+from ai_agent_status_lib.env_config import load_settings
 from ai_agent_status_lib.status_model import IN_PROGRESS_KINDS
 from ai_agent_status_lib.status_model import INACTIVE_KINDS
 from ai_agent_status_lib.status_model import classify_status_text
@@ -19,9 +20,11 @@ from ai_agent_status_lib.status_model import normalize_kind
 from ai_agent_status_lib.status_model import StatusKind
 
 
-CACHE_DIR = Path.home() / ".cache" / "ai-cli-status-monitor"
-CONFIG_DIR = Path.home() / ".config" / "ai-cli-status-monitor"
-DATA_DIR = Path.home() / ".local" / "share" / "ai-cli-status-monitor"
+CONFIG_WARNINGS: list[str] = []
+SETTINGS = load_settings(diagnostic=CONFIG_WARNINGS.append)
+CACHE_DIR = SETTINGS.cache_dir
+CONFIG_DIR = SETTINGS.config_dir
+DATA_DIR = SETTINGS.data_dir
 STATUS_FILE = CACHE_DIR / "combined.txt"
 AGENT_STATUS_FILES = (CACHE_DIR / "claude.json", CACHE_DIR / "codex.json")
 STATUS_DIR = CACHE_DIR / "statuses"
@@ -31,9 +34,9 @@ PID_FILE = CACHE_DIR / "widget.pid"
 NOTIFICATION_SOUND = DATA_DIR / "notification.mp3"
 OPENAI_LOGO = DATA_DIR / "openai-logo.svg"
 ANTHROPIC_LOGO = DATA_DIR / "anthropic-logo.png"
-TITLE = "AI Agents Status"
-CARD_WIDTH = 344
-MAX_ROWS = 5
+TITLE = SETTINGS.title
+CARD_WIDTH = SETTINGS.card_width
+MAX_ROWS = SETTINGS.max_rows
 
 # Per-state palette, taken straight from the design legend.
 STATE_COLORS = {
@@ -56,14 +59,7 @@ TITLE_COLOR = "#E6EDF3"
 IN_PROGRESS = IN_PROGRESS_KINDS
 INACTIVE = INACTIVE_KINDS
 
-DEFAULT_CONFIG = {
-    "sound_enabled": True,
-    "stale_after_seconds": 180,
-    "hide_done_after_seconds": 180,
-    "idle_after_seconds": 600,
-    "hide_stale_after_seconds": 900,
-    "theme": "dark",
-}
+DEFAULT_CONFIG = SETTINGS.widget_config
 
 
 def log(message: str) -> None:
@@ -449,23 +445,7 @@ class StatusWidget(Gtk.Window):
     # ----------------------------- config -----------------------------
     def load_config(self) -> dict[str, object]:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        config = dict(DEFAULT_CONFIG)
-        try:
-            data = json.loads(WIDGET_CONFIG.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                for key, default in DEFAULT_CONFIG.items():
-                    value = data.get(key)
-                    if isinstance(default, bool) and isinstance(value, bool):
-                        config[key] = value
-                    elif isinstance(default, int) and isinstance(value, int) and value >= 0:
-                        config[key] = value
-                    elif isinstance(default, str) and isinstance(value, str):
-                        config[key] = value
-        except FileNotFoundError:
-            self.write_config(config)
-        except (json.JSONDecodeError, OSError) as error:
-            log(f"failed to load widget config: {error}")
-        return config
+        return dict(DEFAULT_CONFIG)
 
     def write_config(self, values: dict[str, object]) -> None:
         try:
@@ -1117,6 +1097,8 @@ def main() -> int:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for warning in CONFIG_WARNINGS:
+        log(f"configuration: {warning}")
     PID_FILE.write_text(f"{os.getpid()}\n", encoding="utf-8")
     widget = StatusWidget(demo=args.demo)
     widget.show_all()

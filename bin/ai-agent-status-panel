@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 
-status_file="${HOME}/.cache/ai-cli-status-monitor/combined.txt"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/ai-agent-status-env"
+ai_status_load_env
+
+status_file="$AI_STATUS_CACHE_DIR/combined.txt"
 
 if [[ -s "$status_file" ]]; then
   cat "$status_file"

@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Shared dotenv loader. Source this file, then call ai_status_load_env.
+
+ai_status_trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+ai_status_expand_path() {
+  local value="$1"
+  value="${value//\$\{HOME\}/$HOME}"
+  value="${value//\$HOME/$HOME}"
+  if [[ "$value" == "~" ]]; then
+    value="$HOME"
+  elif [[ "$value" == "~/"* ]]; then
+    value="$HOME/${value:2}"
+  fi
+  printf '%s' "$value"
+}
+
+ai_status_valid_value() {
+  local key="$1"
+  local value="$2"
+  case "$key" in
+    AI_STATUS_CARD_WIDTH|AI_STATUS_MAX_ROWS)
+      [[ "$value" =~ ^[0-9]+$ ]] && (( 10#$value > 0 ))
+      ;;
+    AI_STATUS_STALE_AFTER_SECONDS|AI_STATUS_HIDE_DONE_AFTER_SECONDS|AI_STATUS_IDLE_AFTER_SECONDS|AI_STATUS_HIDE_STALE_AFTER_SECONDS)
+      [[ "$value" =~ ^[0-9]+$ ]]
+      ;;
+    AI_STATUS_SOUND_ENABLED)
+      case "${value,,}" in
+        1|true|yes|on|0|false|no|off) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *)
+      [[ -n "$value" ]]
+      ;;
+  esac
+}
+
+ai_status_normalize_value() {
+  local key="$1"
+  local value="$2"
+  if [[ "$key" == "AI_STATUS_SOUND_ENABLED" ]]; then
+    case "${value,,}" in
+      1|true|yes|on) printf 'true' ;;
+      *) printf 'false' ;;
+    esac
+  elif [[ "$key" == "AI_STATUS_CACHE_DIR" || "$key" == "AI_STATUS_CONFIG_DIR" || "$key" == "AI_STATUS_DATA_DIR" ]]; then
+    ai_status_expand_path "$value"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+ai_status_load_env() {
+  local selected_file="${1:-${AI_STATUS_ENV_FILE:-$HOME/.config/ai-cli-status-monitor/.env}}"
+  selected_file="$(ai_status_expand_path "$selected_file")"
+
+  local -a keys=(
+    AI_STATUS_CACHE_DIR AI_STATUS_CONFIG_DIR AI_STATUS_DATA_DIR
+    AI_STATUS_TITLE AI_STATUS_CARD_WIDTH AI_STATUS_MAX_ROWS
+    AI_STATUS_SOUND_ENABLED AI_STATUS_STALE_AFTER_SECONDS
+    AI_STATUS_HIDE_DONE_AFTER_SECONDS AI_STATUS_IDLE_AFTER_SECONDS
+    AI_STATUS_HIDE_STALE_AFTER_SECONDS AI_STATUS_THEME
+  )
+  local -A defaults=(
+    [AI_STATUS_CACHE_DIR]='$HOME/.cache/ai-cli-status-monitor'
+    [AI_STATUS_CONFIG_DIR]='$HOME/.config/ai-cli-status-monitor'
+    [AI_STATUS_DATA_DIR]='$HOME/.local/share/ai-cli-status-monitor'
+    [AI_STATUS_TITLE]='AI Agents Status'
+    [AI_STATUS_CARD_WIDTH]='344'
+    [AI_STATUS_MAX_ROWS]='5'
+    [AI_STATUS_SOUND_ENABLED]='true'
+    [AI_STATUS_STALE_AFTER_SECONDS]='180'
+    [AI_STATUS_HIDE_DONE_AFTER_SECONDS]='180'
+    [AI_STATUS_IDLE_AFTER_SECONDS]='600'
+    [AI_STATUS_HIDE_STALE_AFTER_SECONDS]='900'
+    [AI_STATUS_THEME]='dark'
+  )
+  local -A file_values=()
+
+  if [[ -r "$selected_file" ]]; then
+    local raw_line line key raw_value value first last
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+      line="$(ai_status_trim "$raw_line")"
+      [[ -z "$line" || "$line" == \#* ]] && continue
+      if [[ ! "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]]; then
+        printf 'ai-cli-status-monitor: ignored malformed dotenv line in %s\n' "$selected_file" >&2
+        continue
+      fi
+      key="${BASH_REMATCH[1]}"
+      raw_value="$(ai_status_trim "${BASH_REMATCH[2]}")"
+      case " ${keys[*]} " in
+        *" $key "*) ;;
+        *) continue ;;
+      esac
+      value="$raw_value"
+      if [[ -n "$value" ]]; then
+        first="${value:0:1}"
+        last="${value: -1}"
+        if [[ "$first" == "'" || "$first" == '"' ]]; then
+          if [[ ${#value} -lt 2 || "$last" != "$first" ]]; then
+            printf 'ai-cli-status-monitor: ignored unclosed quote for %s in %s\n' "$key" "$selected_file" >&2
+            continue
+          fi
+          value="${value:1:${#value}-2}"
+        fi
+      fi
+      file_values["$key"]="$value"
+    done <"$selected_file"
+  fi
+
+  local candidate source
+  for key in "${keys[@]}"; do
+    candidate=""
+    source=""
+    if [[ -v "$key" ]]; then
+      candidate="${!key}"
+      source="process environment"
+      if ! ai_status_valid_value "$key" "$candidate"; then
+        printf 'ai-cli-status-monitor: invalid %s from %s; using next configuration source\n' "$key" "$source" >&2
+        candidate=""
+        source=""
+      fi
+    fi
+    if [[ -z "$source" && -v "file_values[$key]" ]]; then
+      candidate="${file_values[$key]}"
+      source="$selected_file"
+      if ! ai_status_valid_value "$key" "$candidate"; then
+        printf 'ai-cli-status-monitor: invalid %s from %s; using built-in default\n' "$key" "$source" >&2
+        candidate=""
+        source=""
+      fi
+    fi
+    if [[ -z "$source" ]]; then
+      candidate="${defaults[$key]}"
+    fi
+    candidate="$(ai_status_normalize_value "$key" "$candidate")"
+    printf -v "$key" '%s' "$candidate"
+    export "$key"
+  done
+  export AI_STATUS_ENV_FILE="$selected_file"
+}

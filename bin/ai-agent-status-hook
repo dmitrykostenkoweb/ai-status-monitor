@@ -9,9 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ai_agent_status_lib.env_config import load_settings
 from ai_agent_status_lib.status_model import agent_semantic
 
-CACHE_DIR = Path.home() / ".cache" / "ai-cli-status-monitor"
+SETTINGS = load_settings()
+CACHE_DIR = SETTINGS.cache_dir
 LAST_PAYLOADS_DIR = CACHE_DIR / "last_payloads"
 DEBUG_DIR = CACHE_DIR / "debug_payloads"
 STATUS_DIR = CACHE_DIR / "statuses"

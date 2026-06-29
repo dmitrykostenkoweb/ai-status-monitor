@@ -2,10 +2,40 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+config_keys=(
+  AI_STATUS_CACHE_DIR AI_STATUS_CONFIG_DIR AI_STATUS_DATA_DIR
+  AI_STATUS_TITLE AI_STATUS_CARD_WIDTH AI_STATUS_MAX_ROWS
+  AI_STATUS_SOUND_ENABLED AI_STATUS_STALE_AFTER_SECONDS
+  AI_STATUS_HIDE_DONE_AFTER_SECONDS AI_STATUS_IDLE_AFTER_SECONDS
+  AI_STATUS_HIDE_STALE_AFTER_SECONDS AI_STATUS_THEME
+)
+explicit_config_keys=()
+for key in "${config_keys[@]}"; do
+  if [[ -v "$key" ]]; then
+    explicit_config_keys+=("$key")
+  fi
+done
+export AI_STATUS_INSTALL_EXPLICIT_KEYS="${explicit_config_keys[*]}"
+
+runtime_env="${AI_STATUS_ENV_FILE:-${HOME}/.config/ai-cli-status-monitor/.env}"
+source_env="$project_dir/.env.default"
+if [[ -f "$project_dir/.env" ]]; then
+  source_env="$project_dir/.env"
+fi
+source "$project_dir/bin/ai-agent-status-env"
+runtime_env="$(ai_status_expand_path "$runtime_env")"
+if [[ -f "$runtime_env" ]]; then
+  ai_status_load_env "$runtime_env"
+else
+  ai_status_load_env "$source_env"
+fi
+export AI_STATUS_ENV_FILE="$runtime_env"
+
 bin_dir="${HOME}/.local/bin"
-cache_dir="${HOME}/.cache/ai-cli-status-monitor"
-config_dir="${HOME}/.config/ai-cli-status-monitor"
-data_dir="${HOME}/.local/share/ai-cli-status-monitor"
+cache_dir="$AI_STATUS_CACHE_DIR"
+config_dir="$AI_STATUS_CONFIG_DIR"
+data_dir="$AI_STATUS_DATA_DIR"
 autostart_dir="${HOME}/.config/autostart"
 applications_dir="${HOME}/.local/share/applications"
 icons_dir="${HOME}/.local/share/icons/hicolor/scalable/apps"
@@ -31,6 +61,7 @@ mkdir -p \
   "$pixmaps_dir"
 
 scripts=(
+  ai-agent-status-env
   ai-agent-status-hook
   ai-agent-status-panel
   ai-agent-status-widget
@@ -99,10 +130,11 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
   gtk-update-icon-cache -q "${HOME}/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 fi
 
-python3 - "$HOME" <<'PY'
+python3 - "$HOME" "$runtime_env" "$source_env" "$config_dir" "$project_dir" <<'PY'
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from datetime import datetime
@@ -110,45 +142,70 @@ from pathlib import Path
 
 
 home = Path(sys.argv[1])
+runtime_env = Path(sys.argv[2])
+source_env = Path(sys.argv[3])
+config_dir = Path(sys.argv[4])
+project_dir = Path(sys.argv[5])
 bin_dir = home / ".local" / "bin"
 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-widget_config_defaults = {
-    "sound_enabled": True,
-    "stale_after_seconds": 180,
-    "hide_done_after_seconds": 180,
-    "idle_after_seconds": 600,
-    "hide_stale_after_seconds": 900,
-    "theme": "dark",
-}
+
+sys.path.insert(0, str(bin_dir))
+from ai_agent_status_lib.env_config import DEFAULT_VALUES  # noqa: E402
+from ai_agent_status_lib.env_config import LEGACY_KEYS  # noqa: E402
+from ai_agent_status_lib.env_config import load_settings  # noqa: E402
+from ai_agent_status_lib.env_config import parse_dotenv  # noqa: E402
+from ai_agent_status_lib.env_config import serialize_env  # noqa: E402
 
 
-def merge_widget_config() -> None:
-    path = home / ".config" / "ai-cli-status-monitor" / "widget.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                data = loaded
-        except json.JSONDecodeError as error:
-            made = backup(path)
-            print(f"⚠️  Cannot merge widget config because JSON is invalid: {path}")
-            print(f"   Error: {error}")
-            if made:
-                print(f"   Backup created: {made}")
-            data = {}
-    changed = False
-    for key, value in widget_config_defaults.items():
-        if key not in data:
-            data[key] = value
-            changed = True
-    if data.get("hide_done_after_seconds") == 60:
-        data["hide_done_after_seconds"] = 180
-        changed = True
-    if changed or not path.exists():
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"✅ Widget config installed: {path}")
+def read_legacy_widget_config() -> dict[str, object]:
+    path = config_dir / "widget.json"
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (json.JSONDecodeError, OSError) as error:
+        print(f"⚠️  Cannot migrate widget config: {path}: {error}")
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def install_environment_config() -> None:
+    if runtime_env.exists():
+        print(f"✅ Environment config preserved: {runtime_env}")
+        return
+
+    legacy = read_legacy_widget_config()
+    source_values = parse_dotenv(source_env, lambda message: print(f"⚠️  {message}"))
+    default_values = parse_dotenv(project_dir / ".env.default")
+    explicit_keys = set(os.environ.get("AI_STATUS_INSTALL_EXPLICIT_KEYS", "").split())
+
+    # Values unchanged from the public template are defaults, not intentional
+    # overrides, so legacy widget customizations may take precedence on migration.
+    for env_key, legacy_key in LEGACY_KEYS.items():
+        if env_key in explicit_keys or legacy_key not in legacy:
+            continue
+        if source_values.get(env_key, DEFAULT_VALUES[env_key]) == default_values.get(env_key, DEFAULT_VALUES[env_key]):
+            source_values.pop(env_key, None)
+
+    process_values = {"HOME": str(home)}
+    for key in explicit_keys:
+        if key in DEFAULT_VALUES and key in os.environ:
+            process_values[key] = os.environ[key]
+
+    warnings: list[str] = []
+    settings = load_settings(
+        environ=process_values,
+        env_path=source_env,
+        dotenv_values=source_values,
+        legacy=legacy,
+        diagnostic=warnings.append,
+    )
+    for message in warnings:
+        print(f"⚠️  {message}")
+    runtime_env.parent.mkdir(parents=True, exist_ok=True)
+    runtime_env.write_text(serialize_env(settings.as_env()), encoding="utf-8")
+    runtime_env.chmod(0o600)
+    print(f"✅ Environment config installed: {runtime_env}")
 
 
 def snippet(command: str, events: tuple[str, ...], codex: bool = False) -> str:
@@ -254,7 +311,7 @@ def add_hooks(path: Path, command: str, events: tuple[str, ...], codex: bool = F
 claude_command = f"{bin_dir}/ai-agent-status-hook --agent claude"
 codex_command = f"{bin_dir}/ai-agent-status-hook --agent codex"
 
-merge_widget_config()
+install_environment_config()
 
 add_hooks(
     home / ".claude" / "settings.json",
@@ -320,6 +377,8 @@ echo "  $notification_sound_file"
 echo "Agent logos installed:"
 echo "  $openai_logo_file"
 echo "  $anthropic_logo_file"
+echo "Environment config:"
+echo "  $runtime_env"
 echo
 echo "Run doctor:"
 echo "  $bin_dir/ai-agent-status-doctor"

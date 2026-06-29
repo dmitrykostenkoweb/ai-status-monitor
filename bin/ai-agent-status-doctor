@@ -7,10 +7,13 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from ai_agent_status_lib.env_config import load_settings
 
+CONFIG_WARNINGS: list[str] = []
+SETTINGS = load_settings(diagnostic=CONFIG_WARNINGS.append)
 HOME = Path.home()
 BIN = HOME / ".local" / "bin"
-CACHE_DIR = HOME / ".cache" / "ai-cli-status-monitor"
+CACHE_DIR = SETTINGS.cache_dir
 AUTOSTART = HOME / ".config" / "autostart" / "ai-cli-status-widget.desktop"
 CLAUDE_SETTINGS = HOME / ".claude" / "settings.json"
 CODEX_HOOKS = HOME / ".codex" / "hooks.json"
@@ -18,7 +21,7 @@ CODEX_STATUS = CACHE_DIR / "codex.json"
 STATUS_DIR = CACHE_DIR / "statuses"
 HOOK_CLAUDE = f"{BIN}/ai-agent-status-hook --agent claude"
 HOOK_CODEX = f"{BIN}/ai-agent-status-hook --agent codex"
-STALE_AFTER = timedelta(minutes=3)
+STALE_AFTER = timedelta(seconds=SETTINGS.stale_after_seconds)
 
 
 def ok(label: str) -> None:
@@ -94,6 +97,16 @@ def latest_status_age(agent: str) -> timedelta | None:
 
 
 def main() -> int:
+    if SETTINGS.env_file.exists():
+        ok(f"Environment config: {SETTINGS.env_file}")
+    else:
+        warn(f"Environment config missing, using legacy/defaults: {SETTINGS.env_file}")
+    ok(f"Resolved cache dir: {CACHE_DIR}")
+    ok(f"Resolved config dir: {SETTINGS.config_dir}")
+    ok(f"Resolved data dir: {SETTINGS.data_dir}")
+    for message in CONFIG_WARNINGS:
+        warn(f"Configuration: {message}")
+
     if (BIN / "ai-agent-status-hook").exists():
         ok("Hook script installed")
     else:

@@ -12,7 +12,8 @@ There is no build step or package manager. The scripts in `bin/` run directly.
 
 ```bash
 # Syntax-check the Python scripts (the only "build" gate)
-python3 -m py_compile bin/ai-agent-status-hook bin/ai-agent-status-widget bin/ai-agent-status-doctor
+python3 -m py_compile bin/ai-agent-status-hook bin/ai-agent-status-widget bin/ai-agent-status-doctor bin/ai_agent_status_lib/env_config.py
+bash -n install.sh bin/ai-agent-status-env bin/ai-agent-status-panel bin/ai-agent-status-widget-*
 
 # Install / refresh into ~/.local, ~/.config, ~/.cache (idempotent; merges hooks, backs up configs)
 ./install.sh
@@ -48,7 +49,9 @@ There is no test framework. Validation = `py_compile` + `--test` (pipeline) + `-
    - Glowing status dots and the radar glyph are drawn with **cairo** (optional dependency — `CAIRO_OK` falls back to flat discs / a Unicode-free no-op if pycairo is missing).
    - Every row shows a right-aligned, vertically-centered, text-styled clickable `przełącz →` (neutral grey; on dim/done rows the opacity fade is applied to the logo+text only, so the switch stays crisp) that calls `switch_to_session()`: it lists windows (`list_windows` ← `wmctrl -lp`), narrows to those whose PID is in the session's `client_pids`, and raises it (`wmctrl -i -a`). When one emulator process owns several windows (gnome-terminal), it disambiguates the PID candidates by **window title** (project/cwd); with one process per window (alacritty/kitty/xterm) the PID match is already exact. Title-only match is the last fallback. Cannot target a specific *tab* within a window, and degrades quietly under tmux/ssh/Wayland or without `wmctrl`.
 
-3. **Helpers (Bash):** `*-start` / `*-stop` manage the process via `widget.pid`; `*-toggle` flips it; `ai-agent-status-panel` dumps `combined.txt` for debugging.
+3. **Configuration:** `bin/ai_agent_status_lib/env_config.py` parses runtime dotenv as data (never shell), validates typed values, and resolves process env → runtime `.env` → legacy `widget.json` → built-in defaults. `bin/ai-agent-status-env` provides the equivalent restricted loader for Bash helpers. `AI_STATUS_ENV_FILE` is the bootstrap override for the runtime file.
+
+4. **Helpers (Bash):** `*-start` / `*-stop` manage the process via `widget.pid`; `*-toggle` flips it; `ai-agent-status-panel` dumps `combined.txt` for debugging. All source `ai-agent-status-env` from the same installed `bin` directory.
 
 ### The critical cross-file coupling: the Polish status vocabulary
 
@@ -59,9 +62,10 @@ The hook emits status strings; the widget does **substring matching on those exa
 
 ### Filesystem layout (runtime)
 
-- `~/.cache/ai-cli-status-monitor/` — `statuses/`, `last_payloads/`, `debug_payloads/`, `combined.txt`, `<agent>.json`, `widget.log`, `widget.pid`.
-- `~/.config/ai-cli-status-monitor/widget.json` — widget config + saved window position (`x`/`y`). Defaults: `DEFAULT_CONFIG` in the widget; mirrored in `install.sh`.
-- `~/.local/share/ai-cli-status-monitor/` — `notification.mp3`, agent logos.
+- `~/.cache/ai-cli-status-monitor/` — `statuses/`, `last_payloads/`, `debug_payloads/`, `combined.txt`, `<agent>.json`, `widget.log`, `widget.pid` (path configurable).
+- `~/.config/ai-cli-status-monitor/.env` — installed runtime configuration, created with mode `0600` and preserved on reinstall.
+- `~/.config/ai-cli-status-monitor/widget.json` — saved window position (`x`/`y`) plus legacy configuration fallback.
+- `~/.local/share/ai-cli-status-monitor/` — `notification.mp3`, agent logos (path configurable).
 - Hook wiring: `~/.claude/settings.json` (events: UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop, StopFailure) and `~/.codex/hooks.json` (adds PermissionRequest, SubagentStop; uses `"matcher": "*"`). Examples in `examples/`. Codex may also need `/hooks` → trust.
 
 ## Conventions & constraints
@@ -70,4 +74,4 @@ The hook emits status strings; the widget does **substring matching on those exa
 - **`install.sh` must preserve user config**: merge or back up (`*.bak.<timestamp>`) files under `~/.claude`, `~/.codex`, `~/.config/ai-cli-status-monitor`; never overwrite silently. Hook merging is idempotent (skips an already-present command).
 - The hook is defensive by design — keep it from raising on bad input.
 - Python: 4-space indent, `snake_case`, uppercase path/default constants, type hints where useful, scripts self-contained and executable. Bash: `set -euo pipefail`, quote path vars.
-- `DEFAULT_CONFIG` in the widget and `widget_config_defaults` in `install.sh` must stay in sync.
+- `.env.default`, `DEFAULT_VALUES` in `env_config.py`, and defaults in `ai-agent-status-env` must stay in sync.
