@@ -619,10 +619,9 @@ class StatusWidget(Gtk.Window):
             return None
         return datetime.now() - timestamp
 
-    def should_hide_status(self, kind: StatusKind, status: str, age: timedelta) -> bool:
-        if kind != "done" and classify(status) != "done":
-            return False
-        return age >= self.config_timedelta("hide_done_after_seconds")
+    def should_hide_status(self, kind: StatusKind, _status: str, age: timedelta) -> bool:
+        # Legacy text has already been normalized into `kind` by the loader.
+        return kind == "done" and age >= self.config_timedelta("hide_done_after_seconds")
 
     # ----------------------------- render -----------------------------
     def order_sessions(self, sessions: list[dict[str, object]]) -> list[dict[str, object]]:

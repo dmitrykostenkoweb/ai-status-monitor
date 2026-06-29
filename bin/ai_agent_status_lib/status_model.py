@@ -150,7 +150,7 @@ def codex_semantic(event: str, tool: str, payload: dict[str, Any]) -> StatusSema
         return {"kind": "done", "status": f"{agent}: zakończył"}
     if event_l == "subagentstop":
         return {"kind": "done", "status": "Codex subagent: zakończył"}
-    if event_l in ("malformed_json", "unexpected_payload"):
+    if event_l in ("stopfailure", "malformed_json", "unexpected_payload"):
         return {"kind": "error", "status": f"{agent}: {event}"}
     return {"kind": "neutral", "status": f"{agent}: {event}"}
 
