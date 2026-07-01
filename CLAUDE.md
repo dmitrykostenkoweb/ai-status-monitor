@@ -69,7 +69,7 @@ The data contract between the two halves is the structured **`kind`** field, not
 
 ### Distribution & updates
 
-Shipped via **public GitHub**, versioned by the repo-root `VERSION` file (semver). `install.sh` copies `VERSION` and records where it ran from (`install_source`); when piped through `curl … | bash` it self-bootstraps by cloning into `~/.local/share/.../src` and re-execing. `ai-agent-status-update` pulls that clone (or reclones) and re-runs the idempotent `install.sh`, which now **restarts** the widget so updates take effect. The widget's startup check and the updater both read `AI_STATUS_UPDATE_REPO` (`owner/repo`, default `dmitrykostenkoweb/ai-status-monitor-`) and `AI_STATUS_UPDATE_BRANCH` (default `main`), comparing versions via `updates.parse_version` (tuple compare; garbage → `()` sorts lowest). **Bump `VERSION` when publishing** or clients won't see the update.
+Shipped via **public GitHub**, versioned by the repo-root `VERSION` file (semver). `install.sh` copies `VERSION` and records where it ran from (`install_source`); when piped through `curl … | bash` it self-bootstraps by cloning into `~/.local/share/.../src` and re-execing. `ai-agent-status-update` pulls that clone (or reclones) and re-runs the idempotent `install.sh`, which now **restarts** the widget so updates take effect. The widget's startup check and the updater both read `AI_STATUS_UPDATE_REPO` (`owner/repo`, default `dmitrykostenkoweb/ai-status-monitor`) and `AI_STATUS_UPDATE_BRANCH` (default `main`), comparing versions via `updates.parse_version` (tuple compare; garbage → `()` sorts lowest). **Bump `VERSION` when publishing** or clients won't see the update.
 
 ## Conventions & constraints
 

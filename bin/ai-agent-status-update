@@ -12,7 +12,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/ai-agent-status-env"
 ai_status_load_env
 
-repo_slug="${AI_STATUS_UPDATE_REPO:-dmitrykostenkoweb/ai-status-monitor-}"
+repo_slug="${AI_STATUS_UPDATE_REPO:-dmitrykostenkoweb/ai-status-monitor}"
 repo_branch="${AI_STATUS_UPDATE_BRANCH:-main}"
 repo_url="https://github.com/${repo_slug}.git"
 

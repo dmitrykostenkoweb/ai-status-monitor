@@ -39,14 +39,14 @@ By default the widget is always-on-top, sticky across workspaces, and hidden fro
 Quick install (clones into `~/.local/share/ai-cli-status-monitor/src` and runs the installer):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor-/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/install.sh | bash
 ```
 
 Or from a local clone (lets you edit `.env` first):
 
 ```bash
-git clone https://github.com/dmitrykostenkoweb/ai-status-monitor-.git
-cd ai-status-monitor-
+git clone https://github.com/dmitrykostenkoweb/ai-status-monitor.git
+cd ai-status-monitor
 cp .env.default .env
 # optional: edit your local .env
 ./install.sh

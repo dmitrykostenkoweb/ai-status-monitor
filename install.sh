@@ -14,7 +14,7 @@ fi
 # Bootstrap path: no local checkout (piped install) -> clone into the managed
 # source dir and hand off to its install.sh.
 if [[ -z "$project_dir" || ! -f "$project_dir/bin/ai-agent-status-hook" ]]; then
-  repo_slug="${AI_STATUS_UPDATE_REPO:-dmitrykostenkoweb/ai-status-monitor-}"
+  repo_slug="${AI_STATUS_UPDATE_REPO:-dmitrykostenkoweb/ai-status-monitor}"
   repo_branch="${AI_STATUS_UPDATE_BRANCH:-main}"
   data_dir_boot="${AI_STATUS_DATA_DIR:-$HOME/.local/share/ai-cli-status-monitor}"
   data_dir_boot="${data_dir_boot/#\~/$HOME}"

@@ -17,7 +17,7 @@ from typing import Optional
 
 # GitHub "owner/repo" the update check and self-update pull from. Overridable so a
 # fork or an internal mirror can be used without editing the source.
-DEFAULT_REPO = "dmitrykostenkoweb/ai-status-monitor-"
+DEFAULT_REPO = "dmitrykostenkoweb/ai-status-monitor"
 DEFAULT_BRANCH = "main"
 
 
