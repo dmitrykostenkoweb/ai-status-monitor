@@ -51,7 +51,7 @@ There is no test framework. Validation = `py_compile` + `--test` (pipeline) + `-
 
 3. **Configuration:** `bin/ai_agent_status_lib/env_config.py` parses runtime dotenv as data (never shell), validates typed values, and resolves process env → runtime `.env` → legacy `widget.json` → built-in defaults. `bin/ai-agent-status-env` provides the equivalent restricted loader for Bash helpers. `AI_STATUS_ENV_FILE` is the bootstrap override for the runtime file.
 
-4. **Helpers (Bash):** `*-start` / `*-stop` manage the process via `widget.pid`; `*-toggle` flips it; `ai-agent-status-panel` dumps `combined.txt` for debugging. All source `ai-agent-status-env` from the same installed `bin` directory.
+4. **Helpers (Bash):** `*-start` / `*-stop` manage the process via `widget.pid`; `ai-agent-status-panel` dumps `combined.txt` for debugging. All source `ai-agent-status-env` from the same installed `bin` directory.
 
 ### The cross-file contract: the structured `kind`, not the display string
 

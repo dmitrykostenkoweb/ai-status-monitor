@@ -69,7 +69,6 @@ icons_dir="${HOME}/.local/share/icons/hicolor/scalable/apps"
 pixmaps_dir="${HOME}/.local/share/pixmaps"
 desktop_file="${autostart_dir}/ai-cli-status-widget.desktop"
 app_desktop_file="${applications_dir}/ai-cli-status-widget.desktop"
-toggle_desktop_file="${applications_dir}/ai-cli-status-widget-toggle.desktop"
 icon_file="${icons_dir}/ai-cli-status-widget.png"
 png_icon_file="${pixmaps_dir}/ai-cli-status-widget.png"
 notification_sound_file="${data_dir}/notification.mp3"
@@ -94,7 +93,6 @@ scripts=(
   ai-agent-status-widget
   ai-agent-status-widget-start
   ai-agent-status-widget-stop
-  ai-agent-status-widget-toggle
   ai-agent-status-doctor
   ai-agent-status-update
 )
@@ -141,19 +139,10 @@ Categories=Utility;
 StartupNotify=false
 EOF
 
-cat >"$toggle_desktop_file" <<EOF
-[Desktop Entry]
-Type=Application
-Name=AI CLI Status Widget Toggle
-Comment=Show or hide the AI CLI status widget
-Exec=$bin_dir/ai-agent-status-widget-toggle
-Icon=$png_icon_file
-Terminal=false
-Categories=Utility;
-StartupNotify=false
-EOF
+chmod +x "$app_desktop_file" "$desktop_file"
 
-chmod +x "$app_desktop_file" "$toggle_desktop_file" "$desktop_file"
+# Remove the retired toggle launcher/script from earlier installs.
+rm -f "${applications_dir}/ai-cli-status-widget-toggle.desktop" "${bin_dir}/ai-agent-status-widget-toggle"
 
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$applications_dir" >/dev/null 2>&1 || true
@@ -385,7 +374,6 @@ echo "Installed ai-cli-status-monitor $(cat "$project_dir/VERSION")."
 echo
 echo "Commands:"
 echo "  $bin_dir/ai-agent-status-widget"
-echo "  $bin_dir/ai-agent-status-widget-toggle"
 echo "  $bin_dir/ai-agent-status-doctor"
 echo "  $bin_dir/ai-agent-status-panel"
 echo "  $bin_dir/ai-agent-status-update"
@@ -401,9 +389,8 @@ fi
 echo "Autostart installed:"
 echo "  $desktop_file"
 echo
-echo "Application launchers installed:"
+echo "Application launcher installed:"
 echo "  $app_desktop_file"
-echo "  $toggle_desktop_file"
 echo "Icon installed:"
 echo "  $png_icon_file"
 echo "Notification sound installed:"

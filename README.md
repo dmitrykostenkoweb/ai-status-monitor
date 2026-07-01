@@ -60,7 +60,6 @@ The installer tries to configure the hooks automatically:
 - Codex CLI: `~/.codex/hooks.json`
 - autostart: `~/.config/autostart/ai-cli-status-widget.desktop`
 - launcher in the Cinnamon menu: `AI CLI Status Widget`
-- toggle launcher in the Cinnamon menu: `AI CLI Status Widget Toggle`
 - launcher icon: `~/.local/share/pixmaps/ai-cli-status-widget.png`
 - notification sound: `~/.local/share/ai-cli-status-monitor/notification.mp3`
 - OpenAI/Codex logo: `~/.local/share/ai-cli-status-monitor/openai-logo.svg`
@@ -86,25 +85,14 @@ Appearance demo:
 ~/.local/bin/ai-agent-status-widget --demo
 ```
 
-## 5. Toggle
-
-```bash
-~/.local/bin/ai-agent-status-widget-toggle
-```
-
-After installation you can also use the Cinnamon menu entries:
-
-- `AI CLI Status Widget`
-- `AI CLI Status Widget Toggle`
-
-In the Cinnamon menu you can right-click an entry and choose to add it to the panel or to the desktop.
-
-Additionally:
+## 5. Start / stop
 
 ```bash
 ~/.local/bin/ai-agent-status-widget-start
 ~/.local/bin/ai-agent-status-widget-stop
 ```
+
+After installation you can also launch it from the Cinnamon menu entry `AI CLI Status Widget`; right-click it to add it to the panel or the desktop.
 
 ## 6. Doctor
 
