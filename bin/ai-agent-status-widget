@@ -316,7 +316,7 @@ class StatusWidget(Gtk.Window):
         GLib.timeout_add_seconds(3, self.end_intro)
         GLib.timeout_add_seconds(1, self.refresh_status)
         GLib.timeout_add(200, self.tick_animation)
-        GLib.timeout_add_seconds(2, self.apply_wmctrl_hints)
+        GLib.timeout_add_seconds(4, self.apply_wmctrl_hints)
         if not demo:
             # Check GitHub for a newer release once, a few seconds after startup so
             # it never competes with the intro or first paint.
@@ -672,6 +672,10 @@ class StatusWidget(Gtk.Window):
         return sorted(sessions, key=rank)
 
     def refresh_status(self) -> bool:
+        # Cheaply re-assert "always on top" every tick: GNOME/Mutter keeps
+        # dropping _NET_WM_STATE_ABOVE, and this GTK call is a no-op when the
+        # state already holds, so it is safe to repeat.
+        self.set_keep_above(True)
         if self.intro:
             return True  # the startup lockup owns the body until end_intro()
         sessions = self.order_sessions(self.collect_sessions())
@@ -1163,7 +1167,7 @@ class StatusWidget(Gtk.Window):
     def apply_wmctrl_hints(self) -> bool:
         wmctrl = shutil.which("wmctrl")
         if not wmctrl:
-            return False
+            return False  # nothing to reinforce (e.g. pure Wayland); stop the timer
         try:
             subprocess.run(
                 [wmctrl, "-r", TITLE, "-b", "add,above,sticky,skip_taskbar"],
@@ -1173,7 +1177,8 @@ class StatusWidget(Gtk.Window):
             )
         except OSError as error:
             log(f"wmctrl failed: {error}")
-        return False
+            return False
+        return True  # repeat: re-assert above/sticky/skip_taskbar as Mutter drops them
 
 
 def main() -> int:
