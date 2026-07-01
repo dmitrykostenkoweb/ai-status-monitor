@@ -59,27 +59,31 @@ def normalize_kind(value: Any, fallback_status: str = "") -> StatusKind:
 
 
 def classify_status_text(status: str) -> StatusKind:
-    """Legacy fallback for status records written before `kind` existed."""
+    """Fallback classifier for status records without an explicit `kind`.
+
+    Recognizes both the current English display strings and the legacy Polish
+    ones, so old cache files written before the translation still classify.
+    """
     text = status.lower()
     if any(word in text for word in ("not running", "nie uruchomiony")):
         return "idle"
-    if any(word in text for word in ("czeka", "zgod", "permission", "approval")):
+    if any(word in text for word in ("czeka", "zgod", "waiting", "permission", "approval")):
         return "waiting"
     if any(word in text for word in ("błąd", "error", "failure", "malformed")):
         return "error"
-    if "myśl" in text:
+    if "myśl" in text or "thinking" in text:
         return "thinking"
-    if "czyta" in text:
+    if "czyta" in text or "reading" in text:
         return "reading"
-    if "koduje" in text:
+    if "koduje" in text or "coding" in text:
         return "coding"
-    if "wykon" in text or "komend" in text:
+    if "wykon" in text or "komend" in text or "command" in text:
         return "command"
-    if "analiz" in text:
+    if "analiz" in text or "analyz" in text:
         return "analyzing"
     if "kończył" in text or "done" in text or "finished" in text:
         return "done"
-    if "brak nowych" in text:
+    if "brak nowych" in text or "no new events" in text:
         return "stale"
     if "idle" in text or "bezczynny" in text:
         return "idle"
@@ -100,29 +104,29 @@ def claude_semantic(event: str, tool: str, payload: dict[str, Any]) -> StatusSem
     agent = "Claude"
 
     if event_l == "userpromptsubmit":
-        return {"kind": "thinking", "status": f"{agent}: myśli"}
+        return {"kind": "thinking", "status": f"{agent}: thinking"}
     if event_l == "pretooluse":
         if contains_any(tool_l, ("askuserquestion", "ask_user", "question", "input")):
-            return {"kind": "waiting", "status": f"{agent}: czeka na Ciebie"}
+            return {"kind": "waiting", "status": f"{agent}: waiting for you"}
         if contains_any(tool_l, ("edit", "write", "multiedit", "notebookedit", "todowrite")):
-            return {"kind": "coding", "status": f"{agent}: koduje"}
+            return {"kind": "coding", "status": f"{agent}: coding"}
         if contains_any(tool_l, ("bash", "shell", "command")):
-            return {"kind": "command", "status": f"{agent}: wykonuje komendę"}
+            return {"kind": "command", "status": f"{agent}: running command"}
         if contains_any(tool_l, ("read", "grep", "glob", "ls", "search", "webfetch", "websearch")):
-            return {"kind": "reading", "status": f"{agent}: czyta kod"}
-        return {"kind": "neutral", "status": f"{agent}: wykonuje akcję"}
+            return {"kind": "reading", "status": f"{agent}: reading code"}
+        return {"kind": "neutral", "status": f"{agent}: working"}
     if event_l == "posttooluse":
-        return {"kind": "analyzing", "status": f"{agent}: analizuje wynik"}
+        return {"kind": "analyzing", "status": f"{agent}: analyzing"}
     if event_l == "notification":
         text = payload_search_text(payload)
         if contains_any(text, ("permission", "approval", "approve", "allow", "confirm", "trust", "zgod")):
-            return {"kind": "waiting", "status": f"{agent}: czeka na zgodę"}
+            return {"kind": "waiting", "status": f"{agent}: waiting for approval"}
         if contains_any(text, ("idle", "input", "response", "user", "waiting", "czeka")):
-            return {"kind": "waiting", "status": f"{agent}: czeka na Ciebie"}
+            return {"kind": "waiting", "status": f"{agent}: waiting for you"}
     if event_l == "stop":
-        return {"kind": "done", "status": f"{agent}: zakończył"}
+        return {"kind": "done", "status": f"{agent}: done"}
     if event_l == "stopfailure":
-        return {"kind": "error", "status": f"{agent}: błąd"}
+        return {"kind": "error", "status": f"{agent}: error"}
     if event_l in ("malformed_json", "unexpected_payload"):
         return {"kind": "error", "status": f"{agent}: {event}"}
     return {"kind": "neutral", "status": f"{agent}: {event}"}
@@ -134,22 +138,22 @@ def codex_semantic(event: str, tool: str, payload: dict[str, Any]) -> StatusSema
     agent = "Codex"
 
     if event_l == "userpromptsubmit":
-        return {"kind": "thinking", "status": f"{agent}: myśli"}
+        return {"kind": "thinking", "status": f"{agent}: thinking"}
     if event_l == "pretooluse":
         if contains_any(tool_l, ("shell", "bash", "exec", "command", "terminal")):
-            return {"kind": "command", "status": f"{agent}: wykonuje komendę"}
+            return {"kind": "command", "status": f"{agent}: running command"}
         if contains_any(tool_l, ("apply_patch", "patch", "edit", "write")):
-            return {"kind": "coding", "status": f"{agent}: koduje"}
+            return {"kind": "coding", "status": f"{agent}: coding"}
         if contains_any(tool_l, ("read", "search", "rg", "grep", "find", "open", "cat", "sed", "ls")):
-            return {"kind": "reading", "status": f"{agent}: czyta kod"}
+            return {"kind": "reading", "status": f"{agent}: reading code"}
     if event_l == "permissionrequest":
-        return {"kind": "waiting", "status": f"{agent}: czeka na zgodę"}
+        return {"kind": "waiting", "status": f"{agent}: waiting for approval"}
     if event_l == "posttooluse":
-        return {"kind": "analyzing", "status": f"{agent}: analizuje wynik"}
+        return {"kind": "analyzing", "status": f"{agent}: analyzing"}
     if event_l == "stop":
-        return {"kind": "done", "status": f"{agent}: zakończył"}
+        return {"kind": "done", "status": f"{agent}: done"}
     if event_l == "subagentstop":
-        return {"kind": "done", "status": "Codex subagent: zakończył"}
+        return {"kind": "done", "status": "Codex subagent: done"}
     if event_l in ("stopfailure", "malformed_json", "unexpected_payload"):
         return {"kind": "error", "status": f"{agent}: {event}"}
     return {"kind": "neutral", "status": f"{agent}: {event}"}

@@ -13,11 +13,9 @@ It is a lightweight local tool: Python 3, GTK3/PyGObject and Bash. No Electron, 
 Example:
 
 ```text
-Claude: czyta kod [unitbox-front] 14:22
-Codex: wykonuje komendę [ai-cli-status-monitor] 14:23
+Claude: reading code [unitbox-front] 14:22
+Codex: running command [ai-cli-status-monitor] 14:23
 ```
-
-> The in-app status strings are in Polish on purpose — they are the data contract between the hook (which writes them) and the widget (which matches on the exact words to pick colors, badges and sounds). This README documents them verbatim.
 
 ## 2. Appearance
 
@@ -27,22 +25,34 @@ The widget looks like a small dark floating card / mini-player:
 - header: radar icon, `AI Agents Status`, a state badge (`● LIVE` / `▲ N ALERT` / `● IDLE`) and a `×` button
 - one row per active session (up to 5), each with: a glowing dot in the state color, an agent logo tile, the agent name, the status (monospace), and a `project · time` line
 - colors depend on the state (thinking, reading code, coding, running a command, analyzing output, waiting for approval, finished)
-- active states get an animated `...`; finished (`zakończył`) sessions are dimmed, and any overflow is collapsed behind a `+N zakończone ukryte automatycznie` footer
-- each row has a clickable `przełącz →` on the right that activates the terminal window of that session; a `czeka na zgodę` (waiting-for-approval) row is additionally highlighted in red with a pulsing border
-- when nothing is running: an empty/idle state shows the "AI Status Monitor" lockup (radar logo + wordmark) with a rotating radar sweep and `brak aktywnych agentów`
+- active states get an animated `...`; `done` sessions are dimmed, and any overflow is collapsed behind a `+N finished, hidden automatically` footer
+- each row has a clickable `→` on the right that activates the terminal window of that session; a `waiting for approval` row is additionally highlighted in red with a pulsing border
+- when nothing is running: an empty/idle state shows the "AI Status Monitor" lockup (radar logo + wordmark) with a rotating radar sweep and `no active agents`
 - on startup the same lockup is shown for ~3 seconds as an intro splash
-- right-click menu: `Reload`, `Open logs folder`, `Quit`
+- when a newer version is published on GitHub, a small `update ↑` pill appears in the header (see [Updates](#7b-updates))
+- right-click menu: `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
 
 By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
 
 ## 3. Installation
 
+Quick install (clones into `~/.local/share/ai-cli-status-monitor/src` and runs the installer):
+
 ```bash
-cd /home/dima/Documents/Personal/Projects/ai-cli-status-monitor
+curl -fsSL https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor-/main/install.sh | bash
+```
+
+Or from a local clone (lets you edit `.env` first):
+
+```bash
+git clone https://github.com/dmitrykostenkoweb/ai-status-monitor-.git
+cd ai-status-monitor-
 cp .env.default .env
 # optional: edit your local .env
 ./install.sh
 ```
+
+The installer is idempotent, so re-running it (or `ai-agent-status-update`) safely refreshes an existing install and restarts the widget.
 
 The installer tries to configure the hooks automatically:
 
@@ -112,6 +122,7 @@ It checks:
 - `wmctrl`
 - the GTK import
 - the hook's test mode
+- the installed version and whether an update is available
 
 ## 7. Autostart
 
@@ -151,11 +162,32 @@ Value precedence: a variable exported in the process → runtime `.env` → lega
 Behavior:
 
 - a fresh status is shown normally
-- after `stale_after_seconds` the line is dimmed and shows `brak nowych eventów`
+- after `stale_after_seconds` the line is dimmed and shows `no new events`
 - after `idle_after_seconds` the line transitions to `idle`
 - after `hide_stale_after_seconds` the old status is hidden
-- `zakończył` disappears after `hide_done_after_seconds`, by default after 3 minutes
-- `czeka` turns on the red color, the red border/pulse and the sound, if `sound_enabled` is `true`
+- `done` disappears after `hide_done_after_seconds`, by default after 3 minutes
+- a `waiting` state turns on the red color, the red border/pulse and the sound, if `sound_enabled` is `true`
+
+## 7b. Updates
+
+The widget knows its own version (see `VERSION`) and can update itself from GitHub.
+
+```bash
+# update now (pull latest source, reinstall, restart the widget)
+~/.local/bin/ai-agent-status-update
+
+# just check without changing anything
+~/.local/bin/ai-agent-status-update --check
+
+# print the installed version
+~/.local/bin/ai-agent-status-widget --version
+```
+
+A few seconds after startup the widget makes a single, best-effort request to GitHub for the latest published `VERSION`. If it is newer, an `update ↑` pill appears in the header and an `Update to …` entry is added to the right-click menu — clicking either runs `ai-agent-status-update` for you. If you are offline the check silently does nothing.
+
+`ai-agent-status-update` pulls the source clone recorded at install time (`~/.local/share/ai-cli-status-monitor/install_source`), or clones a fresh copy into `~/.local/share/ai-cli-status-monitor/src` if none is found, then re-runs `install.sh` (which restarts the widget).
+
+The repository is configurable for forks/mirrors via `AI_STATUS_UPDATE_REPO` (`owner/repo`) and `AI_STATUS_UPDATE_BRANCH`.
 
 ## 8. Claude Code hooks
 
@@ -268,9 +300,9 @@ command -v wmctrl
 ## 11. Limitations
 
 - The status is event-based; it is not a real view of the "model's thoughts".
-- The `myśli` (thinking) status is inferred from prompts and tool events.
-- The `czeka na Ciebie` (waiting for you) status depends on the available notification, stop and permission events.
+- The `thinking` status is inferred from prompts and tool events.
+- The `waiting for you` status depends on the available notification, stop and permission events.
 - Always-on-top and all-workspaces work best on X11/Cinnamon.
 - Wayland may limit the sticky/above/skip-taskbar behavior.
 - Each AI session has its own row. Session identity comes from `session_id` (Claude), and when it is missing (Codex) — from the POSIX session leader (the terminal's shell), so one session = one stable row, even without `session_id`.
-- `przełącz →` matches a window by the terminal process PID, and when a single emulator process owns multiple windows (e.g. gnome-terminal) it disambiguates them by window title. Full certainty comes from a one-process-per-window terminal (alacritty, kitty, xterm); `wmctrl` cannot switch to a specific tab. It requires `wmctrl`/X11; under Wayland, tmux, screen or ssh it may not hit the right window. A diagnostic entry lands in `widget.log`.
+- The `→` switch matches a window by the terminal process PID, and when a single emulator process owns multiple windows (e.g. gnome-terminal) it disambiguates them by window title. Full certainty comes from a one-process-per-window terminal (alacritty, kitty, xterm); `wmctrl` cannot switch to a specific tab. It requires `wmctrl`/X11; under Wayland, tmux, screen or ssh it may not hit the right window. A diagnostic entry lands in `widget.log`.

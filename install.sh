@@ -1,7 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve our own location. When piped through `curl ... | bash` there is no
+# script file, so BASH_SOURCE is unset (would trip `set -u`) — guard for that and
+# leave project_dir empty, which triggers the bootstrap clone below.
+self="${BASH_SOURCE[0]:-}"
+if [[ -n "$self" && -f "$self" ]]; then
+  project_dir="$(cd "$(dirname "$self")" && pwd)"
+else
+  project_dir=""
+fi
+
+# Bootstrap path: no local checkout (piped install) -> clone into the managed
+# source dir and hand off to its install.sh.
+if [[ -z "$project_dir" || ! -f "$project_dir/bin/ai-agent-status-hook" ]]; then
+  repo_slug="${AI_STATUS_UPDATE_REPO:-dmitrykostenkoweb/ai-status-monitor-}"
+  repo_branch="${AI_STATUS_UPDATE_BRANCH:-main}"
+  data_dir_boot="${AI_STATUS_DATA_DIR:-$HOME/.local/share/ai-cli-status-monitor}"
+  data_dir_boot="${data_dir_boot/#\~/$HOME}"
+  managed_src="$data_dir_boot/src"
+  if ! command -v git >/dev/null 2>&1; then
+    echo "git is required to install via curl. Install it with: sudo apt install git" >&2
+    exit 1
+  fi
+  echo "Cloning https://github.com/${repo_slug}.git ..."
+  rm -rf "$managed_src"
+  mkdir -p "$(dirname "$managed_src")"
+  git clone --branch "$repo_branch" --depth 1 "https://github.com/${repo_slug}.git" "$managed_src"
+  exec "$managed_src/install.sh"
+fi
 
 config_keys=(
   AI_STATUS_CACHE_DIR AI_STATUS_CONFIG_DIR AI_STATUS_DATA_DIR
@@ -69,6 +96,7 @@ scripts=(
   ai-agent-status-widget-stop
   ai-agent-status-widget-toggle
   ai-agent-status-doctor
+  ai-agent-status-update
 )
 
 for script in "${scripts[@]}"; do
@@ -84,6 +112,11 @@ cp "$project_dir/assets/ai-cli-status-widget.png" "$png_icon_file"
 cp "$project_dir/assets/notification.mp3" "$notification_sound_file"
 cp "$project_dir/assets/openai-logo.svg" "$openai_logo_file"
 cp "$project_dir/assets/anthropic-logo.png" "$anthropic_logo_file"
+
+# Record the version and where we installed from, so ai-agent-status-update can
+# pull the right clone and the widget can tell when a newer version is published.
+cp "$project_dir/VERSION" "$data_dir/VERSION"
+printf '%s\n' "$project_dir" >"$data_dir/install_source"
 
 cat >"$desktop_file" <<EOF
 [Desktop Entry]
@@ -348,13 +381,14 @@ if command -v wmctrl >/dev/null 2>&1; then
 fi
 
 echo
-echo "Installed ai-cli-status-monitor."
+echo "Installed ai-cli-status-monitor $(cat "$project_dir/VERSION")."
 echo
 echo "Commands:"
 echo "  $bin_dir/ai-agent-status-widget"
 echo "  $bin_dir/ai-agent-status-widget-toggle"
 echo "  $bin_dir/ai-agent-status-doctor"
 echo "  $bin_dir/ai-agent-status-panel"
+echo "  $bin_dir/ai-agent-status-update"
 echo
 
 if [[ "$gtk_ok" -ne 1 || "$wmctrl_ok" -ne 1 ]]; then
@@ -386,6 +420,9 @@ echo
 
 if [[ "$gtk_ok" -eq 1 ]]; then
   if [[ -n "${DISPLAY:-}" ]]; then
+    # Restart so a reinstall/update picks up the new code instead of leaving the
+    # already-running instance on the old version.
+    "$bin_dir/ai-agent-status-widget-stop" >/dev/null 2>&1 || true
     "$bin_dir/ai-agent-status-widget-start" || true
   else
     echo "DISPLAY is not set, widget was not started now. It will start on desktop login."

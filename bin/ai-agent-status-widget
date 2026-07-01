@@ -8,10 +8,12 @@ import math
 import os
 import shutil
 import subprocess
+import threading
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
+from ai_agent_status_lib import updates
 from ai_agent_status_lib.env_config import load_settings
 from ai_agent_status_lib.status_model import IN_PROGRESS_KINDS
 from ai_agent_status_lib.status_model import INACTIVE_KINDS
@@ -37,6 +39,9 @@ ANTHROPIC_LOGO = DATA_DIR / "anthropic-logo.png"
 TITLE = SETTINGS.title
 CARD_WIDTH = SETTINGS.card_width
 MAX_ROWS = SETTINGS.max_rows
+# Sibling scripts (e.g. the self-updater) live next to this one once installed.
+WIDGET_DIR = Path(__file__).resolve().parent
+UPDATE_SCRIPT = WIDGET_DIR / "ai-agent-status-update"
 
 # Per-state palette, taken straight from the design legend.
 STATE_COLORS = {
@@ -271,16 +276,18 @@ class StatusWidget(Gtk.Window):
         self.waiting_dots: list[StatusDot] = []
         self.spinning: list[LogoMark] = []
         self.intro = True
+        self.update_available: str | None = None
+        self.updating = False
         self.logo_pixbufs = self.load_logos()
         self.demo_scenarios = [
-            [("claude", "czyta kod", "unitbox-front", "22:16"),
-             ("codex", "analizuje wynik", "ai-cli-status-monitor", "22:16")],
-            [("claude", "koduje", "backend-api", "22:17"),
-             ("codex", "czeka na zgodę", "ai-cli-status-monitor", "22:17")],
-            [("claude", "myśli", "backend-api", "22:14"),
-             ("codex", "wykonuje komendę", "infra-scripts", "22:15"),
-             ("claude", "czyta kod", "unitbox-front", "22:16"),
-             ("codex", "zakończył", "docs-site", "22:11")],
+            [("claude", "reading code", "unitbox-front", "22:16"),
+             ("codex", "analyzing", "ai-cli-status-monitor", "22:16")],
+            [("claude", "coding", "backend-api", "22:17"),
+             ("codex", "waiting for approval", "ai-cli-status-monitor", "22:17")],
+            [("claude", "thinking", "backend-api", "22:14"),
+             ("codex", "running command", "infra-scripts", "22:15"),
+             ("claude", "reading code", "unitbox-front", "22:16"),
+             ("codex", "done", "docs-site", "22:11")],
             [],
         ]
 
@@ -310,6 +317,10 @@ class StatusWidget(Gtk.Window):
         GLib.timeout_add_seconds(1, self.refresh_status)
         GLib.timeout_add(200, self.tick_animation)
         GLib.timeout_add_seconds(2, self.apply_wmctrl_hints)
+        if not demo:
+            # Check GitHub for a newer release once, a few seconds after startup so
+            # it never competes with the intro or first paint.
+            GLib.timeout_add_seconds(4, self.start_update_check)
 
     def _build_ui(self) -> None:
         css = b"""
@@ -341,6 +352,17 @@ class StatusWidget(Gtk.Window):
         #badge.live { color: #4ADE80; background: rgba(74,222,128,0.10); border: 1px solid rgba(74,222,128,0.22); }
         #badge.alert { color: #FB7060; background: rgba(251,112,96,0.12); border: 1px solid rgba(251,112,96,0.30); }
         #badge.idle  { color: #6B7785; background: rgba(107,119,133,0.10); border: 1px solid rgba(107,119,133,0.22); }
+        #updatePill {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 9px; font-weight: 600;
+          color: #2DD4BF;
+          background: rgba(45,212,191,0.12);
+          border: 1px solid rgba(45,212,191,0.30);
+          border-radius: 6px;
+          padding: 2px 7px; margin: 0 2px;
+          box-shadow: none; outline: none; min-height: 0;
+        }
+        #updatePill:hover { color: #ffffff; background: rgba(45,212,191,0.22); }
         #close { color: #7a8493; font-size: 15px; padding: 0 3px; }
         #row { padding: 4px 8px; border-radius: 9px; }
         #row.alertRow {
@@ -417,6 +439,18 @@ class StatusWidget(Gtk.Window):
         title.set_name("headerTitle")
         title.set_xalign(0)
         header.pack_start(title, True, True, 0)
+
+        # Update pill: hidden until the startup check finds a newer version.
+        self.update_button = Gtk.Button(label="update ↑")
+        self.update_button.set_name("updatePill")
+        self.update_button.set_relief(Gtk.ReliefStyle.NONE)
+        self.update_button.set_can_focus(False)
+        self.update_button.set_focus_on_click(False)
+        self.update_button.set_valign(Gtk.Align.CENTER)
+        self.update_button.set_no_show_all(True)
+        self.update_button.set_tooltip_text("A newer version is available — click to update")
+        self.update_button.connect("clicked", self.run_update)
+        header.pack_start(self.update_button, False, False, 0)
 
         self.badge = Gtk.Label()
         self.badge.set_name("badge")
@@ -548,7 +582,7 @@ class StatusWidget(Gtk.Window):
                 if age >= self.config_timedelta("idle_after_seconds"):
                     status, project, display_kind = f"{agent.capitalize()}: idle", "", "idle"
                 elif age >= self.config_timedelta("stale_after_seconds"):
-                    status = f"{agent.capitalize()}: brak nowych eventów"
+                    status = f"{agent.capitalize()}: no new events"
                     display_kind = "stale"
             if not status:
                 continue
@@ -683,7 +717,7 @@ class StatusWidget(Gtk.Window):
             for session in sessions:
                 self.body.pack_start(self.build_row(session), False, False, 0)
             if hidden_done > 0:
-                footer = Gtk.Label(label=f"+{hidden_done} zakończone ukryte automatycznie")
+                footer = Gtk.Label(label=f"+{hidden_done} finished, hidden automatically")
                 footer.set_name("footer")
                 self.body.pack_start(footer, False, False, 0)
 
@@ -773,7 +807,7 @@ class StatusWidget(Gtk.Window):
         switch.set_focus_on_click(False)
         switch.set_valign(Gtk.Align.CENTER)
         switch.set_margin_end(2)
-        switch.set_tooltip_text("Przełącz na okno tej sesji")
+        switch.set_tooltip_text("Switch to this session's window")
         project_name = str(session["project"])
         cwd = str(session["cwd"])
         pids = list(session["client_pids"]) if isinstance(session["client_pids"], list) else []
@@ -817,7 +851,7 @@ class StatusWidget(Gtk.Window):
         return box
 
     def build_empty_state(self) -> None:
-        self.body.pack_start(self.build_lockup("brak aktywnych agentów"), True, True, 0)
+        self.body.pack_start(self.build_lockup("no active agents"), True, True, 0)
 
     def build_intro(self) -> None:
         for child in self.body.get_children():
@@ -947,14 +981,68 @@ class StatusWidget(Gtk.Window):
         menu = Gtk.Menu()
         reload_item = Gtk.MenuItem(label="Reload")
         logs_item = Gtk.MenuItem(label="Open logs folder")
+        if self.update_available:
+            update_item = Gtk.MenuItem(label=f"Update to {self.update_available}")
+        else:
+            update_item = Gtk.MenuItem(label="Check for updates")
         quit_item = Gtk.MenuItem(label="Quit")
         reload_item.connect("activate", lambda _item: self.refresh_status())
         logs_item.connect("activate", lambda _item: self.open_logs_folder())
+        if self.update_available:
+            update_item.connect("activate", self.run_update)
+        else:
+            update_item.connect("activate", lambda _item: self.start_update_check())
         quit_item.connect("activate", self.quit)
-        for item in (reload_item, logs_item, quit_item):
+        for item in (reload_item, logs_item, update_item, quit_item):
             menu.append(item)
         menu.show_all()
         menu.popup_at_pointer(event)
+
+    def start_update_check(self) -> bool:
+        """Kick off a one-shot background version check against GitHub.
+
+        Runs in a daemon thread so the (networked, possibly slow) request never
+        blocks the GTK main loop; the result is delivered back via idle_add.
+        """
+        def worker() -> None:
+            version = updates.check_for_update()
+            if version:
+                GLib.idle_add(self.on_update_result, version)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return False  # one-shot timeout
+
+    def on_update_result(self, version: str) -> bool:
+        self.update_available = version
+        self.update_button.set_label(f"update {version} ↑")
+        self.update_button.set_visible(True)
+        log(f"update available: {version}")
+        return False
+
+    def run_update(self, *_args) -> None:
+        if self.updating:
+            return
+        if not UPDATE_SCRIPT.exists():
+            log(f"update script not found: {UPDATE_SCRIPT}")
+            return
+        self.updating = True
+        self.update_button.set_label("updating…")
+        self.update_button.set_sensitive(False)
+        log("starting self-update")
+        try:
+            # Detach into its own session so the updater (which stops and restarts
+            # this widget via install.sh) outlives the process it is replacing.
+            with open(LOG_FILE, "a", encoding="utf-8") as logfile:
+                subprocess.Popen(
+                    [str(UPDATE_SCRIPT)],
+                    stdout=logfile,
+                    stderr=logfile,
+                    start_new_session=True,
+                )
+        except OSError as error:
+            self.updating = False
+            self.update_button.set_sensitive(True)
+            log(f"failed to start update: {error}")
 
     def open_logs_folder(self) -> None:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1091,7 +1179,12 @@ class StatusWidget(Gtk.Window):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Floating GTK widget for ai-cli-status-monitor.")
     parser.add_argument("--demo", action="store_true", help="cycle through demo states")
+    parser.add_argument("--version", action="store_true", help="print the installed version and exit")
     args = parser.parse_args()
+
+    if args.version:
+        print(updates.installed_version())
+        return 0
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)

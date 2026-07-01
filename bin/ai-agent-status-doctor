@@ -7,6 +7,7 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from ai_agent_status_lib import updates
 from ai_agent_status_lib.env_config import load_settings
 
 CONFIG_WARNINGS: list[str] = []
@@ -121,6 +122,17 @@ def main() -> int:
         ok("Widget executable")
     else:
         warn("Widget is not executable")
+
+    ok(f"Installed version: {updates.installed_version()}")
+    if (BIN / "ai-agent-status-update").exists():
+        ok("Update script installed")
+        newer = updates.check_for_update()
+        if newer:
+            warn(f"Update available: {newer} (run ai-agent-status-update)")
+        else:
+            ok("Up to date (or update check unavailable)")
+    else:
+        warn("Update script missing")
 
     if CACHE_DIR.exists():
         ok("Cache dir exists")

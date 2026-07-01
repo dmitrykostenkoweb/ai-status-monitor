@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Self-update: pull the latest source from GitHub and re-run install.sh.
+#
+# The installer records where it ran from in "$DATA_DIR/install_source". We pull
+# that clone when it is a git repo; otherwise we fall back to a managed clone in
+# "$DATA_DIR/src" (cloning it fresh the first time). install.sh is idempotent and
+# restarts the widget at the end, so a single command fully refreshes the install.
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$script_dir/ai-agent-status-env"
+ai_status_load_env
+
+repo_slug="${AI_STATUS_UPDATE_REPO:-dmitrykostenkoweb/ai-status-monitor-}"
+repo_branch="${AI_STATUS_UPDATE_BRANCH:-main}"
+repo_url="https://github.com/${repo_slug}.git"
+
+data_dir="$AI_STATUS_DATA_DIR"
+marker_file="$data_dir/install_source"
+managed_src="$data_dir/src"
+
+check_only=0
+if [[ "${1:-}" == "--check" ]]; then
+  check_only=1
+fi
+
+if [[ "$check_only" -eq 1 ]]; then
+  remote="$(PYTHONPATH="$script_dir" python3 -c \
+    'from ai_agent_status_lib import updates; print(updates.check_for_update() or "")' 2>/dev/null || true)"
+  local_v="$(PYTHONPATH="$script_dir" python3 -c \
+    'from ai_agent_status_lib import updates; print(updates.installed_version())' 2>/dev/null || echo "unknown")"
+  if [[ -n "$remote" ]]; then
+    echo "Update available: $local_v -> $remote"
+    exit 0
+  fi
+  echo "Up to date (version $local_v)."
+  exit 0
+fi
+
+is_git_repo() {
+  [[ -n "$1" && -d "$1/.git" ]] && git -C "$1" rev-parse --git-dir >/dev/null 2>&1
+}
+
+src=""
+if [[ -r "$marker_file" ]]; then
+  candidate="$(cat "$marker_file")"
+  if is_git_repo "$candidate"; then
+    src="$candidate"
+  fi
+fi
+if [[ -z "$src" ]] && is_git_repo "$managed_src"; then
+  src="$managed_src"
+fi
+
+if [[ -z "$src" ]]; then
+  if ! command -v git >/dev/null 2>&1; then
+    echo "git is required to update. Install it with: sudo apt install git" >&2
+    exit 1
+  fi
+  echo "No local source clone found; cloning $repo_url ..."
+  rm -rf "$managed_src"
+  git clone --branch "$repo_branch" --depth 1 "$repo_url" "$managed_src"
+  src="$managed_src"
+else
+  echo "Updating source in $src ..."
+  git -C "$src" fetch --depth 1 origin "$repo_branch"
+  git -C "$src" checkout "$repo_branch"
+  git -C "$src" reset --hard "origin/$repo_branch"
+fi
+
+echo "Running installer from $src ..."
+exec "$src/install.sh"
