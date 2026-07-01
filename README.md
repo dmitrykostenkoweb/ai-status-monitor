@@ -1,6 +1,6 @@
 # ai-cli-status-monitor
 
-![AI Status Monitor lockup](assets/lockup.gif)
+<img src="assets/lockup.gif" alt="AI Status Monitor lockup" width="100%" />
 
 A mini floating widget for Linux Mint / Cinnamon that shows the last known status of the Claude Code CLI and the Codex CLI.
 
