@@ -14,6 +14,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from ai_agent_status_lib import updates
+from ai_agent_status_lib import usage_limits
 from ai_agent_status_lib.env_config import load_settings
 from ai_agent_status_lib.status_model import IN_PROGRESS_KINDS
 from ai_agent_status_lib.status_model import INACTIVE_KINDS
@@ -30,6 +31,7 @@ DATA_DIR = SETTINGS.data_dir
 STATUS_FILE = CACHE_DIR / "combined.txt"
 AGENT_STATUS_FILES = (CACHE_DIR / "claude.json", CACHE_DIR / "codex.json")
 STATUS_DIR = CACHE_DIR / "statuses"
+USAGE_CACHE_FILE = CACHE_DIR / "usage_limits.json"
 WIDGET_CONFIG = CONFIG_DIR / "widget.json"
 LOG_FILE = CACHE_DIR / "widget.log"
 PID_FILE = CACHE_DIR / "widget.pid"
@@ -261,6 +263,33 @@ class LogoMark(Gtk.DrawingArea):
         cr.fill()
 
 
+class RotatingProviderLogo(Gtk.DrawingArea):
+    """Draw a provider pixbuf around its center at a mutable angle."""
+
+    def __init__(self, pixbuf: GdkPixbuf.Pixbuf, size: int = 30) -> None:
+        super().__init__()
+        self.pixbuf = pixbuf
+        self.angle = 0.0
+        self.set_size_request(size, size)
+        self.connect("draw", self.on_draw)
+
+    def on_draw(self, _area: Gtk.DrawingArea, cr: "cairo.Context") -> bool:
+        width = self.get_allocated_width()
+        height = self.get_allocated_height()
+        cr.save()
+        cr.translate(width / 2.0, height / 2.0)
+        cr.rotate(self.angle)
+        Gdk.cairo_set_source_pixbuf(
+            cr,
+            self.pixbuf,
+            -self.pixbuf.get_width() / 2.0,
+            -self.pixbuf.get_height() / 2.0,
+        )
+        cr.paint()
+        cr.restore()
+        return False
+
+
 class StatusWidget(Gtk.Window):
     def __init__(self, demo: bool = False) -> None:
         super().__init__(title=TITLE)
@@ -278,7 +307,19 @@ class StatusWidget(Gtk.Window):
         self.intro = True
         self.update_available: str | None = None
         self.updating = False
+        self.usage_refreshing = False
+        self.usage_refreshing_providers: set[str] = set()
+        self.usage_logo_widgets: dict[str, RotatingProviderLogo] = {}
+        self.usage_logo_buttons: dict[str, Gtk.Button] = {}
+        self.usage_snapshot: usage_limits.UsageSnapshot = {
+            "providers": usage_limits.load_usage_cache(USAGE_CACHE_FILE),
+            "errors": {},
+        }
+        self.demo_usage_scenarios = usage_limits.demo_usage_states()
+        if demo:
+            self.usage_snapshot = self.demo_usage_scenarios[0]["snapshot"]
         self.logo_pixbufs = self.load_logos()
+        self.usage_logo_pixbufs = self.load_logos(size=20)
         self.demo_scenarios = [
             [("claude", "reading code", "unitbox-front", "22:16"),
              ("codex", "analyzing", "ai-cli-status-monitor", "22:16")],
@@ -321,6 +362,8 @@ class StatusWidget(Gtk.Window):
             # Check GitHub for a newer release once, a few seconds after startup so
             # it never competes with the intro or first paint.
             GLib.timeout_add_seconds(4, self.start_update_check)
+            GLib.timeout_add_seconds(4, self.start_usage_refresh)
+            GLib.timeout_add_seconds(120, self.usage_refresh_tick)
 
     def _build_ui(self) -> None:
         css = b"""
@@ -390,6 +433,43 @@ class StatusWidget(Gtk.Window):
           min-height: 0; padding: 2px 4px;
         }
         #altText:hover { color: #ffffff; }
+        #usagePanel {
+          border-top: 1px solid rgba(255,255,255,0.055);
+          padding: 7px 10px 9px;
+        }
+        #usageProviderButton {
+          background: transparent; background-image: none;
+          border: none; box-shadow: none; outline: none;
+          min-height: 30px; min-width: 30px; padding: 0;
+          border-radius: 15px;
+        }
+        #usageProviderButton:hover { background: rgba(255,255,255,0.07); }
+        #usageProviderButton:focus { border: 1px solid rgba(45,212,191,0.45); }
+        #usageProviderButton:disabled { opacity: 0.62; }
+        #usageProviderBlock { padding: 4px 0; }
+        #usageLimitStack { padding: 0; }
+        #usageLimit { padding: 1px 0; }
+        #usageProviderFallback, #usageWindow, #usagePercent, #usageReset {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 9px;
+        }
+        #usageProviderFallback { font-weight: 600; color: #AEB6C0; }
+        #usageWindow { color: #8A95A3; font-weight: 600; }
+        #usagePercent { font-weight: 600; color: #D4DCE5; }
+        #usageReset { color: #566173; }
+        #usageLimit.stale #usageWindow, #usageLimit.stale #usagePercent { color: #6B7785; }
+        #usageLimit.unavailable #usagePercent { color: #566173; font-weight: 500; }
+        #usageProgress { min-height: 4px; }
+        #usageProgress trough {
+          min-height: 4px; border: none; border-radius: 3px;
+          background: rgba(255,255,255,0.08);
+        }
+        #usageProgress progress {
+          min-height: 4px; border: none; border-radius: 3px;
+        }
+        #usageProgress.usage-green progress { background: #4ADE80; }
+        #usageProgress.usage-orange progress { background: #F59E0B; }
+        #usageProgress.usage-red progress { background: #FB7060; }
         #idleTitle {
           font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
           font-size: 12.5px; font-weight: 600; color: #AEB6C0;
@@ -474,6 +554,15 @@ class StatusWidget(Gtk.Window):
         self.body.set_margin_end(6)
         card.pack_start(self.body, True, True, 0)
 
+        # ---- account usage limits ----
+        usage_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        usage_panel.set_name("usagePanel")
+        card.pack_start(usage_panel, False, False, 0)
+
+        self.usage_rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        usage_panel.pack_start(self.usage_rows, False, False, 0)
+        self.render_usage_limits()
+
         self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
 
     # ----------------------------- config -----------------------------
@@ -493,14 +582,14 @@ class StatusWidget(Gtk.Window):
         except (json.JSONDecodeError, OSError) as error:
             log(f"failed to write widget config: {error}")
 
-    def load_logos(self) -> dict[str, GdkPixbuf.Pixbuf]:
+    def load_logos(self, size: int = 14) -> dict[str, GdkPixbuf.Pixbuf]:
         logos: dict[str, GdkPixbuf.Pixbuf] = {}
         for agent, path in (("claude", ANTHROPIC_LOGO), ("codex", OPENAI_LOGO)):
             if not path.exists():
                 log(f"logo missing for {agent}: {path}")
                 continue
             try:
-                logos[agent] = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 14, 14, True)
+                logos[agent] = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), size, size, True)
             except Exception as error:
                 log(f"failed to load logo for {agent}: {error}")
         return logos
@@ -678,6 +767,8 @@ class StatusWidget(Gtk.Window):
         self.set_keep_above(True)
         if self.intro:
             return True  # the startup lockup owns the body until end_intro()
+        if self.demo:
+            self.apply_demo_usage_state(self.demo_index)
         sessions = self.order_sessions(self.collect_sessions())
         visible = sessions[:MAX_ROWS]
         hidden_done = sum(1 for s in sessions[MAX_ROWS:] if s["kind"] in INACTIVE)
@@ -899,6 +990,158 @@ class StatusWidget(Gtk.Window):
             context.add_class("idle")
             self.badge.set_markup(self.markup("● IDLE", "#6B7785"))
 
+    # ----------------------------- usage limits -----------------------------
+    def render_usage_limits(self) -> None:
+        for child in self.usage_rows.get_children():
+            self.usage_rows.remove(child)
+
+        self.usage_logo_widgets = {}
+        self.usage_logo_buttons = {}
+        for group in usage_limits.build_usage_groups(self.usage_snapshot):
+            provider_key = str(group["provider_key"])
+            provider_name = str(group["provider"])
+            block = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
+            block.set_name("usageProviderBlock")
+
+            logo_button = Gtk.Button()
+            logo_button.set_name("usageProviderButton")
+            logo_button.set_relief(Gtk.ReliefStyle.NONE)
+            logo_button.set_focus_on_click(False)
+            logo_button.set_valign(Gtk.Align.CENTER)
+            logo_button.set_halign(Gtk.Align.CENTER)
+            logo_button.set_sensitive(not self.usage_refreshing)
+            logo_button.set_tooltip_text(f"Refresh {provider_name} usage")
+            logo_button.get_accessible().set_name(f"Refresh {provider_name} usage")
+            logo_button.connect(
+                "clicked",
+                lambda _button, key=provider_key: self.start_usage_refresh(key),
+            )
+            pixbuf = self.usage_logo_pixbufs.get(provider_key)
+            if pixbuf is not None and CAIRO_OK:
+                logo = RotatingProviderLogo(pixbuf)
+                self.usage_logo_widgets[provider_key] = logo
+                logo_button.add(logo)
+            elif pixbuf is not None:
+                logo_button.add(Gtk.Image.new_from_pixbuf(pixbuf))
+            else:
+                fallback = Gtk.Label(label=provider_name)
+                fallback.set_name("usageProviderFallback")
+                logo_button.add(fallback)
+            self.usage_logo_buttons[provider_key] = logo_button
+            block.pack_start(logo_button, False, False, 0)
+
+            limit_stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            limit_stack.set_name("usageLimitStack")
+            block.pack_start(limit_stack, True, True, 0)
+
+            for data in group["rows"]:
+                limit = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+                limit.set_name("usageLimit")
+                state = str(data["state"])
+                if state != "current":
+                    limit.get_style_context().add_class(state)
+
+                line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+                limit.pack_start(line, False, False, 0)
+
+                window = str(data["window"])
+                if window:
+                    window_label = Gtk.Label(label=window)
+                    window_label.set_name("usageWindow")
+                    window_label.set_xalign(0)
+                    line.pack_start(window_label, False, False, 0)
+
+                percent = Gtk.Label(label=str(data["percent_text"]))
+                percent.set_name("usagePercent")
+                percent.set_xalign(1)
+                line.pack_end(percent, False, False, 0)
+
+                if state != "unavailable":
+                    progress = Gtk.ProgressBar()
+                    progress.set_name("usageProgress")
+                    progress.set_fraction(float(data["fraction"]))
+                    color_class = str(data["color_class"])
+                    if color_class:
+                        progress.get_style_context().add_class(color_class)
+                    limit.pack_start(progress, False, False, 0)
+
+                    reset_text = str(data["reset_text"])
+                    if state == "stale":
+                        reset_text = f"{reset_text} · stale"
+                    if reset_text:
+                        reset = Gtk.Label(label=reset_text)
+                        reset.set_name("usageReset")
+                        reset.set_xalign(1)
+                        limit.pack_start(reset, False, False, 0)
+
+                limit_stack.pack_start(limit, False, False, 0)
+
+            self.usage_rows.pack_start(block, False, False, 0)
+
+        self.usage_rows.show_all()
+        self.resize_to_content()
+
+    def apply_demo_usage_state(self, index: int) -> None:
+        state = self.demo_usage_scenarios[index % len(self.demo_usage_scenarios)]
+        self.usage_snapshot = state["snapshot"]
+        self.usage_refreshing = bool(state["refreshing"])
+        self.usage_refreshing_providers = {"claude", "codex"} if self.usage_refreshing else set()
+        self.render_usage_limits()
+
+    def start_usage_refresh(self, provider_key: str | None = None, *_args: object) -> bool:
+        if self.usage_refreshing:
+            return False
+        if provider_key is None:
+            provider_keys = ("claude", "codex")
+        elif provider_key in ("claude", "codex"):
+            provider_keys = (provider_key,)
+        else:
+            return False
+        self.usage_refreshing = True
+        self.usage_refreshing_providers = set(provider_keys)
+        self.render_usage_limits()
+
+        if self.demo:
+            GLib.timeout_add(600, self.finish_demo_usage_refresh)
+            return False
+
+        def worker() -> None:
+            try:
+                snapshot = usage_limits.refresh_usage(
+                    USAGE_CACHE_FILE,
+                    provider_keys=provider_keys,
+                )
+            except Exception:
+                snapshot = {
+                    "providers": usage_limits.load_usage_cache(USAGE_CACHE_FILE),
+                    "errors": {provider: "unavailable" for provider in provider_keys},
+                }
+            GLib.idle_add(self.on_usage_result, snapshot)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return False
+
+    def usage_refresh_tick(self) -> bool:
+        self.start_usage_refresh()
+        return True
+
+    def on_usage_result(self, snapshot: usage_limits.UsageSnapshot) -> bool:
+        self.usage_snapshot = snapshot
+        self.usage_refreshing = False
+        self.usage_refreshing_providers = set()
+        self.render_usage_limits()
+        unavailable = sorted(snapshot.get("errors", {}))
+        if unavailable:
+            log(f"usage unavailable for: {', '.join(unavailable)}")
+        return False
+
+    def finish_demo_usage_refresh(self) -> bool:
+        self.usage_snapshot = self.demo_usage_scenarios[0]["snapshot"]
+        self.usage_refreshing = False
+        self.usage_refreshing_providers = set()
+        self.render_usage_limits()
+        return False
+
     def set_waiting_style(self, enabled: bool) -> None:
         context = self.card.get_style_context()
         if enabled:
@@ -936,6 +1179,14 @@ class StatusWidget(Gtk.Window):
             angle = (self.anim_frame * 0.12) % (2 * math.pi)
             for logo in self.spinning:
                 logo.angle = angle
+                logo.queue_draw()
+
+        # rotate only the providers included in the active usage refresh
+        usage_angle = (self.anim_frame * 0.36) % (2 * math.pi)
+        for provider_key in self.usage_refreshing_providers:
+            logo = self.usage_logo_widgets.get(provider_key)
+            if logo is not None:
+                logo.angle = usage_angle
                 logo.queue_draw()
 
         # subtle LIVE badge pulse
