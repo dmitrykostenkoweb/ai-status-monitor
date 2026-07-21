@@ -4,7 +4,7 @@
 
 A mini floating widget for Linux Mint / Cinnamon that shows the last known status of the Claude Code CLI and the Codex CLI.
 
-It is a lightweight local tool: Python 3, GTK3/PyGObject and Bash. No Electron, no web server, no Docker, no network calls.
+It is a lightweight local tool: Python 3, GTK3/PyGObject and Bash. No Electron, no web server and no Docker. Network access is limited to the documented update check and Claude Code usage lookup.
 
 ## 1. What it is
 
@@ -30,6 +30,7 @@ The widget looks like a small dark floating card / mini-player:
 - when nothing is running: an empty/idle state shows the "AI Status Monitor" lockup (radar logo + wordmark) with a rotating radar sweep and `no active agents`
 - on startup the same lockup is shown for ~3 seconds as an intro splash
 - when a newer version is published on GitHub, a small `update ↑` pill appears in the header (see [Updates](#7b-updates))
+- a compact usage section groups Claude Code 5-hour/weekly and Codex weekly utilization beside centered, clickable provider logos
 - right-click menu: `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
 
 By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
@@ -177,6 +178,20 @@ A few seconds after startup the widget makes a single, best-effort request to Gi
 
 The repository is configurable for forks/mirrors via `AI_STATUS_UPDATE_REPO` (`owner/repo`) and `AI_STATUS_UPDATE_BRANCH`.
 
+## 7c. Usage limits
+
+The widget refreshes both account limits automatically every two minutes. Click the Claude or Codex logo to refresh only that provider; the active logo spins until its refresh finishes. The controls remain temporarily disabled while a refresh is already running.
+
+Claude's `5h` and `Weekly` bars are stacked beside the Claude logo; Codex's `Weekly` bar sits beside the Codex logo. Progress fill is green below 60% utilization, orange from 60% through 84%, and red from 85% upward. The unused track remains neutral.
+
+- Claude Code: 5-hour and weekly utilization from Claude Code's authenticated usage endpoint
+- Codex: weekly utilization from the newest valid local `rate_limits` event under `~/.codex/sessions/`
+- cache: normalized, non-secret values in `~/.cache/ai-cli-status-monitor/usage_limits.json`
+
+The Claude request reuses the OAuth access token already stored by Claude Code in `~/.claude/.credentials.json`. The monitor reads it only in memory for the request; it does not copy the token into its cache or logs. API-key billing quotas are not supported.
+
+Provider failures are independent. When a refresh fails, an unexpired last-known value remains visible as `stale`; after its reset time passes it becomes `Unavailable`. The status widget and local Codex usage continue to work offline even if Claude usage cannot refresh.
+
 ## 8. Claude Code hooks
 
 The installer tries to safely merge the hooks into:
@@ -257,6 +272,7 @@ Check the files:
 ls -la ~/.cache/ai-cli-status-monitor/
 ls -la ~/.cache/ai-cli-status-monitor/last_payloads/
 ls -la ~/.cache/ai-cli-status-monitor/debug_payloads/
+cat ~/.cache/ai-cli-status-monitor/usage_limits.json
 cat ~/.cache/ai-cli-status-monitor/widget.log
 ```
 
@@ -290,6 +306,8 @@ command -v wmctrl
 - The status is event-based; it is not a real view of the "model's thoughts".
 - The `thinking` status is inferred from prompts and tool events.
 - The `waiting for you` status depends on the available notification, stop and permission events.
+- Usage-limit integrations are best-effort and may temporarily show `Unavailable` if Claude or Codex changes its private local/API data shape.
+- Claude usage requires an active Claude Code OAuth login; API-key spend and billing limits are outside this widget's scope.
 - Always-on-top and all-workspaces work best on X11/Cinnamon.
 - Wayland may limit the sticky/above/skip-taskbar behavior.
 - Each AI session has its own row. Session identity comes from `session_id` (Claude), and when it is missing (Codex) — from the POSIX session leader (the terminal's shell), so one session = one stable row, even without `session_id`.

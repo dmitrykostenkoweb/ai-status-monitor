@@ -2,53 +2,39 @@
 
 ## Project Structure & Module Organization
 
-This repository is a lightweight local status monitor for Claude Code and Codex CLI on Linux Mint/Cinnamon. Runtime scripts live in `bin/`:
+This repository is a Linux desktop status monitor for Claude Code and Codex CLI. Executable entry points live in `bin/`: the hook records agent events, the GTK3 widget displays them, the panel prints terminal output, and the doctor validates an installation. Start/stop helpers manage the widget process; `ai-agent-status-update` handles GitHub-based updates; `ai-agent-status-env` reads runtime settings.
 
-- `ai-agent-status-hook`: receives hook payloads and writes status files.
-- `ai-agent-status-widget`: GTK3 floating widget UI.
-- `ai-agent-status-doctor`: local installation and health checks.
-- `ai-agent-status-widget-start`, `-stop`, and `-toggle`: process helpers.
-
-Static media and launcher assets live in `assets/`. Hook configuration examples live in `examples/`. `install.sh` copies scripts and assets into the user-local locations under `~/.local`, `~/.config`, and `~/.cache`.
+Shared Python code belongs in `bin/ai_agent_status_lib/`, including environment loading, status models, update checks, and provider usage-limit collection. Standard-library tests live in `tests/`. Static images and sounds live in `assets/`, hook examples in `examples/`, and specifications in `openspec/specs/`. `install.sh` installs files, `.env.default` documents configuration, and `VERSION` identifies releases.
 
 ## Build, Test, and Development Commands
 
-There is no package manager or build step. Validate Python syntax with:
+There is no package-manager build. Run these checks from the repository root:
 
 ```bash
-python3 -m py_compile bin/ai-agent-status-hook bin/ai-agent-status-widget bin/ai-agent-status-doctor
-```
-
-Run a UI demo after installing GTK dependencies:
-
-```bash
+python3 -m py_compile bin/ai-agent-status-hook bin/ai-agent-status-widget \
+  bin/ai-agent-status-doctor bin/ai_agent_status_lib/*.py
+python3 -m unittest discover -s tests -v
+AI_STATUS_CACHE_DIR="$(mktemp -d)" bin/ai-agent-status-hook --agent codex --test
 bin/ai-agent-status-widget --demo
-```
-
-Install or refresh the local user installation:
-
-```bash
 ./install.sh
-```
-
-Check the installed setup:
-
-```bash
 ~/.local/bin/ai-agent-status-doctor
+~/.local/bin/ai-agent-status-update --check
 ```
+
+The first command checks Python syntax. The hook command exercises sample events in an isolated cache. Use the demo for visual GTK changes. The remaining commands refresh, diagnose, and check updates for the installed copy.
 
 ## Coding Style & Naming Conventions
 
-Python scripts use Python 3 with type hints where useful, 4-space indentation, `snake_case` functions, and uppercase constants for paths and defaults. Keep scripts executable and self-contained. Bash scripts should use clear variable names, quote path variables, and prefer simple POSIX-compatible command usage unless Bash features are already required.
+Use Python 3, four-space indentation, `snake_case` functions and variables, and uppercase constants. Add type hints where they clarify contracts. Keep executable scripts self-contained and preserve executable file modes. Bash scripts should use descriptive variables, quote paths, and follow the existing Bash style. Put reusable Python behavior in `ai_agent_status_lib` rather than duplicating it across entry points.
 
 ## Testing Guidelines
 
-No formal test framework is present. For changes to hook parsing, simulate payloads through `bin/ai-agent-status-hook --agent codex` or `--agent claude` and inspect `~/.cache/ai-cli-status-monitor/combined.txt` or a temporary `HOME`. For widget changes, run `--demo` and verify no GTK runtime errors occur.
+Tests use Python's standard-library `unittest`; no coverage threshold exists. Test both Claude and Codex hook paths with `--test`; use a temporary `AI_STATUS_CACHE_DIR` or temporary `HOME` to avoid altering live status data. Provider usage tests must use fixtures or injected transports and must never read live credentials. For widget changes, run `--demo` and check for GTK errors. For installer or configuration changes, rerun `./install.sh`, then the doctor, and verify that an existing private runtime `.env` remains intact.
 
 ## Commit & Pull Request Guidelines
 
-Git history is not available from this checkout, so use concise imperative commit messages such as `Fix multi-session Codex statuses` or `Improve widget layout`. Pull requests should describe the user-visible behavior change, list validation commands run, and include screenshots or screen recordings for UI changes when possible.
+Recent history follows Conventional Commit-style subjects such as `fix(widget): ...`, `feat(config): ...`, and `docs(readme): ...`. Keep each commit focused and use an imperative summary. Pull requests should explain user-visible behavior, list validation commands, link relevant issues or OpenSpec changes, and include screenshots or recordings for UI changes.
 
 ## Security & Configuration Tips
 
-Do not add network calls or background services. Preserve user config during installation: `install.sh` should merge or back up files under `~/.claude`, `~/.codex`, and `~/.config/ai-cli-status-monitor` instead of overwriting them silently.
+Never commit `.env` or credentials. Defaults belong in `.env.default`; installation must preserve `~/.config/ai-cli-status-monitor/.env` and Claude/Codex hook configuration. Never log or cache Claude's OAuth token. Keep network access limited to the documented GitHub version/update requests and Claude Code usage endpoint unless a change explicitly requires and documents another dependency.
