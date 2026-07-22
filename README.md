@@ -185,10 +185,10 @@ The widget refreshes both account limits automatically every two minutes. Click 
 Claude's `5h` and `Weekly` bars are stacked beside the Claude logo; Codex's `Weekly` bar sits beside the Codex logo. Progress fill is green below 60% utilization, orange from 60% through 84%, and red from 85% upward. The unused track remains neutral.
 
 - Claude Code: 5-hour and weekly utilization from Claude Code's authenticated usage endpoint
-- Codex: weekly utilization from the newest valid local `rate_limits` event under `~/.codex/sessions/`
+- Codex: weekly utilization queried through the authenticated installed Codex CLI app-server; recent local `rate_limits` events under `~/.codex/sessions/` remain a compatibility fallback
 - cache: normalized, non-secret values in `~/.cache/ai-cli-status-monitor/usage_limits.json`
 
-The Claude request reuses the OAuth access token already stored by Claude Code in `~/.claude/.credentials.json`. The monitor reads it only in memory for the request; it does not copy the token into its cache or logs. API-key billing quotas are not supported.
+The Claude request reuses the OAuth access token already stored by Claude Code in `~/.claude/.credentials.json`. The monitor reads it only in memory for the request; it does not copy the token into its cache or logs. Codex authentication remains owned by the installed CLI: the monitor neither reads nor copies its OAuth credential. API-key billing quotas are not supported.
 
 Provider failures are independent. When a refresh fails, an unexpired last-known value remains visible as `stale`; after its reset time passes it becomes `Unavailable`. The status widget and local Codex usage continue to work offline even if Claude usage cannot refresh.
 

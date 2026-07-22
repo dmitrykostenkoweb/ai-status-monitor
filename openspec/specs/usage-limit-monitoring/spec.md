@@ -11,9 +11,14 @@ The system SHALL collect Claude Code 5-hour and weekly utilization and Codex wee
 - **WHEN** the authenticated Claude usage source returns valid 5-hour and 7-day utilization records
 - **THEN** the system normalizes them as Claude `5h` and `Weekly` windows with their used percentages and reset timestamps
 
-#### Scenario: Codex weekly metadata is available
-- **WHEN** recent Codex session metadata contains a valid rate-limit window of 10080 minutes
+#### Scenario: Live Codex weekly usage is available
+- **WHEN** the authenticated installed Codex CLI app-server returns a valid rate-limit window of 10080 minutes
 - **THEN** the system normalizes that window as Codex `Weekly` using its used percentage and reset timestamp
+- **AND** the monitor does not read or persist the Codex OAuth credential
+
+#### Scenario: Live Codex usage is unavailable
+- **WHEN** the Codex CLI app-server is missing, unsupported, times out, or returns malformed data
+- **THEN** the system searches recent Codex session metadata for a valid rate-limit window of 10080 minutes
 
 #### Scenario: Newest provider data is malformed
 - **WHEN** the newest candidate record is malformed or incomplete

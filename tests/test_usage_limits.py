@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -15,10 +16,12 @@ sys.path.insert(0, str(ROOT / "bin"))
 from ai_agent_status_lib.usage_limits import build_usage_groups
 from ai_agent_status_lib.usage_limits import build_usage_rows
 from ai_agent_status_lib.usage_limits import collect_codex_usage
+from ai_agent_status_lib.usage_limits import collect_codex_live_usage
 from ai_agent_status_lib.usage_limits import collect_claude_usage
 from ai_agent_status_lib.usage_limits import demo_usage_states
 from ai_agent_status_lib.usage_limits import load_usage_cache
 from ai_agent_status_lib.usage_limits import parse_claude_usage
+from ai_agent_status_lib.usage_limits import parse_codex_app_server_output
 from ai_agent_status_lib.usage_limits import parse_codex_rate_limits
 from ai_agent_status_lib.usage_limits import refresh_usage
 from ai_agent_status_lib.usage_limits import UsageSourceError
@@ -111,7 +114,11 @@ class CodexCollectorTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            limits = collect_codex_usage(codex_home, fetched_at=FETCHED_AT)
+            limits = collect_codex_usage(
+                codex_home,
+                fetched_at=FETCHED_AT,
+                live_collector=lambda: [],
+            )
 
         self.assertEqual(len(limits), 1)
         self.assertEqual(limits[0]["used_percent"], 5.0)
@@ -128,11 +135,151 @@ class CodexCollectorTests(unittest.TestCase):
             os.utime(older, (100, 100))
             os.utime(newer, (200, 200))
 
-            one_file = collect_codex_usage(codex_home, fetched_at=FETCHED_AT, max_files=1)
-            two_files = collect_codex_usage(codex_home, fetched_at=FETCHED_AT, max_files=2, max_lines=1)
+            one_file = collect_codex_usage(
+                codex_home,
+                fetched_at=FETCHED_AT,
+                max_files=1,
+                live_collector=lambda: [],
+            )
+            two_files = collect_codex_usage(
+                codex_home,
+                fetched_at=FETCHED_AT,
+                max_files=2,
+                max_lines=1,
+                live_collector=lambda: [],
+            )
 
         self.assertEqual(one_file, [])
         self.assertEqual(two_files[0]["used_percent"], 9.0)
+
+    def test_prefers_live_usage_over_older_session_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            sessions = codex_home / "sessions"
+            sessions.mkdir()
+            (sessions / "older.jsonl").write_text(
+                json.dumps(self.codex_event(25.0)) + "\n",
+                encoding="utf-8",
+            )
+
+            limits = collect_codex_usage(
+                codex_home,
+                fetched_at=FETCHED_AT,
+                live_collector=lambda: [
+                    {
+                        "provider": "codex",
+                        "window": "Weekly",
+                        "used_percent": 2.0,
+                        "resets_at": "2026-07-29T08:45:52+00:00",
+                        "fetched_at": "2026-07-21T10:00:00+00:00",
+                        "stale": False,
+                    }
+                ],
+            )
+
+        self.assertEqual(limits[0]["used_percent"], 2.0)
+
+
+class CodexAppServerTests(unittest.TestCase):
+    def app_server_output(self, used_percent: float = 2.0) -> str:
+        return "\n".join(
+            (
+                json.dumps({"id": 1, "result": {"userAgent": "probe"}}),
+                json.dumps({"method": "remoteControl/status/changed", "params": {}}),
+                json.dumps(
+                    {
+                        "id": 2,
+                        "result": {
+                            "rateLimits": {
+                                "primary": {
+                                    "usedPercent": used_percent,
+                                    "windowDurationMins": 10080,
+                                    "resetsAt": 1785314752,
+                                }
+                            }
+                        },
+                    }
+                ),
+            )
+        )
+
+    def test_parses_matching_rate_limit_response_and_ignores_notifications(self) -> None:
+        limits = parse_codex_app_server_output(self.app_server_output(), fetched_at=FETCHED_AT)
+
+        self.assertEqual(len(limits), 1)
+        self.assertEqual(limits[0]["used_percent"], 2.0)
+        self.assertEqual(limits[0]["resets_at"], "2026-07-29T08:45:52+00:00")
+
+    def test_live_collector_performs_handshake_without_shell(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class NonClosingStringIO(io.StringIO):
+            def close(self) -> None:
+                pass
+
+        class FakeProcess:
+            def __init__(self, output: str) -> None:
+                self.stdin = NonClosingStringIO()
+                self.stdout = NonClosingStringIO(output)
+                self.returncode: int | None = None
+
+            def poll(self) -> int | None:
+                return self.returncode
+
+            def terminate(self) -> None:
+                self.returncode = 0
+
+            def wait(self, timeout: float | None = None) -> int:
+                self.returncode = 0
+                return 0
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+        process = FakeProcess(self.app_server_output())
+
+        def process_factory(command: list[str], **kwargs: object) -> FakeProcess:
+            calls.append({"command": command, **kwargs})
+            return process
+
+        limits = collect_codex_live_usage(fetched_at=FETCHED_AT, process_factory=process_factory)
+
+        self.assertEqual(limits[0]["used_percent"], 2.0)
+        self.assertEqual(calls[0]["command"], ["codex", "app-server", "--stdio"])
+        self.assertNotIn("shell", calls[0])
+        request_lines = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        self.assertEqual(
+            [message.get("method") for message in request_lines],
+            ["initialize", "initialized", "account/rateLimits/read"],
+        )
+
+    def test_live_collector_returns_empty_for_malformed_or_missing_process(self) -> None:
+        class MalformedProcess:
+            def __init__(self) -> None:
+                self.stdin = io.StringIO()
+                self.stdout = io.StringIO("not-json\n")
+
+            def poll(self) -> int:
+                return 0
+
+            def wait(self, timeout: float | None = None) -> int:
+                return 0
+
+        malformed = collect_codex_live_usage(
+            fetched_at=FETCHED_AT,
+            process_factory=lambda *_args, **_kwargs: MalformedProcess(),
+        )
+
+        def missing_process(*_args: object, **_kwargs: object) -> object:
+            raise FileNotFoundError("codex")
+
+        missing = collect_codex_live_usage(
+            fetched_at=FETCHED_AT,
+            process_factory=missing_process,
+        )
+
+        self.assertEqual(malformed, [])
+        self.assertEqual(missing, [])
 
 
 class FakeHttpResponse:

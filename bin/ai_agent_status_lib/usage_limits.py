@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import subprocess
 import tempfile
+import threading
+import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -140,6 +144,176 @@ def parse_codex_rate_limits(payload: Any, *, fetched_at: datetime | None = None)
     return []
 
 
+def _codex_app_server_rate_limits(payload: Any) -> Any:
+    if not isinstance(payload, dict) or payload.get("id") != 2:
+        return None
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return None
+    by_limit_id = result.get("rateLimitsByLimitId")
+    if isinstance(by_limit_id, dict) and isinstance(by_limit_id.get("codex"), dict):
+        return by_limit_id["codex"]
+    return result.get("rateLimits")
+
+
+def _normalize_codex_app_server_rate_limits(
+    payload: Any,
+    *,
+    fetched_at: datetime | None = None,
+) -> list[UsageLimit]:
+    if not isinstance(payload, dict):
+        return []
+    normalized: dict[str, dict[str, Any]] = {}
+    for source_key, target_key in (
+        ("primary", "primary"),
+        ("secondary", "secondary"),
+        ("individualLimit", "individual_limit"),
+    ):
+        source = payload.get(source_key)
+        if not isinstance(source, dict):
+            continue
+        normalized[target_key] = {
+            "used_percent": source.get("usedPercent"),
+            "window_minutes": source.get("windowDurationMins"),
+            "resets_at": source.get("resetsAt"),
+        }
+    return parse_codex_rate_limits(normalized, fetched_at=fetched_at)
+
+
+def parse_codex_app_server_output(
+    output: str,
+    *,
+    fetched_at: datetime | None = None,
+) -> list[UsageLimit]:
+    for raw_line in output.splitlines():
+        try:
+            payload = json.loads(raw_line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        limits = _normalize_codex_app_server_rate_limits(
+            _codex_app_server_rate_limits(payload),
+            fetched_at=fetched_at,
+        )
+        if limits:
+            return limits
+    return []
+
+
+def _write_app_server_message(stream: Any, payload: dict[str, Any]) -> None:
+    stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    stream.flush()
+
+
+def _read_app_server_response(
+    responses: queue.Queue[str | None],
+    request_id: int,
+    deadline: float,
+) -> dict[str, Any] | None:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            raw_line = responses.get(timeout=remaining)
+        except queue.Empty:
+            return None
+        if raw_line is None:
+            return None
+        try:
+            payload = json.loads(raw_line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(payload, dict) and payload.get("id") == request_id:
+            return payload
+
+
+def collect_codex_live_usage(
+    *,
+    fetched_at: datetime | None = None,
+    timeout: float = 5.0,
+    process_factory: Any = subprocess.Popen,
+) -> list[UsageLimit]:
+    process: Any = None
+    reader_thread: threading.Thread | None = None
+    try:
+        process = process_factory(
+            ["codex", "app-server", "--stdio"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+        )
+        if process.stdin is None or process.stdout is None:
+            return []
+
+        responses: queue.Queue[str | None] = queue.Queue()
+
+        def read_responses() -> None:
+            try:
+                for line in process.stdout:
+                    responses.put(line)
+            finally:
+                responses.put(None)
+
+        reader_thread = threading.Thread(target=read_responses, daemon=True)
+        reader_thread.start()
+        deadline = time.monotonic() + max(0.1, timeout)
+        _write_app_server_message(
+            process.stdin,
+            {
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "clientInfo": {
+                        "name": "ai-cli-status-monitor",
+                        "version": "1",
+                    }
+                },
+            },
+        )
+        if _read_app_server_response(responses, 1, deadline) is None:
+            return []
+        _write_app_server_message(process.stdin, {"method": "initialized"})
+        _write_app_server_message(
+            process.stdin,
+            {"id": 2, "method": "account/rateLimits/read", "params": None},
+        )
+        response = _read_app_server_response(responses, 2, deadline)
+        return _normalize_codex_app_server_rate_limits(
+            _codex_app_server_rate_limits(response),
+            fetched_at=fetched_at,
+        )
+    except (OSError, RuntimeError, ValueError):
+        return []
+    finally:
+        if process is not None:
+            try:
+                if process.stdin is not None:
+                    process.stdin.close()
+            except OSError:
+                pass
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=0.5)
+            except (OSError, subprocess.SubprocessError, AttributeError):
+                try:
+                    process.kill()
+                    process.wait(timeout=0.5)
+                except (OSError, subprocess.SubprocessError, AttributeError):
+                    pass
+        if reader_thread is not None:
+            reader_thread.join(timeout=0.5)
+        if process is not None:
+            try:
+                if process.stdout is not None:
+                    process.stdout.close()
+            except OSError:
+                pass
+
+
 def codex_home(environ: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environ is None else environ
     configured = env.get("CODEX_HOME", "").strip()
@@ -229,7 +403,19 @@ def collect_codex_usage(
     fetched_at: datetime | None = None,
     max_files: int = 12,
     max_lines: int = 300,
+    live_collector: Callable[[], list[UsageLimit]] | None = None,
 ) -> list[UsageLimit]:
+    try:
+        live_limits = (
+            live_collector()
+            if live_collector is not None
+            else collect_codex_live_usage(fetched_at=fetched_at)
+        )
+    except Exception:
+        live_limits = []
+    if live_limits:
+        return live_limits
+
     sessions = (home or codex_home()) / "sessions"
     try:
         candidates = sorted(
