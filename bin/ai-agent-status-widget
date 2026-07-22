@@ -44,6 +44,8 @@ MAX_ROWS = SETTINGS.max_rows
 # Sibling scripts (e.g. the self-updater) live next to this one once installed.
 WIDGET_DIR = Path(__file__).resolve().parent
 UPDATE_SCRIPT = WIDGET_DIR / "ai-agent-status-update"
+USAGE_ANIMATION_INTERVAL_MS = 33
+USAGE_ROTATION_RADIANS_PER_TICK = 0.36 * USAGE_ANIMATION_INTERVAL_MS / 200
 
 # Per-state palette, taken straight from the design legend.
 STATE_COLORS = {
@@ -309,6 +311,8 @@ class StatusWidget(Gtk.Window):
         self.updating = False
         self.usage_refreshing = False
         self.usage_refreshing_providers: set[str] = set()
+        self.usage_animation_source_id: int | None = None
+        self.usage_animation_angle = 0.0
         self.usage_logo_widgets: dict[str, RotatingProviderLogo] = {}
         self.usage_logo_buttons: dict[str, Gtk.Button] = {}
         self.usage_snapshot: usage_limits.UsageSnapshot = {
@@ -1083,10 +1087,15 @@ class StatusWidget(Gtk.Window):
 
     def apply_demo_usage_state(self, index: int) -> None:
         state = self.demo_usage_scenarios[index % len(self.demo_usage_scenarios)]
+        refreshing = bool(state["refreshing"])
+        if not refreshing:
+            self.stop_usage_animation()
         self.usage_snapshot = state["snapshot"]
-        self.usage_refreshing = bool(state["refreshing"])
+        self.usage_refreshing = refreshing
         self.usage_refreshing_providers = {"claude", "codex"} if self.usage_refreshing else set()
         self.render_usage_limits()
+        if refreshing:
+            self.start_usage_animation()
 
     def start_usage_refresh(self, provider_key: str | None = None, *_args: object) -> bool:
         if self.usage_refreshing:
@@ -1100,6 +1109,7 @@ class StatusWidget(Gtk.Window):
         self.usage_refreshing = True
         self.usage_refreshing_providers = set(provider_keys)
         self.render_usage_limits()
+        self.start_usage_animation()
 
         if self.demo:
             GLib.timeout_add(600, self.finish_demo_usage_refresh)
@@ -1127,6 +1137,7 @@ class StatusWidget(Gtk.Window):
 
     def on_usage_result(self, snapshot: usage_limits.UsageSnapshot) -> bool:
         self.usage_snapshot = snapshot
+        self.stop_usage_animation()
         self.usage_refreshing = False
         self.usage_refreshing_providers = set()
         self.render_usage_limits()
@@ -1137,10 +1148,46 @@ class StatusWidget(Gtk.Window):
 
     def finish_demo_usage_refresh(self) -> bool:
         self.usage_snapshot = self.demo_usage_scenarios[0]["snapshot"]
+        self.stop_usage_animation()
         self.usage_refreshing = False
         self.usage_refreshing_providers = set()
         self.render_usage_limits()
         return False
+
+    def start_usage_animation(self) -> None:
+        if self.usage_animation_source_id is not None:
+            return
+        self.usage_animation_angle = 0.0
+        self.usage_animation_source_id = GLib.timeout_add(
+            USAGE_ANIMATION_INTERVAL_MS,
+            self.tick_usage_animation,
+        )
+
+    def stop_usage_animation(self) -> None:
+        source_id = self.usage_animation_source_id
+        self.usage_animation_source_id = None
+        if source_id is not None:
+            GLib.source_remove(source_id)
+        self.usage_animation_angle = 0.0
+        for provider_key in self.usage_refreshing_providers:
+            logo = self.usage_logo_widgets.get(provider_key)
+            if logo is not None:
+                logo.angle = 0.0
+                logo.queue_draw()
+
+    def tick_usage_animation(self) -> bool:
+        if not self.usage_refreshing or not self.usage_refreshing_providers:
+            self.usage_animation_source_id = None
+            return False
+        self.usage_animation_angle = (
+            self.usage_animation_angle + USAGE_ROTATION_RADIANS_PER_TICK
+        ) % (2 * math.pi)
+        for provider_key in self.usage_refreshing_providers:
+            logo = self.usage_logo_widgets.get(provider_key)
+            if logo is not None:
+                logo.angle = self.usage_animation_angle
+                logo.queue_draw()
+        return True
 
     def set_waiting_style(self, enabled: bool) -> None:
         context = self.card.get_style_context()
@@ -1179,14 +1226,6 @@ class StatusWidget(Gtk.Window):
             angle = (self.anim_frame * 0.12) % (2 * math.pi)
             for logo in self.spinning:
                 logo.angle = angle
-                logo.queue_draw()
-
-        # rotate only the providers included in the active usage refresh
-        usage_angle = (self.anim_frame * 0.36) % (2 * math.pi)
-        for provider_key in self.usage_refreshing_providers:
-            logo = self.usage_logo_widgets.get(provider_key)
-            if logo is not None:
-                logo.angle = usage_angle
                 logo.queue_draw()
 
         # subtle LIVE badge pulse
