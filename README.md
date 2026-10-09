@@ -182,7 +182,7 @@ The repository is configurable for forks/mirrors via `AI_STATUS_UPDATE_REPO` (`o
 
 The widget refreshes both account limits automatically every two minutes. Click the Claude or Codex logo to refresh only that provider; the active logo spins until its refresh finishes. The controls remain temporarily disabled while a refresh is already running.
 
-Claude's `5h` and `Weekly` bars are stacked beside the Claude logo; Codex's `Weekly` bar sits beside the Codex logo. Progress fill is green below 60% utilization, orange from 60% through 84%, and red from 85% upward. The unused track remains neutral.
+Claude's `5h`, `Weekly` and `Fable` bars are stacked beside the Claude logo (the `Fable` bar appears only when the account has a separate weekly Fable allowance); Codex's `Weekly` bar sits beside the Codex logo. Progress fill is green below 60% utilization, orange from 60% through 84%, and red from 85% upward. The unused track remains neutral.
 
 - Claude Code: 5-hour and weekly utilization from Claude Code's authenticated usage endpoint
 - Codex: weekly utilization queried through the authenticated installed Codex CLI app-server; recent local `rate_limits` events under `~/.codex/sessions/` remain a compatibility fallback

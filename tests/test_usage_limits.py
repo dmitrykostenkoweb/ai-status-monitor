@@ -54,6 +54,50 @@ class UsageParserTests(unittest.TestCase):
         self.assertEqual(limits[1]["resets_at"], "2026-07-24T09:00:00+00:00")
         self.assertFalse(limits[0]["stale"])
 
+    def test_parses_claude_fable_weekly_scoped_limit(self) -> None:
+        payload = {
+            "five_hour": {"utilization": 10, "resets_at": "2026-07-21T12:50:00Z"},
+            "limits": [
+                {
+                    "kind": "weekly_scoped",
+                    "scope": {"model": {"display_name": "Opus"}},
+                    "percent": 90,
+                    "resets_at": "2026-07-24T09:00:00Z",
+                },
+                {
+                    "kind": "weekly_scoped",
+                    "scope": {"model": {"display_name": "Fable"}},
+                    "percent": 62.5,
+                    "resets_at": "2026-07-25T09:00:00Z",
+                },
+            ],
+            "seven_day_overage_included": {"utilization": 1, "resets_at": "2026-07-25T09:00:00Z"},
+        }
+
+        limits = parse_claude_usage(payload, fetched_at=FETCHED_AT)
+
+        self.assertEqual([limit["window"] for limit in limits], ["5h", "Fable"])
+        self.assertEqual(limits[1]["used_percent"], 62.5)
+        self.assertEqual(limits[1]["resets_at"], "2026-07-25T09:00:00+00:00")
+
+    def test_parses_claude_fable_from_model_scoped_and_overage_fallbacks(self) -> None:
+        model_scoped = parse_claude_usage(
+            {"model_scoped": [{"display_name": "Fable 5", "utilization": 30, "resets_at": "2026-07-25T09:00:00Z"}]},
+            fetched_at=FETCHED_AT,
+        )
+        overage = parse_claude_usage(
+            {"seven_day_overage_included": {"utilization": 44, "resets_at": "2026-07-25T09:00:00Z"}},
+            fetched_at=FETCHED_AT,
+        )
+        missing = parse_claude_usage(
+            {"seven_day_overage_included": None, "limits": [{"kind": "weekly_scoped", "scope": None}]},
+            fetched_at=FETCHED_AT,
+        )
+
+        self.assertEqual([(l["window"], l["used_percent"]) for l in model_scoped], [("Fable", 30.0)])
+        self.assertEqual([(l["window"], l["used_percent"]) for l in overage], [("Fable", 44.0)])
+        self.assertEqual(missing, [])
+
     def test_parses_codex_weekly_window_without_assuming_primary(self) -> None:
         rate_limits = {
             "primary": {"used_percent": 12, "window_minutes": 300, "resets_at": 1784628000},
@@ -593,6 +637,7 @@ class UsagePresentationTests(unittest.TestCase):
         snapshot = {
             "providers": {
                 "claude": [
+                    self.limit("claude", "Fable", 62, "2026-07-24T09:00:00+00:00"),
                     self.limit("claude", "Weekly", 43, "2026-07-24T09:00:00+00:00"),
                     self.limit("claude", "5h", 76, "2026-07-21T12:50:00+00:00"),
                 ],
@@ -604,10 +649,11 @@ class UsagePresentationTests(unittest.TestCase):
         groups = build_usage_groups(snapshot, now=FETCHED_AT, local_timezone=timezone.utc)
 
         self.assertEqual([group["provider_key"] for group in groups], ["claude", "codex"])
-        self.assertEqual([row["window"] for row in groups[0]["rows"]], ["5h", "Weekly"])
+        self.assertEqual([row["window"] for row in groups[0]["rows"]], ["5h", "Weekly", "Fable"])
         self.assertEqual([row["color_class"] for row in groups[0]["rows"]], [
             "usage-orange",
             "usage-green",
+            "usage-orange",
         ])
         self.assertEqual(groups[1]["rows"][0]["color_class"], "usage-red")
 

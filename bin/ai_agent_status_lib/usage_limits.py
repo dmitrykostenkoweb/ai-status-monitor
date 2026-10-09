@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping, TypedDict
 
 
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+FABLE_MODEL_NAME = "fable"
 
 
 class UsageSourceError(RuntimeError):
@@ -122,7 +123,47 @@ def parse_claude_usage(payload: Any, *, fetched_at: datetime | None = None) -> l
         )
         if normalized is not None:
             limits.append(normalized)
+    fable = _claude_fable_limit(payload, fetched)
+    if fable is not None:
+        limits.append(fable)
     return limits
+
+
+def _claude_fable_limit(payload: dict[str, Any], fetched: datetime) -> UsageLimit | None:
+    """Fable's weekly allowance, in whichever shape the usage endpoint reports it.
+
+    Newer responses list per-model weekly limits in ``limits`` (``kind: weekly_scoped``),
+    some carry a flat ``model_scoped`` list, and older ones only expose
+    ``seven_day_overage_included`` (which Claude Code itself labels "Fable limit").
+    """
+    candidates: list[tuple[Any, Any]] = []
+    scoped = payload.get("limits")
+    if isinstance(scoped, list):
+        for item in scoped:
+            if not isinstance(item, dict) or item.get("kind") != "weekly_scoped":
+                continue
+            scope = item.get("scope")
+            model = scope.get("model") if isinstance(scope, dict) else None
+            name = model.get("display_name") if isinstance(model, dict) else None
+            if isinstance(name, str) and name.strip().lower().startswith(FABLE_MODEL_NAME):
+                candidates.append((item.get("percent"), item.get("resets_at")))
+    model_scoped = payload.get("model_scoped")
+    if isinstance(model_scoped, list):
+        for item in model_scoped:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("display_name")
+            if isinstance(name, str) and name.strip().lower().startswith(FABLE_MODEL_NAME):
+                candidates.append((item.get("utilization"), item.get("resets_at")))
+    overage = payload.get("seven_day_overage_included")
+    if isinstance(overage, dict):
+        candidates.append((overage.get("utilization"), overage.get("resets_at")))
+
+    for used_percent, resets_at in candidates:
+        normalized = _normalized_limit("claude", "Fable", used_percent, resets_at, fetched)
+        if normalized is not None:
+            return normalized
+    return None
 
 
 def parse_codex_rate_limits(payload: Any, *, fetched_at: datetime | None = None) -> list[UsageLimit]:
@@ -592,7 +633,7 @@ def build_usage_rows(
     rows: list[UsageDisplayRow] = []
 
     for provider_key, provider_name, windows in (
-        ("claude", "Claude", ("5h", "Weekly")),
+        ("claude", "Claude", ("5h", "Weekly", "Fable")),
         ("codex", "Codex", ("Weekly",)),
     ):
         raw_limits = providers.get(provider_key)
@@ -683,6 +724,7 @@ def demo_usage_states(now: datetime | None = None) -> list[dict[str, Any]]:
                 "claude": [
                     limit("claude", "5h", 76.0, timedelta(hours=2), stale),
                     limit("claude", "Weekly", 43.0, timedelta(days=3), stale),
+                    limit("claude", "Fable", 62.0, timedelta(days=3), stale),
                 ],
                 "codex": [limit("codex", "Weekly", 5.0, timedelta(days=6), stale)],
             },
