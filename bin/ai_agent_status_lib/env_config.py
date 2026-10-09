@@ -197,7 +197,7 @@ def _legacy_widget_config(config_dir: Path, diagnostic: Diagnostic) -> dict[str,
 
 
 def _serialize_value(value: str) -> str:
-    if re.fullmatch(r"[A-Za-z0-9_./:@+-]+", value):
+    if re.fullmatch(r"[A-Za-z0-9_./:@+,-]+", value):
         return value
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'

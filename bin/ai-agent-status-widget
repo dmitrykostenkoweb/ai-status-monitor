@@ -304,6 +304,187 @@ class RotatingProviderLogo(Gtk.DrawingArea):
         return False
 
 
+# Timing settings shown in the Settings window: (env key, widget config key, label, hint).
+TIMING_SETTINGS = (
+    ("AI_STATUS_STALE_AFTER_SECONDS", "stale_after_seconds",
+     "No new events after", "row turns grey"),
+    ("AI_STATUS_HIDE_DONE_AFTER_SECONDS", "hide_done_after_seconds",
+     "Hide finished after", "done rows disappear"),
+    ("AI_STATUS_IDLE_AFTER_SECONDS", "idle_after_seconds",
+     "Show as idle after", "silent session"),
+    ("AI_STATUS_HIDE_STALE_AFTER_SECONDS", "hide_stale_after_seconds",
+     "Hide inactive after", "silent row disappears"),
+)
+MAX_ROWS_LIMIT = 12
+MAX_MINUTES = 24 * 60
+
+
+class SettingsWindow(Gtk.Window):
+    """Small instant-apply settings dialog; every change is saved to the runtime .env."""
+
+    def __init__(self, owner: "StatusWidget") -> None:
+        super().__init__(title="AI Status Monitor — Settings")
+        self.owner = owner
+        self.set_name("settingsWindow")
+        self.set_transient_for(owner)
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
+        self.set_keep_above(True)
+        self.set_resizable(False)
+        self.set_border_width(0)
+        self.agent_checks: dict[str, Gtk.CheckButton] = {}
+        self.connect("key-press-event", self.on_key_press)
+        # Native controls (switch, spin buttons, checkboxes) follow the widget's dark look.
+        gtk_settings = Gtk.Settings.get_default()
+        if gtk_settings is not None:
+            gtk_settings.set_property("gtk-application-prefer-dark-theme", True)
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        outer.set_name("settingsBody")
+        self.add(outer)
+
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        header.set_name("settingsHeader")
+        mark = LogoMark(17, variant="mono", mono_color="#E6EDF3")
+        mark.set_valign(Gtk.Align.CENTER)
+        header.pack_start(mark, False, False, 0)
+        heading = Gtk.Label(label="Settings")
+        heading.set_name("settingsHeading")
+        heading.set_xalign(0)
+        header.pack_start(heading, True, True, 0)
+        outer.pack_start(header, False, False, 0)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        content.set_name("settingsContent")
+        outer.pack_start(content, True, True, 0)
+
+        # ---- agents ----
+        content.pack_start(self.section_label("Agents"), False, False, 0)
+        agents_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        for agent, label in (("claude", "Claude Code"), ("codex", "Codex")):
+            check = Gtk.CheckButton()
+            check.set_name("settingsCheck")
+            inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            pixbuf = owner.logo_pixbufs.get(agent)
+            if pixbuf is not None:
+                inner.pack_start(Gtk.Image.new_from_pixbuf(pixbuf), False, False, 0)
+            text = Gtk.Label()
+            text.set_markup(owner.markup(label, AGENT_NAME_COLORS[agent]))
+            text.set_name("settingsAgentName")
+            inner.pack_start(text, False, False, 0)
+            check.add(inner)
+            check.set_active(agent in owner.agents)
+            check.connect("toggled", self.on_agent_toggled)
+            self.agent_checks[agent] = check
+            agents_box.pack_start(check, False, False, 0)
+        content.pack_start(agents_box, False, False, 0)
+        content.pack_start(self.hint_label("Hidden agents get no rows, usage bars, sounds or usage requests."), False, False, 0)
+
+        # ---- display ----
+        content.pack_start(self.section_label("Display"), False, False, 0)
+        grid = self.new_grid()
+        self.sound_switch = Gtk.Switch()
+        self.sound_switch.set_halign(Gtk.Align.END)
+        self.sound_switch.set_valign(Gtk.Align.CENTER)
+        self.sound_switch.set_active(owner.config.get("sound_enabled") is True)
+        self.sound_switch.connect("notify::active", self.on_sound_changed)
+        self.attach_row(grid, 0, "Notification sound", "on waiting and when done", self.sound_switch)
+
+        self.rows_spin = Gtk.SpinButton.new_with_range(1, MAX_ROWS_LIMIT, 1)
+        self.rows_spin.set_value(owner.max_rows)
+        self.rows_spin.connect("value-changed", self.on_rows_changed)
+        self.attach_row(grid, 1, "Visible rows", "sessions shown at once", self.rows_spin)
+        content.pack_start(grid, False, False, 0)
+
+        # ---- timing ----
+        content.pack_start(self.section_label("Timing (minutes)"), False, False, 0)
+        grid = self.new_grid()
+        for index, (env_key, config_key, label, hint) in enumerate(TIMING_SETTINGS):
+            spin = Gtk.SpinButton.new_with_range(0, MAX_MINUTES, 0.5)
+            spin.set_digits(1)
+            spin.set_value(owner.config_seconds(config_key) / 60)
+            spin.connect("value-changed", self.on_timing_changed, env_key, config_key)
+            self.attach_row(grid, index, label, hint, spin)
+        content.pack_start(grid, False, False, 0)
+
+        # ---- footer ----
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        footer.set_name("settingsFooter")
+        saved = self.hint_label(f"Saved automatically to {display_path(SETTINGS.env_file)}")
+        saved.set_line_wrap(True)
+        saved.set_max_width_chars(34)
+        footer.pack_start(saved, True, True, 0)
+        close = Gtk.Button(label="Close")
+        close.set_name("settingsClose")
+        close.set_valign(Gtk.Align.CENTER)
+        close.connect("clicked", lambda _button: self.destroy())
+        footer.pack_end(close, False, False, 0)
+        outer.pack_start(footer, False, False, 0)
+
+    @staticmethod
+    def section_label(text: str) -> Gtk.Label:
+        label = Gtk.Label(label=text.upper())
+        label.set_name("settingsSection")
+        label.set_xalign(0)
+        return label
+
+    @staticmethod
+    def hint_label(text: str) -> Gtk.Label:
+        label = Gtk.Label(label=text)
+        label.set_name("settingsHint")
+        label.set_xalign(0)
+        return label
+
+    @staticmethod
+    def new_grid() -> Gtk.Grid:
+        grid = Gtk.Grid()
+        grid.set_row_spacing(8)
+        grid.set_column_spacing(18)
+        return grid
+
+    def attach_row(self, grid: Gtk.Grid, row: int, title: str, hint: str, control: Gtk.Widget) -> None:
+        labels = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        name = Gtk.Label(label=title)
+        name.set_name("settingsLabel")
+        name.set_xalign(0)
+        labels.pack_start(name, False, False, 0)
+        labels.pack_start(self.hint_label(hint), False, False, 0)
+        labels.set_hexpand(True)
+        grid.attach(labels, 0, row, 1, 1)
+        control.set_valign(Gtk.Align.CENTER)
+        grid.attach(control, 1, row, 1, 1)
+
+    def on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> bool:
+        if event.keyval == Gdk.KEY_Escape:
+            self.destroy()
+            return True
+        return False
+
+    def on_agent_toggled(self, check: Gtk.CheckButton) -> None:
+        agents = tuple(agent for agent in SUPPORTED_AGENTS if self.agent_checks[agent].get_active())
+        if not agents:
+            # At least one agent must stay visible; undo the last uncheck.
+            check.set_active(True)
+            return
+        self.owner.set_agents(agents)
+
+    def on_sound_changed(self, switch: Gtk.Switch, _param: object) -> None:
+        self.owner.update_setting("AI_STATUS_SOUND_ENABLED", "true" if switch.get_active() else "false")
+
+    def on_rows_changed(self, spin: Gtk.SpinButton) -> None:
+        self.owner.update_setting("AI_STATUS_MAX_ROWS", str(spin.get_value_as_int()))
+
+    def on_timing_changed(self, spin: Gtk.SpinButton, env_key: str, _config_key: str) -> None:
+        self.owner.update_setting(env_key, str(round(spin.get_value() * 60)))
+
+
+def display_path(path: Path) -> str:
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
+
+
 class StatusWidget(Gtk.Window):
     def __init__(self, demo: bool = False) -> None:
         super().__init__(title=TITLE)
@@ -312,6 +493,8 @@ class StatusWidget(Gtk.Window):
         self.demo_index = 0
         self.config = self.load_config()
         self.agents: tuple[str, ...] = SETTINGS.agents
+        self.max_rows = MAX_ROWS
+        self.settings_window: SettingsWindow | None = None
         self.was_waiting_for_interaction = False
         self.was_done = False
         self.anim_frame = 0
@@ -424,6 +607,73 @@ class StatusWidget(Gtk.Window):
         }
         #updatePill:hover { color: #ffffff; background: rgba(45,212,191,0.22); }
         #close { color: #7a8493; font-size: 15px; padding: 0 3px; }
+        #settingsButton { color: #7a8493; font-size: 13px; padding: 0 2px; }
+        #settingsButton:hover, #close:hover { color: #ffffff; }
+        #settingsWindow, #settingsBody { background: #0D131A; }
+        #settingsHeader {
+          padding: 12px 16px 10px;
+          border-bottom: 1px solid rgba(255,255,255,0.055);
+        }
+        #settingsHeading {
+          color: #E6EDF3;
+          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
+          font-size: 13px; font-weight: 600;
+        }
+        #settingsContent { padding: 4px 16px 12px; }
+        #settingsSection {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 9.5px; font-weight: 600; color: #2DD4BF;
+          margin-top: 12px; margin-bottom: 4px;
+        }
+        #settingsLabel, #settingsAgentName {
+          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
+          font-size: 12px; font-weight: 600; color: #D4DCE5;
+        }
+        #settingsHint {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 9.5px; color: #566173;
+        }
+        #settingsFooter {
+          padding: 10px 16px 12px;
+          border-top: 1px solid rgba(255,255,255,0.055);
+        }
+        #settingsClose {
+          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
+          font-size: 11px; font-weight: 600;
+          color: #2DD4BF; background: rgba(45,212,191,0.12); background-image: none;
+          border: 1px solid rgba(45,212,191,0.30); border-radius: 7px;
+          box-shadow: none; padding: 3px 14px;
+        }
+        #settingsClose:hover { color: #ffffff; background: rgba(45,212,191,0.22); }
+        #settingsWindow spinbutton {
+          background: #151C25; background-image: none; color: #E6EDF3;
+          border: 1px solid rgba(255,255,255,0.10); border-radius: 7px;
+          box-shadow: none;
+        }
+        #settingsWindow spinbutton:focus-within { border-color: rgba(45,212,191,0.55); }
+        #settingsWindow spinbutton entry {
+          background: transparent; color: #E6EDF3; border: none; box-shadow: none;
+          font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+          min-width: 44px; padding: 0 6px;
+        }
+        #settingsWindow spinbutton button {
+          background: transparent; background-image: none; color: #8A95A3;
+          border: none; border-left: 1px solid rgba(255,255,255,0.07);
+          box-shadow: none; min-height: 26px; min-width: 26px;
+        }
+        #settingsWindow spinbutton button:hover { color: #ffffff; background: rgba(255,255,255,0.06); }
+        #settingsWindow spinbutton button:disabled { color: #3a4350; }
+        #settingsWindow switch {
+          background: #151C25; background-image: none;
+          border: 1px solid rgba(255,255,255,0.10); box-shadow: none;
+        }
+        #settingsWindow switch:checked { background: rgba(45,212,191,0.75); border-color: rgba(45,212,191,0.9); }
+        #settingsWindow switch slider { background: #E6EDF3; background-image: none; border: none; box-shadow: none; }
+        #settingsWindow check {
+          background: #151C25; background-image: none; color: #0D131A;
+          border: 1px solid rgba(255,255,255,0.18); box-shadow: none;
+        }
+        #settingsWindow check:checked { background: #2DD4BF; border-color: #2DD4BF; }
         #row { padding: 4px 8px; border-radius: 9px; }
         #row.alertRow {
           background: linear-gradient(90deg, rgba(251,112,96,0.13), rgba(251,112,96,0.03));
@@ -553,6 +803,16 @@ class StatusWidget(Gtk.Window):
         self.badge.set_name("badge")
         self.badge.set_valign(Gtk.Align.CENTER)
         header.pack_start(self.badge, False, False, 0)
+
+        settings_button = Gtk.Button(label="⚙")
+        settings_button.set_name("settingsButton")
+        settings_button.set_relief(Gtk.ReliefStyle.NONE)
+        settings_button.set_can_focus(False)
+        settings_button.set_focus_on_click(False)
+        settings_button.set_valign(Gtk.Align.CENTER)
+        settings_button.set_tooltip_text("Settings")
+        settings_button.connect("clicked", lambda _button: self.open_settings())
+        header.pack_start(settings_button, False, False, 0)
 
         close = Gtk.Button(label="×")
         close.set_name("close")
@@ -793,8 +1053,8 @@ class StatusWidget(Gtk.Window):
         if self.demo:
             self.apply_demo_usage_state(self.demo_index)
         sessions = self.order_sessions(self.collect_sessions())
-        visible = sessions[:MAX_ROWS]
-        hidden_done = sum(1 for s in sessions[MAX_ROWS:] if s["kind"] in INACTIVE)
+        visible = sessions[:self.max_rows]
+        hidden_done = sum(1 for s in sessions[self.max_rows:] if s["kind"] in INACTIVE)
 
         waiting = any(s["kind"] == "waiting" for s in visible)
         waiting_count = sum(1 for s in visible if s["kind"] == "waiting")
@@ -1301,6 +1561,8 @@ class StatusWidget(Gtk.Window):
         else:
             update_item = Gtk.MenuItem(label="Check for updates")
         quit_item = Gtk.MenuItem(label="Quit")
+        settings_item = Gtk.MenuItem(label="Settings…")
+        settings_item.connect("activate", lambda _item: self.open_settings())
         agents_item = Gtk.MenuItem(label="Show agents")
         agents_item.set_submenu(self.build_agents_menu())
         reload_item.connect("activate", lambda _item: self.refresh_status())
@@ -1310,10 +1572,67 @@ class StatusWidget(Gtk.Window):
         else:
             update_item.connect("activate", lambda _item: self.start_update_check())
         quit_item.connect("activate", self.quit)
-        for item in (agents_item, reload_item, logs_item, update_item, quit_item):
+        for item in (settings_item, agents_item, reload_item, logs_item, update_item, quit_item):
             menu.append(item)
         menu.show_all()
         menu.popup_at_pointer(event)
+
+    def open_settings(self) -> None:
+        if self.settings_window is None:
+            self.settings_window = SettingsWindow(self)
+            self.settings_window.connect("destroy", self.on_settings_closed)
+            self.settings_window.show_all()
+            self.place_beside(self.settings_window)
+        self.settings_window.present()
+
+    def place_beside(self, window: Gtk.Window, gap: int = 12) -> None:
+        """Open a dialog next to the widget (right if it fits, else left) so changes stay visible."""
+        x, y = self.get_position()
+        width, _height = self.get_size()
+        dialog_width, dialog_height = window.get_size()
+        monitor = self.get_display().get_monitor_at_point(x, y) if self.get_display() else None
+        if monitor is None:
+            return
+        area = monitor.get_workarea()
+        target_x = x + width + gap
+        if target_x + dialog_width > area.x + area.width:
+            target_x = x - dialog_width - gap
+        target_x = max(area.x, min(target_x, area.x + area.width - dialog_width))
+        target_y = max(area.y, min(y, area.y + area.height - dialog_height))
+        window.move(target_x, target_y)
+
+    def on_settings_closed(self, _window: Gtk.Window) -> None:
+        self.settings_window = None
+
+    def sync_settings_window(self) -> None:
+        """Keep the open Settings window in step when agents change from the menu."""
+        window = self.settings_window
+        if window is None:
+            return
+        for agent, check in window.agent_checks.items():
+            if check.get_active() != (agent in self.agents):
+                check.set_active(agent in self.agents)
+
+    def update_setting(self, key: str, value: str) -> None:
+        """Apply one setting to the running widget and save it to the runtime .env."""
+        if key == "AI_STATUS_SOUND_ENABLED":
+            self.config["sound_enabled"] = value == "true"
+        elif key == "AI_STATUS_MAX_ROWS":
+            self.max_rows = max(1, int(value))
+        else:
+            for env_key, config_key, _label, _hint in TIMING_SETTINGS:
+                if env_key == key:
+                    self.config[config_key] = max(0, int(value))
+        log(f"setting {key}={value}")
+        try:
+            write_env_value(SETTINGS.env_file, key, value)
+        except OSError as error:
+            log(f"failed to save {key} to {SETTINGS.env_file}: {error}")
+        if key in os.environ:
+            log(f"{key} is set in the environment and will override the saved value on restart")
+        self.signature = None
+        if not self.intro:
+            self.refresh_status()
 
     def build_agents_menu(self) -> Gtk.Menu:
         submenu = Gtk.Menu()
@@ -1331,16 +1650,9 @@ class StatusWidget(Gtk.Window):
             return
         newly_shown = set(agents) - set(self.agents)
         self.agents = agents
-        log(f"showing agents: {format_agents(agents)}")
-        try:
-            write_env_value(SETTINGS.env_file, "AI_STATUS_AGENTS", format_agents(agents))
-        except OSError as error:
-            log(f"failed to save AI_STATUS_AGENTS to {SETTINGS.env_file}: {error}")
-        if "AI_STATUS_AGENTS" in os.environ:
-            log("AI_STATUS_AGENTS is set in the environment and will override the saved choice on restart")
-        self.signature = None
-        self.refresh_status()
+        self.update_setting("AI_STATUS_AGENTS", format_agents(agents))
         self.render_usage_limits()
+        self.sync_settings_window()
         missing = [
             agent for agent in newly_shown
             if not self.usage_snapshot.get("providers", {}).get(agent)
