@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class SessionWindowTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("xvfb-run"), "xvfb-run is required")
+    def test_each_session_gets_a_window_with_its_own_sticker(self) -> None:
+        probe = textwrap.dedent(
+            """
+            import json
+            import runpy
+            import sys
+            import time
+            from pathlib import Path
+
+            sys.path.insert(0, "bin")
+            module = runpy.run_path("bin/ai-agent-status-widget", run_name="session_windows_smoke")
+            GLib = module["GLib"]
+            widget = module["StatusWidget"](demo=True)
+            widget.show_all()
+            config_dir = Path(sys.argv[1])
+
+            def pump(condition, seconds=3.0):
+                deadline = time.monotonic() + seconds
+                context = GLib.MainContext.default()
+                while time.monotonic() < deadline:
+                    if condition():
+                        return True
+                    context.iteration(False)
+                    time.sleep(0.01)
+                return condition()
+
+            def session(sid, kind, agent="claude"):
+                row = widget.make_session(agent, kind, sid, "12:00", kind=kind)
+                row["id"] = sid
+                return row
+
+            assert widget.session_windows is True
+            widget.sync_session_cards([session("a", "coding"), session("b", "waiting", "codex")])
+            assert list(widget.session_cards) == ["a", "b"]
+            card_a, card_b = widget.session_cards["a"], widget.session_cards["b"]
+            assert card_a.get_title() == "AI agent session"
+            assert "waiting" in card_b.card.get_style_context().list_classes()
+
+            # every card picks its own sticker and keeps it up (no 4 s timeout)
+            assert pump(lambda: card_a.overlay.visible and card_b.overlay.visible)
+            assert pump(lambda: card_a.overlay.choice is not None and card_b.overlay.choice is not None)
+            assert card_a.overlay.choice.key == "coding" and card_b.overlay.choice.key == "waiting"
+            assert card_a.overlay.sticky and card_a.overlay.hold_source is None
+
+            # docked cards stack under the widget in first-seen order
+            for _ in range(30):
+                GLib.MainContext.default().iteration(False)
+            widget.layout_cards()
+            assert card_a.floating is False and card_b.floating is False
+
+            # same sticker status → same GIF; done → sticker tucks away, card stays
+            first_choice = card_a.overlay.choice
+            widget.sync_session_cards([session("a", "command"), session("b", "waiting", "codex")])
+            assert card_a.sticker_debounce is None and card_a.overlay.choice is first_choice
+            widget.sync_session_cards([session("a", "done"), session("b", "waiting", "codex")])
+            assert card_a.overlay.phase == "out" and widget.session_cards["a"] is card_a
+
+            # a dragged (floating) card remembers its position; docking forgets it
+            card_b.floating = True
+            widget.save_card_position("b", 40, 500)
+            saved = json.loads((config_dir / "session_windows.json").read_text())
+            assert saved["b"]["x"] == 40 and saved["b"]["y"] == 500
+            widget.dock_card("b")
+            assert card_b.floating is False
+            assert "b" not in json.loads((config_dir / "session_windows.json").read_text())
+
+            # Serious mode hides every card sticker; switching it off brings them back
+            widget.update_setting("AI_STATUS_SERIOUS_MODE", "true")
+            assert not card_b.overlay.visible or card_b.overlay.phase == "out"
+            widget.update_setting("AI_STATUS_SERIOUS_MODE", "false")
+            assert card_b.sticker_debounce is not None
+
+            # a session that disappears closes its window
+            widget.sync_session_cards([session("b", "waiting", "codex")])
+            assert list(widget.session_cards) == ["b"] and card_a.closed
+
+            # the classic list layout closes all session windows
+            widget.update_setting("AI_STATUS_SESSION_WINDOWS", "false")
+            assert widget.session_cards == {} and card_b.closed
+            widget.destroy()
+            """
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory) / "data"
+            shutil.copytree(ROOT / "assets", data_dir)
+            config_dir = Path(directory) / "config"
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("AI_STATUS_")}
+            environment.update({
+                "AI_STATUS_ENV_FILE": str(Path(directory) / ".env"),
+                "AI_STATUS_CACHE_DIR": str(Path(directory) / "cache"),
+                "AI_STATUS_CONFIG_DIR": str(config_dir),
+                "AI_STATUS_DATA_DIR": str(data_dir),
+            })
+            completed = subprocess.run(
+                ["xvfb-run", "-a", sys.executable, "-c", probe, str(config_dir)],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

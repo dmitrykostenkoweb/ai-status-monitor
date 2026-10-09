@@ -23,7 +23,8 @@ The widget looks like a small dark floating card / mini-player:
 
 - dark background with a subtle border and rounded corners
 - header: radar icon, `AI Agents Status`, a state badge (`● LIVE` / `▲ N ALERT` / `● IDLE`) and a `×` button
-- one row per active session (up to 5), each with: a glowing dot in the state color, an agent logo tile, the agent name, the status (monospace), and a `project · time` line
+- **session windows** (default) — every active session (run) gets its own small draggable window with its own GIF sticker; new windows dock in a column under the widget and follow it, a dragged window stays where you drop it (remembered per session, right-click → `Dock under the widget` to bring it back). Turn off in Settings (`Session windows`) for the classic list below
+- classic list: one row per active session (up to 5), each with: a glowing dot in the state color, an agent logo tile, the agent name, the status (monospace), and a `project · time` line
 - colors depend on the state (thinking, reading code, coding, running a command, analyzing output, waiting for approval, finished)
 - active states get an animated `...`; `done` sessions are dimmed, and any overflow is collapsed behind a `+N finished, hidden automatically` footer
 - each row has a clickable `→` on the right that activates the terminal window of that session; a `waiting for approval` row is additionally highlighted in red with a pulsing border
@@ -33,7 +34,7 @@ The widget looks like a small dark floating card / mini-player:
 - a compact usage section groups Claude Code 5-hour/weekly and Codex weekly utilization beside centered, clickable provider logos
 - **Settings window** — click the `⚙` in the header (or right-click → `Settings…`): shown agents, notification sound, visible rows and timing; changes apply instantly and are saved to the runtime `.env`
 - **GIF stickers** — when an agent changes status, a tilted sticker with a GIF and a speech bubble pops out of the top-right corner for a few seconds (see [GIF stickers](#7d-gif-stickers))
-- right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Serious mode (no stickers)`, `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
+- right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Serious mode (no stickers)`, `Dock all session windows`, `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
 
 By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
 
@@ -139,6 +140,7 @@ Available variables:
 - `AI_STATUS_STALE_AFTER_SECONDS`, `AI_STATUS_HIDE_DONE_AFTER_SECONDS`, `AI_STATUS_IDLE_AFTER_SECONDS`, `AI_STATUS_HIDE_STALE_AFTER_SECONDS` — timeouts
 - `AI_STATUS_THEME` — theme name
 - `AI_STATUS_AGENTS` — which agents the widget shows: `claude,codex` (default, also `all`), `claude` or `codex`. Hidden agents get no rows, no usage bars, no sounds and no usage requests. The right-click `Show agents` menu changes it live and saves the choice to the runtime `.env` (a value exported in the process still wins on the next start)
+- `AI_STATUS_SESSION_WINDOWS` — `true` (default): each session in its own draggable window; `false`: the classic list inside the widget
 - `AI_STATUS_SERIOUS_MODE` — `true` turns GIF stickers off (see [GIF stickers](#7d-gif-stickers))
 - `AI_STATUS_KLIPY_API_KEY` — optional KLIPY API key for random sticker GIFs; empty = local GIFs only
 - `AI_STATUS_ENV_FILE` — path to a different runtime file; this variable must be exported in the process, it is not read from `.env`
@@ -201,7 +203,9 @@ Provider failures are independent. When a refresh fails, an unexpired last-known
 
 ## 7d. GIF stickers
 
-When an agent's status changes, a small tilted sticker with a GIF and a speech bubble pops out of the widget's top-right corner, stays for 4 seconds and tucks away. `waiting` and `error` stickers stay until the status changes, because they need your attention. Hovering an agent row brings its last sticker back. The sticker lives in its own click-through window, so the widget never moves and clicks still reach the buttons underneath. It needs a compositing desktop (Cinnamon has one by default).
+**With session windows (default)** every session window carries its own sticker, sticking out of its top-right corner. It stays up while the session works or waits, gets a new GIF only when the sticker status changes (e.g. `coding` → `waiting`), and tucks away when the session is `done` or `idle`.
+
+**With the classic list**, a single sticker pops out of the widget's top-right corner when an agent's status changes, stays for 4 seconds and tucks away. `waiting` and `error` stickers stay until the status changes, because they need your attention. Hovering an agent row brings its last sticker back. The sticker lives in its own click-through window, so the widget never moves and clicks still reach the buttons underneath. It needs a compositing desktop (Cinnamon has one by default).
 
 | Sticker | Shown for |
 |---|---|
