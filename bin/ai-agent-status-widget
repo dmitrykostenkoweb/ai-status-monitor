@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
@@ -44,6 +45,8 @@ GIFS_DIR = DATA_DIR / "gifs"
 STICKER_TEXTS_FILE = CONFIG_DIR / "stickers.json"
 STICKER_CACHE_DIR = CACHE_DIR / "stickers"
 KLIPY_CUSTOMER_ID_FILE = CONFIG_DIR / "klipy_customer_id"
+SESSION_WINDOWS_FILE = CONFIG_DIR / "session_windows.json"
+SESSION_WINDOW_POSITION_TTL_SECONDS = 14 * 24 * 60 * 60
 OPENAI_LOGO = DATA_DIR / "openai-logo.svg"
 ANTHROPIC_LOGO = DATA_DIR / "anthropic-logo.png"
 TITLE = SETTINGS.title
@@ -641,6 +644,221 @@ class StickerOverlay(Gtk.Window):
         cr.restore()
 
 
+# Docked session windows stack under the widget with this much room between cards, so each
+# card's sticker (which sticks out 78 px above its card) does not cover the card above.
+SESSION_CARD_GAP = 88
+SESSION_CARD_TITLE = "AI agent session"
+
+
+class SessionCard(Gtk.Window):
+    """A separate, draggable window for one agent session (run), with its own GIF sticker.
+
+    Docked cards stack under the main widget and follow it; dragging a card makes it
+    floating, and its position is remembered per session. The sticker stays up while the
+    session works or waits and tucks away when it is done or idle.
+    """
+
+    def __init__(self, owner: "StatusWidget", session_id: str) -> None:
+        super().__init__(title=SESSION_CARD_TITLE)
+        self.owner = owner
+        self.session_id = session_id
+        self.set_name("window")
+        self.set_app_paintable(True)
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual is not None and screen.is_composited():
+            self.set_visual(visual)
+        self.set_resizable(False)
+        self.set_decorated(False)
+        self.set_keep_above(True)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_accept_focus(False)
+        self.stick()
+        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+
+        event_box = Gtk.EventBox()
+        event_box.connect("button-press-event", self.on_button_press)
+        self.add(event_box)
+        self.card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.card.set_name("card")
+        self.card.set_size_request(CARD_WIDTH, -1)
+        for setter in (self.card.set_margin_top, self.card.set_margin_bottom,
+                       self.card.set_margin_start, self.card.set_margin_end):
+            setter(8)
+        event_box.add(self.card)
+        self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        for setter in (self.content.set_margin_top, self.content.set_margin_bottom,
+                       self.content.set_margin_start, self.content.set_margin_end):
+            setter(6)
+        self.card.pack_start(self.content, True, True, 0)
+
+        self.waiting_dots: list[StatusDot] = []
+        self.dot_labels: list[Gtk.Label] = []
+        self.signature: str | None = None
+        self.session: dict[str, object] | None = None
+        self.floating = False
+        self.closed = False
+        self.sticker_key: str | None = None
+        self.sticker_request = 0
+        self.sticker_debounce: int | None = None
+        self.save_source: int | None = None
+        self.overlay = StickerOverlay() if CAIRO_OK else None
+        self.connect("configure-event", self.on_configure)
+
+    # ---- content ----
+    def update(self, session: dict[str, object]) -> None:
+        self.session = session
+        signature = json.dumps(
+            [session["name"], session["status"], session["project"], session["time"], session["kind"]],
+            ensure_ascii=False,
+        )
+        if signature != self.signature:
+            self.signature = signature
+            for child in self.content.get_children():
+                self.content.remove(child)
+            self.waiting_dots = []
+            self.dot_labels = []
+            row = self.owner.build_row(session, self.waiting_dots, self.dot_labels)
+            self.content.pack_start(row, False, False, 0)
+            context = self.card.get_style_context()
+            if session["kind"] == "waiting":
+                context.add_class("waiting")
+            else:
+                context.remove_class("waiting")
+                context.remove_class("waitingPulse")
+            self.content.show_all()
+            self.resize(1, 1)  # shrink-wrap to the new row
+        self.update_sticker()
+
+    def update_sticker(self) -> None:
+        """Keep the sticker in step with the session: new GIF on a new sticker status,
+        tucked away when done/idle or in Serious mode."""
+        session = self.session
+        key = stickers.sticker_for_kind(session["kind"]) if session is not None else None
+        if self.owner.serious_mode or key in (None, "done", "idle"):
+            self.clear_sticker()
+            return
+        if key == self.sticker_key:
+            return
+        self.sticker_key = key
+        self.request_sticker(key)
+
+    def request_sticker(self, key: str) -> None:
+        if self.overlay is None:
+            return
+        if self.sticker_debounce is not None:
+            GLib.source_remove(self.sticker_debounce)
+        self.sticker_request += 1
+        request = self.sticker_request
+        source = self.owner.sticker_source
+
+        def pick_in_background() -> bool:
+            self.sticker_debounce = None
+
+            def worker() -> None:
+                try:
+                    choice = source.pick(key)
+                except Exception as error:  # never let a sticker take the widget down
+                    log(f"sticker: pick failed: {error}")
+                    choice = stickers.StickerChoice(key, None, "", "placeholder")
+                GLib.idle_add(self.apply_sticker, request, choice)
+
+            threading.Thread(target=worker, daemon=True).start()
+            return False
+
+        self.sticker_debounce = GLib.timeout_add(STICKER_DEBOUNCE_MS, pick_in_background)
+
+    def apply_sticker(self, request: int, choice: stickers.StickerChoice) -> bool:
+        if self.closed or self.overlay is None or request != self.sticker_request or self.owner.serious_mode:
+            return False
+        log(f"sticker: {self.session_id} {choice.key} from {choice.source}"
+            + (f" ({choice.image.name})" if choice.image else ""))
+        self.place_overlay()
+        self.overlay.present_sticker(choice, sticky=True)
+        return False
+
+    def clear_sticker(self) -> None:
+        self.sticker_key = None
+        self.sticker_request += 1
+        if self.sticker_debounce is not None:
+            GLib.source_remove(self.sticker_debounce)
+            self.sticker_debounce = None
+        if self.overlay is not None and self.overlay.visible:
+            self.overlay.tuck()
+
+    def refresh_sticker(self) -> None:
+        """Re-pick after Serious mode was turned off or the GIF source changed."""
+        self.sticker_key = None
+        self.update_sticker()
+
+    def place_overlay(self) -> None:
+        if self.overlay is None:
+            return
+        x, y = self.get_position()
+        width, _height = self.get_size()
+        self.overlay.place_for_card(x + width - 8, y + 8)
+
+    # ---- placement ----
+    def dock_at(self, x: int, y: int) -> None:
+        if self.floating:
+            return
+        if tuple(self.get_position()) != (x, y):
+            self.move(x, y)
+
+    def on_configure(self, _widget: Gtk.Widget, _event: Gdk.EventConfigure) -> bool:
+        if self.overlay is not None and self.overlay.visible:
+            self.place_overlay()
+        if self.floating:
+            # A drag fires many configure events; persist once it settles.
+            if self.save_source is not None:
+                GLib.source_remove(self.save_source)
+            self.save_source = GLib.timeout_add(400, self.save_position)
+        return False
+
+    def save_position(self) -> bool:
+        self.save_source = None
+        if not self.closed and self.floating:
+            x, y = self.get_position()
+            self.owner.save_card_position(self.session_id, x, y)
+        return False
+
+    def on_button_press(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 1:
+            self.floating = True
+            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
+            return True
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
+            menu = Gtk.Menu()
+            dock = Gtk.MenuItem(label="Dock under the widget")
+            dock.set_sensitive(self.floating)
+            dock.connect("activate", lambda _item: self.owner.dock_card(self.session_id))
+            dock_all = Gtk.MenuItem(label="Dock all session windows")
+            dock_all.connect("activate", lambda _item: self.owner.dock_all_cards())
+            settings = Gtk.MenuItem(label="Settings…")
+            settings.connect("activate", lambda _item: self.owner.open_settings())
+            for item in (dock, dock_all, settings):
+                menu.append(item)
+            menu.show_all()
+            menu.popup_at_pointer(event)
+            return True
+        return False
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        for name in ("sticker_debounce", "save_source"):
+            source = getattr(self, name)
+            if source is not None:
+                GLib.source_remove(source)
+                setattr(self, name, None)
+        if self.overlay is not None:
+            self.overlay.hide_now()
+            self.overlay.destroy()
+        self.destroy()
+
+
 # Timing settings shown in the Settings window: (env key, widget config key, label, hint).
 TIMING_SETTINGS = (
     ("AI_STATUS_STALE_AFTER_SECONDS", "stale_after_seconds",
@@ -732,6 +950,12 @@ class SettingsWindow(Gtk.Window):
         self.rows_spin.set_value(owner.max_rows)
         self.rows_spin.connect("value-changed", self.on_rows_changed)
         self.attach_row(grid, 1, "Visible rows", "sessions shown at once", self.rows_spin)
+
+        self.windows_switch = Gtk.Switch()
+        self.windows_switch.set_halign(Gtk.Align.END)
+        self.windows_switch.set_active(owner.session_windows)
+        self.windows_switch.connect("notify::active", self.on_windows_changed)
+        self.attach_row(grid, 2, "Session windows", "each run in its own draggable window", self.windows_switch)
         content.pack_start(grid, False, False, 0)
 
         # ---- stickers ----
@@ -863,6 +1087,9 @@ class SettingsWindow(Gtk.Window):
             self.owner.update_setting("AI_STATUS_KLIPY_API_KEY", value)
         return False
 
+    def on_windows_changed(self, switch: Gtk.Switch, _param: object) -> None:
+        self.owner.update_setting("AI_STATUS_SESSION_WINDOWS", "true" if switch.get_active() else "false")
+
     def on_rows_changed(self, spin: Gtk.SpinButton) -> None:
         self.owner.update_setting("AI_STATUS_MAX_ROWS", str(spin.get_value_as_int()))
 
@@ -901,6 +1128,10 @@ class StatusWidget(Gtk.Window):
         self.last_stickers: dict[str, stickers.StickerChoice] = {}
         self.limits_seen: set[tuple[str, str, str]] = set()
         self.test_sticker_index = 0
+        self.session_windows = SETTINGS.session_windows
+        self.session_cards: dict[str, SessionCard] = {}
+        self.card_order: list[str] = []
+        self.card_positions = self.load_card_positions()
         self.was_waiting_for_interaction = False
         self.was_done = False
         self.anim_frame = 0
@@ -1294,7 +1525,8 @@ class StatusWidget(Gtk.Window):
     # ----------------------------- data -----------------------------
     def collect_sessions(self) -> list[dict[str, object]]:
         if self.demo:
-            scenario = self.demo_scenarios[self.demo_index % len(self.demo_scenarios)]
+            # Rotate every 4 s so session windows' stickers have time to show.
+            scenario = self.demo_scenarios[(self.demo_index // 4) % len(self.demo_scenarios)]
             sessions = []
             for agent, status, project, hhmm in scenario:
                 session = self.make_session(agent, status, project, hhmm)
@@ -1472,8 +1704,8 @@ class StatusWidget(Gtk.Window):
         if self.demo:
             self.apply_demo_usage_state(self.demo_index)
         sessions = self.order_sessions(self.collect_sessions())
-        if not self.demo:
-            # Demo statuses rotate every second; stickers there come from --sticker / Settings.
+        if not self.demo and not self.session_windows:
+            # In the classic list one sticker pops on change; session windows own theirs.
             self.update_stickers(sessions)
         visible = sessions[:self.max_rows]
         hidden_done = sum(1 for s in sessions[self.max_rows:] if s["kind"] in INACTIVE)
@@ -1485,13 +1717,21 @@ class StatusWidget(Gtk.Window):
         self.set_waiting_style(waiting)
         self.set_badge(bool(visible), waiting_count)
 
-        signature = json.dumps(
-            [[s["name"], s["status"], s["project"], s["time"], s["kind"]] for s in visible] + [hidden_done],
-            ensure_ascii=False,
-        )
-        if signature != self.signature:
-            self.signature = signature
-            self.rebuild_body(visible, hidden_done)
+        if self.session_windows:
+            self.sync_session_cards(visible)
+            # Rows live in their own windows; the card keeps header + usage (+ idle lockup).
+            signature = json.dumps(["session-windows", bool(visible)])
+            if signature != self.signature:
+                self.signature = signature
+                self.rebuild_body([], 0, show_lockup=not visible)
+        else:
+            signature = json.dumps(
+                [[s["name"], s["status"], s["project"], s["time"], s["kind"]] for s in visible] + [hidden_done],
+                ensure_ascii=False,
+            )
+            if signature != self.signature:
+                self.signature = signature
+                self.rebuild_body(visible, hidden_done)
 
         if waiting and not self.was_waiting_for_interaction and self.config.get("sound_enabled") is True:
             self.play_notification_sound()
@@ -1504,7 +1744,7 @@ class StatusWidget(Gtk.Window):
             self.demo_index += 1
         return True
 
-    def rebuild_body(self, sessions: list[dict[str, object]], hidden_done: int) -> None:
+    def rebuild_body(self, sessions: list[dict[str, object]], hidden_done: int, show_lockup: bool = True) -> None:
         self.row_hover_boxes = {}
         for child in self.body.get_children():
             self.body.remove(child)
@@ -1512,6 +1752,14 @@ class StatusWidget(Gtk.Window):
         self.waiting_dots = []
         self.spinning = []
 
+        if not sessions and not show_lockup:
+            # Session windows are showing the rows: collapse the body to nothing.
+            self.body.set_no_show_all(True)
+            self.body.hide()
+            self.resize_to_content()
+            return
+        self.body.set_no_show_all(False)
+        self.body.show()
         if not sessions:
             self.build_empty_state()
         else:
@@ -1536,7 +1784,16 @@ class StatusWidget(Gtk.Window):
             # the new rows are laid out and tuck the sticker only if the pointer really left.
             GLib.idle_add(self.verify_hover)
 
-    def build_row(self, session: dict[str, object]) -> Gtk.Widget:
+    def build_row(
+        self,
+        session: dict[str, object],
+        waiting_dots: list[StatusDot] | None = None,
+        dot_labels: list[Gtk.Label] | None = None,
+    ) -> Gtk.Widget:
+        """One session row. Animated parts register in the given lists (a session window's own),
+        defaulting to the main widget's lists that `tick_animation` drives."""
+        waiting_dots = self.waiting_dots if waiting_dots is None else waiting_dots
+        dot_labels = self.anim_dot_labels if dot_labels is None else dot_labels
         kind = str(session["kind"])
         color = str(session["color"])
         agent = str(session["agent"])
@@ -1551,7 +1808,7 @@ class StatusWidget(Gtk.Window):
         dot = StatusDot()
         dot.configure_dot(color, waiting)
         if waiting:
-            self.waiting_dots.append(dot)
+            waiting_dots.append(dot)
         dot.set_valign(Gtk.Align.START)
         dot.set_margin_top(4)
         row.pack_start(dot, False, False, 0)
@@ -1600,7 +1857,7 @@ class StatusWidget(Gtk.Window):
             dots.set_xalign(0)
             dots.set_markup(self.markup("", color))
             dots.base_color = color  # type: ignore[attr-defined]
-            self.anim_dot_labels.append(dots)
+            dot_labels.append(dots)
             top.pack_start(dots, False, False, 0)
 
         meta_text = " · ".join(part for part in (str(session["project"]), str(session["time"])) if part)
@@ -1688,6 +1945,7 @@ class StatusWidget(Gtk.Window):
             self.resize(max(natural.width, CARD_WIDTH + 16), max(natural.height, 1))
         except Exception as error:
             log(f"resize failed: {error}")
+        GLib.idle_add(self.layout_cards_once)
 
     def markup(self, value: str, color: str) -> str:
         return f'<span foreground="{color}">{html.escape(value)}</span>'
@@ -1937,6 +2195,23 @@ class StatusWidget(Gtk.Window):
             else:
                 context.remove_class("waitingPulse")
 
+        # the same animations inside every session window
+        for card in self.session_cards.values():
+            for label in card.dot_labels:
+                color = getattr(label, "base_color", STATE_COLORS["neutral"])
+                label.set_markup(self.markup("." * count, color))
+            if card.waiting_dots:
+                phase = (self.anim_frame % 8) / 8.0
+                for dot in card.waiting_dots:
+                    dot.phase = phase
+                    dot.queue_draw()
+            card_context = card.card.get_style_context()
+            if card_context.has_class("waiting"):
+                if self.anim_frame % 8 < 4:
+                    card_context.add_class("waitingPulse")
+                else:
+                    card_context.remove_class("waitingPulse")
+
         # rotating sweep on the lockup logo (startup intro + idle state)
         if self.spinning:
             angle = (self.anim_frame * 0.12) % (2 * math.pi)
@@ -2000,6 +2275,9 @@ class StatusWidget(Gtk.Window):
         settings_item.connect("activate", lambda _item: self.open_settings())
         agents_item = Gtk.MenuItem(label="Show agents")
         agents_item.set_submenu(self.build_agents_menu())
+        dock_item = Gtk.MenuItem(label="Dock all session windows")
+        dock_item.set_sensitive(any(card.floating for card in self.session_cards.values()))
+        dock_item.connect("activate", lambda _item: self.dock_all_cards())
         serious_item = Gtk.CheckMenuItem(label="Serious mode (no stickers)")
         serious_item.set_active(self.serious_mode)
         serious_item.connect("toggled", lambda item: self.set_serious_mode(item.get_active()))
@@ -2010,10 +2288,107 @@ class StatusWidget(Gtk.Window):
         else:
             update_item.connect("activate", lambda _item: self.start_update_check())
         quit_item.connect("activate", self.quit)
-        for item in (settings_item, agents_item, serious_item, reload_item, logs_item, update_item, quit_item):
+        for item in (settings_item, agents_item, serious_item, dock_item, reload_item, logs_item, update_item, quit_item):
             menu.append(item)
         menu.show_all()
         menu.popup_at_pointer(event)
+
+    # ----------------------------- session windows -----------------------------
+    def load_card_positions(self) -> dict[str, dict[str, float]]:
+        try:
+            loaded = json.loads(SESSION_WINDOWS_FILE.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(loaded, dict):
+            return {}
+        cutoff = time.time() - SESSION_WINDOW_POSITION_TTL_SECONDS
+        positions: dict[str, dict[str, float]] = {}
+        for session_id, value in loaded.items():
+            if not isinstance(value, dict):
+                continue
+            x, y, saved = value.get("x"), value.get("y"), value.get("t", 0)
+            if all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in (x, y, saved)) and saved >= cutoff:
+                positions[str(session_id)] = {"x": int(x), "y": int(y), "t": float(saved)}
+        return positions
+
+    def write_card_positions(self) -> None:
+        cutoff = time.time() - SESSION_WINDOW_POSITION_TTL_SECONDS
+        self.card_positions = {key: value for key, value in self.card_positions.items() if value["t"] >= cutoff}
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            SESSION_WINDOWS_FILE.write_text(json.dumps(self.card_positions, indent=2) + "\n", encoding="utf-8")
+        except OSError as error:
+            log(f"failed to save session window positions: {error}")
+
+    def save_card_position(self, session_id: str, x: int, y: int) -> None:
+        self.card_positions[session_id] = {"x": int(x), "y": int(y), "t": time.time()}
+        self.write_card_positions()
+
+    def sync_session_cards(self, sessions: list[dict[str, object]]) -> None:
+        """One window per visible session: create new ones, update, close finished ones."""
+        wanted = {str(session["id"]) for session in sessions}
+        for session_id in [key for key in self.session_cards if key not in wanted]:
+            self.session_cards.pop(session_id).close()
+            self.card_order.remove(session_id)
+        for session in sessions:
+            session_id = str(session["id"])
+            card = self.session_cards.get(session_id)
+            if card is None:
+                card = SessionCard(self, session_id)
+                self.session_cards[session_id] = card
+                self.card_order.append(session_id)
+                card.update(session)
+                saved = self.card_positions.get(session_id)
+                if saved is not None:
+                    card.floating = True
+                    card.move(*self.clamp_to_visible(int(saved["x"]), int(saved["y"])))
+                card.show_all()
+            else:
+                card.update(session)
+        self.layout_cards()
+
+    def layout_cards(self) -> None:
+        """Stack docked session windows under the widget, oldest first (stable order)."""
+        if not self.session_cards:
+            return
+        x, y = self.get_position()
+        _width, height = self.get_size()
+        # Window y + height - 8 px margin is the card's bottom edge; each session window
+        # also has an 8 px margin, so its window top is (visual top - 8).
+        next_y = y + height - 16 + SESSION_CARD_GAP
+        for session_id in self.card_order:
+            card = self.session_cards[session_id]
+            if card.floating:
+                continue
+            card.dock_at(x, next_y)
+            _card_width, card_height = card.get_size()
+            next_y += card_height - 16 + SESSION_CARD_GAP
+
+    def layout_cards_once(self) -> bool:
+        self.layout_cards()
+        return False
+
+    def dock_card(self, session_id: str) -> None:
+        card = self.session_cards.get(session_id)
+        if card is not None:
+            card.floating = False
+        if self.card_positions.pop(session_id, None) is not None:
+            self.write_card_positions()
+        self.layout_cards()
+
+    def dock_all_cards(self) -> None:
+        for card in self.session_cards.values():
+            card.floating = False
+        if self.card_positions:
+            self.card_positions = {}
+            self.write_card_positions()
+        self.layout_cards()
+
+    def close_session_cards(self) -> None:
+        for card in self.session_cards.values():
+            card.close()
+        self.session_cards = {}
+        self.card_order = []
 
     # ----------------------------- GIF stickers -----------------------------
     def build_sticker_source(self) -> stickers.StickerSource:
@@ -2234,6 +2609,15 @@ class StatusWidget(Gtk.Window):
                 self.sticker_request += 1
                 if self.sticker_overlay is not None:
                     self.sticker_overlay.hide_now()
+            for card in self.session_cards.values():
+                if self.serious_mode:
+                    card.clear_sticker()
+                else:
+                    card.refresh_sticker()
+        elif key == "AI_STATUS_SESSION_WINDOWS":
+            self.session_windows = value == "true"
+            if not self.session_windows:
+                self.close_session_cards()
         elif key == "AI_STATUS_KLIPY_API_KEY":
             self.klipy_api_key = value
             self.sticker_source = self.build_sticker_source()
@@ -2397,10 +2781,12 @@ class StatusWidget(Gtk.Window):
         self.save_position()
         if self.sticker_overlay is not None and self.sticker_overlay.visible:
             self.position_sticker_overlay()
+        self.layout_cards()
         return False
 
     def on_delete(self, *_args: object) -> bool:
         self.save_position()
+        self.close_session_cards()
         Gtk.main_quit()
         return True
 
@@ -2408,6 +2794,7 @@ class StatusWidget(Gtk.Window):
         self.save_position()
         if self.sticker_overlay is not None:
             self.sticker_overlay.hide_now()
+        self.close_session_cards()
         Gtk.main_quit()
 
     def switch_to_session(self, project: str, cwd: str, client_pids: list[int]) -> None:
@@ -2490,14 +2877,7 @@ class StatusWidget(Gtk.Window):
 
     def own_window_id(self) -> str | None:
         """This widget's X11 window id as wmctrl expects it (hex), or None off X11."""
-        window = self.get_window()
-        get_xid = getattr(window, "get_xid", None)
-        if get_xid is None:
-            return None
-        try:
-            return hex(get_xid())
-        except Exception:
-            return None
+        return window_id_of(self)
 
     def apply_wmctrl_hints(self) -> bool:
         # GTK-level hints first; cheap no-ops when the state already holds.
@@ -2510,18 +2890,37 @@ class StatusWidget(Gtk.Window):
         # window whose title merely *contains* it, e.g. a terminal whose title mentions
         # "AI Agents Status", which then becomes sticky instead of the widget.
         window_id = self.own_window_id()
-        target = ["-i", "-r", window_id] if window_id else ["-r", TITLE]
-        try:
-            subprocess.run(
-                [wmctrl, *target, "-b", "add,above,sticky,skip_taskbar"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-        except OSError as error:
-            log(f"wmctrl failed: {error}")
-            return False
+        targets = [["-i", "-r", window_id] if window_id else ["-r", TITLE]]
+        for card in self.session_cards.values():
+            card.stick()
+            card.set_keep_above(True)
+            card_id = window_id_of(card)
+            if card_id:
+                targets.append(["-i", "-r", card_id])
+        for target in targets:
+            try:
+                subprocess.run(
+                    [wmctrl, *target, "-b", "add,above,sticky,skip_taskbar"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            except OSError as error:
+                log(f"wmctrl failed: {error}")
+                return False
         return True  # repeat: re-assert above/sticky/skip_taskbar as Mutter drops them
+
+
+def window_id_of(widget: Gtk.Window) -> str | None:
+    """A window's X11 id as wmctrl expects it (hex), or None off X11 / before realize."""
+    window = widget.get_window()
+    get_xid = getattr(window, "get_xid", None)
+    if get_xid is None:
+        return None
+    try:
+        return hex(get_xid())
+    except Exception:
+        return None
 
 
 def main() -> int:

@@ -30,7 +30,7 @@ ai_status_valid_value() {
     AI_STATUS_STALE_AFTER_SECONDS|AI_STATUS_HIDE_DONE_AFTER_SECONDS|AI_STATUS_IDLE_AFTER_SECONDS|AI_STATUS_HIDE_STALE_AFTER_SECONDS)
       [[ "$value" =~ ^[0-9]+$ ]]
       ;;
-    AI_STATUS_SOUND_ENABLED|AI_STATUS_SERIOUS_MODE)
+    AI_STATUS_SOUND_ENABLED|AI_STATUS_SERIOUS_MODE|AI_STATUS_SESSION_WINDOWS)
       case "${value,,}" in
         1|true|yes|on|0|false|no|off) return 0 ;;
         *) return 1 ;;
@@ -63,7 +63,7 @@ ai_status_valid_value() {
 ai_status_normalize_value() {
   local key="$1"
   local value="$2"
-  if [[ "$key" == "AI_STATUS_SOUND_ENABLED" || "$key" == "AI_STATUS_SERIOUS_MODE" ]]; then
+  if [[ "$key" == "AI_STATUS_SOUND_ENABLED" || "$key" == "AI_STATUS_SERIOUS_MODE" || "$key" == "AI_STATUS_SESSION_WINDOWS" ]]; then
     case "${value,,}" in
       1|true|yes|on) printf 'true' ;;
       *) printf 'false' ;;
@@ -85,7 +85,7 @@ ai_status_load_env() {
     AI_STATUS_SOUND_ENABLED AI_STATUS_STALE_AFTER_SECONDS
     AI_STATUS_HIDE_DONE_AFTER_SECONDS AI_STATUS_IDLE_AFTER_SECONDS
     AI_STATUS_HIDE_STALE_AFTER_SECONDS AI_STATUS_THEME AI_STATUS_AGENTS
-    AI_STATUS_SERIOUS_MODE AI_STATUS_KLIPY_API_KEY
+    AI_STATUS_SERIOUS_MODE AI_STATUS_SESSION_WINDOWS AI_STATUS_KLIPY_API_KEY
   )
   local -A defaults=(
     [AI_STATUS_CACHE_DIR]='$HOME/.cache/ai-cli-status-monitor'
@@ -102,6 +102,7 @@ ai_status_load_env() {
     [AI_STATUS_THEME]='dark'
     [AI_STATUS_AGENTS]='claude,codex'
     [AI_STATUS_SERIOUS_MODE]='false'
+    [AI_STATUS_SESSION_WINDOWS]='true'
     [AI_STATUS_KLIPY_API_KEY]=''
   )
   local -A file_values=()
