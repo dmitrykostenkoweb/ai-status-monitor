@@ -31,7 +31,7 @@ The widget looks like a small dark floating card / mini-player:
 - on startup the same lockup is shown for ~3 seconds as an intro splash
 - when a newer version is published on GitHub, a small `update ↑` pill appears in the header (see [Updates](#7b-updates))
 - a compact usage section groups Claude Code 5-hour/weekly and Codex weekly utilization beside centered, clickable provider logos
-- right-click menu: `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
+- right-click menu: `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
 
 By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
 
@@ -134,6 +134,7 @@ Available variables:
 - `AI_STATUS_SOUND_ENABLED` — `true`/`false`, `yes`/`no`, `on`/`off` or `1`/`0`
 - `AI_STATUS_STALE_AFTER_SECONDS`, `AI_STATUS_HIDE_DONE_AFTER_SECONDS`, `AI_STATUS_IDLE_AFTER_SECONDS`, `AI_STATUS_HIDE_STALE_AFTER_SECONDS` — timeouts
 - `AI_STATUS_THEME` — theme name
+- `AI_STATUS_AGENTS` — which agents the widget shows: `claude,codex` (default, also `all`), `claude` or `codex`. Hidden agents get no rows, no usage bars, no sounds and no usage requests. The right-click `Show agents` menu changes it live and saves the choice to the runtime `.env` (a value exported in the process still wins on the next start)
 - `AI_STATUS_ENV_FILE` — path to a different runtime file; this variable must be exported in the process, it is not read from `.env`
 
 Example of a local override:
