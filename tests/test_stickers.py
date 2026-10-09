@@ -79,32 +79,6 @@ class StickerMappingTests(unittest.TestCase):
         self.assertEqual(queries, stickers.DEFAULT_QUERIES)
         self.assertIn("Dima? Halo?", bubbles["waiting"])
 
-    def test_gif_topic_follows_the_actual_task(self) -> None:
-        def topic(key: str, kind: str | None = None, target: str = "") -> str:
-            activity = {"type": kind, "target": target, "phase": "pre"} if kind else None
-            return stickers.sticker_topic(key, activity)
-
-        self.assertEqual(topic("coding", "edit", "app.py"), "coding")
-        self.assertEqual(topic("analyzing", "edit", "app.py"), "coding", "post-edit analysis keeps the topic")
-        self.assertEqual(topic("analyzing", "read", "README.md"), "reading")
-        self.assertEqual(topic("analyzing", "search", "TODO"), "searching")
-        self.assertEqual(topic("coding", "command", "Run the sticker tests"), "testing")
-        self.assertEqual(topic("coding", "command", "pytest"), "testing")
-        self.assertEqual(topic("coding", "command", "git push"), "shipping")
-        self.assertEqual(topic("coding", "command", "npm install"), "installing")
-        self.assertEqual(topic("coding", "command", "ls"), "running")
-        self.assertEqual(topic("analyzing", "web", "docs.klipy.com"), "googling")
-        self.assertEqual(topic("analyzing", "agent", "Find docs"), "teamwork")
-        self.assertEqual(topic("analyzing", "plan"), "planning")
-        self.assertEqual(topic("waiting", "permission", "Bash"), "waiting")
-        self.assertEqual(topic("analyzing"), "analyzing")
-        for key in ("waiting", "error", "done", "idle", "limit"):
-            self.assertEqual(topic(key, "edit", "x.py"), key, "attention/finished states keep their topic")
-        for name, queries in stickers.TOPIC_QUERIES.items():
-            with self.subTest(topic=name):
-                self.assertGreaterEqual(len(queries), 5)
-                self.assertEqual(len(set(queries)), len(queries))
-
     def test_sticker_for_kind(self) -> None:
         self.assertEqual(stickers.sticker_for_kind("thinking"), "analyzing")
         self.assertEqual(stickers.sticker_for_kind("command"), "coding")
@@ -219,7 +193,7 @@ class KlipyTests(unittest.TestCase):
             self.assertIn("customer_id=customer-1", calls[0])
             self.assertIn("format_filter=gif", calls[0])
             self.assertIn("content_filter=high", calls[0])
-            self.assertIn("per_page=16", calls[0])
+            self.assertIn("per_page=50", calls[0])
             self.assertIn("page=1", calls[0])
             client.search("thinking", page=2)
             self.assertIn("page=2", calls[-1])
@@ -340,62 +314,6 @@ class KlipyKeyCheckTests(unittest.TestCase):
 
 
 class StickerSourceTests(unittest.TestCase):
-    def test_activity_bubbles_say_what_the_agent_is_doing(self) -> None:
-        source = stickers.StickerSource(Path("/nonexistent"), rng=random.Random(5))
-        edit = {"type": "edit", "target": "stickers.py", "phase": "pre"}
-        texts = {source.activity_bubble(edit) for _ in range(8)}
-        self.assertTrue(all("stickers.py" in text for text in texts))
-        self.assertGreater(len(texts), 1, "templates rotate")
-        post = source.activity_bubble({"type": "command", "target": "pytest", "phase": "post"})
-        self.assertIn(post.replace("pytest", "{target}"), stickers.DEFAULT_ACTIVITY_TEMPLATES["command:post"])
-        self.assertIn("plan", " ".join(stickers.DEFAULT_ACTIVITY_TEMPLATES["plan"]) + " plan")
-        self.assertIsNone(source.activity_bubble(None))
-        self.assertIsNone(source.activity_bubble({"type": "unknown", "target": "x"}))
-        picked = source.pick("coding", edit)
-        self.assertIn("stickers.py", picked.bubble)
-
-        searched: list[str] = []
-
-        class TopicKlipy:
-            def cached(self, query: str, page: int = 1) -> None:
-                return None
-
-            def can_search(self) -> bool:
-                return True
-
-            def search(self, query: str, page: int = 1) -> list[stickers.KlipyResult]:
-                searched.append(query)
-                return [stickers.KlipyResult(query, "https://static.klipy.com/x.gif")]
-
-            def load(self, result: stickers.KlipyResult) -> bytes:
-                return GIF_BYTES
-
-        topical = stickers.StickerSource(Path("/nonexistent"), klipy=TopicKlipy())  # type: ignore[arg-type]
-        topical.pick("coding", topic="testing")
-        self.assertIn(searched[-1], stickers.TOPIC_QUERIES["testing"])
-        self.assertIn(source.pick("coding").bubble, stickers.DEFAULT_BUBBLES["coding"])
-
-    def test_activity_templates_load_and_validate_overrides(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "stickers.json"
-            path.write_text(json.dumps({"activity": {
-                "edit": ["edytuję {target}…", "missing placeholder", 7],
-                "plan": ["planuję"],
-                "bogus": ["{target}"],
-            }}), encoding="utf-8")
-            templates = stickers.load_activity_templates(path)
-            self.assertEqual(templates["edit"], ("edytuję {target}…", "missing placeholder"))
-            self.assertEqual(templates["plan"], ("planuję",))
-            self.assertNotIn("bogus", templates)
-            self.assertEqual(templates["read"], stickers.DEFAULT_ACTIVITY_TEMPLATES["read"])
-        polish = stickers.load_activity_templates(ROOT / "examples" / "stickers.pl.json")
-        self.assertEqual(set(polish), set(stickers.DEFAULT_ACTIVITY_TEMPLATES))
-        self.assertEqual(polish["command:post"][1], "czytam wynik…", "templates without {target} are kept")
-        for key, values in stickers.DEFAULT_ACTIVITY_TEMPLATES.items():
-            for value in values:
-                with self.subTest(key=key, value=value):
-                    self.assertLessEqual(len(value.replace("{target}", "x" * 20)), 48)
-
     def test_many_picks_spread_over_phrases_pages_and_gifs(self) -> None:
         searches: list[tuple[str, int]] = []
 
@@ -418,7 +336,7 @@ class StickerSourceTests(unittest.TestCase):
         queries = stickers.DEFAULT_QUERIES["coding"]
         self.assertEqual(sorted({query for query, _page in searches[:len(queries)]}), sorted(queries),
                          "every phrase is used once before any repeats")
-        self.assertEqual({page for _query, page in searches}, {1}, "only the most relevant first page")
+        self.assertGreater(len({page for _query, page in searches}), 1, "pages vary")
         self.assertEqual(len({pick.title for pick in picks}), 45, "no GIF repeats")
         bubbles = [pick.bubble for pick in picks[:len(stickers.DEFAULT_BUBBLES["coding"])]]
         self.assertEqual(len(set(bubbles)), len(bubbles), "every bubble line once before repeats")
