@@ -496,6 +496,14 @@ class StickerOverlay(Gtk.Window):
         if not sticky and hold_ms is not None:
             self.hold_source = GLib.timeout_add(hold_ms, self.on_hold_done)
 
+    def set_key(self, key: str) -> None:
+        """Recolour the bubble for a new status without changing the GIF."""
+        color = stickers.STICKER_COLORS.get(key, self.color)
+        if self.choice is not None and color != self.color:
+            self.color = color
+            self.choice = dataclasses.replace(self.choice, key=key)
+            self.area.queue_draw()
+
     def set_bubble(self, text: str) -> None:
         """Swap the speech-bubble text in place (no pop animation, same GIF)."""
         if self.choice is not None and text and text != self.choice.bubble:
@@ -683,6 +691,10 @@ class StickerOverlay(Gtk.Window):
 # card's sticker (which sticks out 78 px above its card) does not cover the card above.
 SESSION_CARD_GAP = 88
 SESSION_CARD_TITLE = "AI agent session"
+# A new task is shown in the bubble this long, then a funny line takes over.
+ACTIVITY_BUBBLE_SECONDS = 5
+# A session window swaps its GIF for a new topic (edit → tests → git push…) at most this often.
+SESSION_GIF_MIN_SECONDS = 15
 
 
 class SessionCard(Gtk.Window):
@@ -735,7 +747,12 @@ class SessionCard(Gtk.Window):
         self.floating = False
         self.closed = False
         self.sticker_key: str | None = None
+        self.sticker_topic: str | None = None
+        self.last_pick_at = 0.0
         self.activity_signature = "null"
+        self.activity_text: str | None = None
+        self.activity_until = 0.0
+        self.bubble_source: int | None = None
         self.sticker_request = 0
         self.sticker_debounce: int | None = None
         self.rotate_source: int | None = None
@@ -769,26 +786,63 @@ class SessionCard(Gtk.Window):
         self.update_sticker()
 
     def update_sticker(self) -> None:
-        """Keep the sticker in step with the session: new GIF on a new sticker status,
-        tucked away when done/idle or in Serious mode."""
+        """Keep the sticker in step with the session.
+
+        - The GIF follows the *topic* of what the agent is doing (editing → hackers typing,
+          tests → fingers crossed…). It changes on a new topic at most every
+          SESSION_GIF_MIN_SECONDS, so the per-tool coding ↔ analyzing flip-flop does not
+          reshuffle GIFs; waiting/error switch at once.
+        - The bubble shows a new task for ACTIVITY_BUBBLE_SECONDS, then a funny line.
+        - Done/idle (or Serious mode) tucks the sticker away.
+        """
         session = self.session
         key = stickers.sticker_for_kind(session["kind"]) if session is not None else None
         if self.owner.serious_mode or key in (None, "done", "idle"):
             self.clear_sticker()
             return
         activity = session.get("activity") if session is not None else None
-        activity_signature = json.dumps(activity, sort_keys=True)
-        if key == self.sticker_key:
-            if activity_signature != self.activity_signature:
-                # Same GIF, but say what the agent is doing now.
-                self.activity_signature = activity_signature
-                text = self.owner.sticker_source.activity_bubble(activity)
-                if text and self.overlay is not None and self.overlay.visible:
-                    self.overlay.set_bubble(text)
-            return
+        activity_signature = json.dumps([activity.get("type"), activity.get("target")]) if activity else "null"
+        if activity_signature != self.activity_signature:
+            self.activity_signature = activity_signature
+            if activity:
+                self.show_activity_bubble(activity)
+
+        topic = stickers.sticker_topic(key, activity)
+        previous_key = self.sticker_key
+        now = time.monotonic()
+        attention_change = previous_key != key and (key in stickers.STICKY_KEYS or previous_key in stickers.STICKY_KEYS)
+        topic_change = topic != self.sticker_topic and now - self.last_pick_at >= SESSION_GIF_MIN_SECONDS
         self.sticker_key = key
-        self.activity_signature = activity_signature
-        self.request_sticker(key)
+        if self.overlay is not None and self.overlay.visible:
+            self.overlay.set_key(key)  # bubble colour follows the live status
+        if previous_key is None or attention_change or topic_change:
+            self.sticker_topic = topic
+            self.request_sticker(key)
+
+    def show_activity_bubble(self, activity: dict[str, str]) -> None:
+        """Say what the agent is doing for a few seconds, then go back to a funny line."""
+        text = self.owner.sticker_source.activity_bubble(activity)
+        if not text:
+            return
+        self.activity_text = text
+        self.activity_until = time.monotonic() + ACTIVITY_BUBBLE_SECONDS
+        if self.overlay is not None and self.overlay.visible:
+            self.overlay.set_bubble(text)
+        if self.bubble_source is not None:
+            GLib.source_remove(self.bubble_source)
+        self.bubble_source = GLib.timeout_add_seconds(ACTIVITY_BUBBLE_SECONDS, self.on_activity_bubble_done)
+
+    def on_activity_bubble_done(self) -> bool:
+        self.bubble_source = None
+        self.activity_text = None
+        if self.overlay is not None and self.overlay.visible and self.sticker_key is not None:
+            self.overlay.set_bubble(self.owner.sticker_source.bubble(self.sticker_key))
+        return False
+
+    def current_bubble(self, fallback: str) -> str:
+        if self.activity_text and time.monotonic() < self.activity_until:
+            return self.activity_text
+        return fallback
 
     def request_sticker(self, key: str) -> None:
         if self.overlay is None:
@@ -796,16 +850,17 @@ class SessionCard(Gtk.Window):
         if self.sticker_debounce is not None:
             GLib.source_remove(self.sticker_debounce)
         self.sticker_request += 1
+        self.last_pick_at = time.monotonic()
         request = self.sticker_request
         source = self.owner.sticker_source
+        topic = self.sticker_topic or key
 
         def pick_in_background() -> bool:
             self.sticker_debounce = None
-            activity = self.session.get("activity") if self.session is not None else None
 
             def worker() -> None:
                 try:
-                    choice = source.pick(key, activity)
+                    choice = source.pick(key, topic=topic)
                 except Exception as error:  # never let a sticker take the widget down
                     log(f"sticker: pick failed: {error}")
                     choice = stickers.StickerChoice(key, None, "", "placeholder")
@@ -819,8 +874,10 @@ class SessionCard(Gtk.Window):
     def apply_sticker(self, request: int, choice: stickers.StickerChoice) -> bool:
         if self.closed or self.overlay is None or request != self.sticker_request or self.owner.serious_mode:
             return False
-        log(f"sticker: {self.session_id} {choice.key} from {choice.source}"
+        log(f"sticker: {self.session_id} {choice.key} [{self.sticker_topic}] from {choice.source}"
             + f" ({choice.label})")
+        key = self.sticker_key or choice.key
+        choice = dataclasses.replace(choice, key=key, bubble=self.current_bubble(choice.bubble))
         self.place_overlay()
         self.overlay.present_sticker(choice, sticky=True)
         self.schedule_rotation()
@@ -850,6 +907,7 @@ class SessionCard(Gtk.Window):
     def clear_sticker(self) -> None:
         self.stop_rotation()
         self.sticker_key = None
+        self.sticker_topic = None
         self.sticker_request += 1
         if self.sticker_debounce is not None:
             GLib.source_remove(self.sticker_debounce)
@@ -860,6 +918,7 @@ class SessionCard(Gtk.Window):
     def refresh_sticker(self) -> None:
         """Re-pick after Serious mode was turned off or the GIF source changed."""
         self.sticker_key = None
+        self.sticker_topic = None
         self.update_sticker()
 
     def place_overlay(self) -> None:
@@ -921,7 +980,7 @@ class SessionCard(Gtk.Window):
         if self.closed:
             return
         self.closed = True
-        for name in ("sticker_debounce", "save_source", "rotate_source"):
+        for name in ("sticker_debounce", "save_source", "rotate_source", "bubble_source"):
             source = getattr(self, name)
             if source is not None:
                 GLib.source_remove(source)
@@ -2773,7 +2832,7 @@ class StatusWidget(Gtk.Window):
 
             def worker() -> None:
                 try:
-                    choice = source.pick(key, activity)
+                    choice = source.pick(key, activity, topic=stickers.sticker_topic(key, activity))
                 except Exception as error:  # never let a sticker take the widget down
                     log(f"sticker: pick failed: {error}")
                     choice = stickers.StickerChoice(key, None, "", "placeholder")

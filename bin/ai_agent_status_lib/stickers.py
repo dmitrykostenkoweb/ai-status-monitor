@@ -150,6 +150,76 @@ DEFAULT_QUERIES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# GIF topics picked from what the agent is actually doing (see `sticker_topic`), so the GIF
+# matches the task: editing → hackers typing, tests → fingers crossed, git push → ship it…
+TOPIC_QUERIES: dict[str, tuple[str, ...]] = {
+    "reading": (
+        "nerd reading", "reading meme", "reading glasses meme", "studying meme", "spongebob reading",
+        "book worm meme", "speed reading meme", "reading intensifies",
+    ),
+    "searching": (
+        "magnifying glass meme", "detective searching", "searching meme", "looking for meme", "where is it meme",
+        "confused travolta", "sherlock magnifying glass", "looking around meme",
+    ),
+    "testing": (
+        "fingers crossed meme", "please work meme", "praying meme", "nervous meme", "mad scientist meme",
+        "science experiment meme", "it works meme", "testing meme",
+    ),
+    "shipping": (
+        "ship it meme", "rocket launch meme", "send it meme", "deploy meme", "here we go meme", "yolo meme",
+    ),
+    "installing": (
+        "loading meme", "cat loading", "downloading meme", "buffering meme", "progress bar meme", "installing meme",
+    ),
+    "running": (
+        "hackerman", "lets go meme", "launching meme", "here we go meme", "engage meme", "running code meme",
+    ),
+    "googling": (
+        "googling meme", "google it meme", "browsing internet meme", "surfing the web meme", "typing googling",
+    ),
+    "teamwork": (
+        "minions working", "teamwork meme", "avengers assemble", "minions meme", "delegating meme",
+        "team work makes the dream work",
+    ),
+    "planning": (
+        "checklist meme", "planning meme", "to do list meme", "big plans meme", "strategy meme", "plan meme",
+    ),
+}
+
+TEST_WORDS = ("test", "pytest", "jest", "vitest", "spec", "unittest", "check")
+SHIP_WORDS = ("push", "deploy", "release", "publish", "commit", "merge", "tag")
+INSTALL_WORDS = ("install", "build", "compile", "pip", "npm i", "npm ci", "apt", "brew", "cargo", "make")
+
+
+def sticker_topic(key: str, activity: Mapping[str, str] | None) -> str:
+    """Which GIF topic fits right now: the agent's actual task, falling back to the sticker key.
+
+    Statuses that need attention or are over (waiting, error, done, idle, limit) keep their
+    own topic; while working, the activity (edit, read, tests, git push…) decides.
+    """
+    if key in ("waiting", "error", "done", "idle", "limit") or not activity:
+        return key
+    kind = activity.get("type", "")
+    target = activity.get("target", "").lower()
+    if kind == "command":
+        if any(word in target for word in TEST_WORDS):
+            return "testing"
+        if any(word in target for word in SHIP_WORDS):
+            return "shipping"
+        if any(word in target for word in INSTALL_WORDS):
+            return "installing"
+        return "running"
+    return {
+        "edit": "coding",
+        "read": "reading",
+        "search": "searching",
+        "web": "googling",
+        "agent": "teamwork",
+        "plan": "planning",
+        "permission": "waiting",
+    }.get(kind, key)
+
+
 # Speech-bubble templates that say what the agent is doing right now ({target} comes from
 # the hook's activity: a file name, a command or its description, a search pattern…).
 # A "<type>:post" entry is used right after the tool finished; it falls back to "<type>".
@@ -210,7 +280,8 @@ def load_sticker_texts(path: Path) -> tuple[dict[str, tuple[str, ...]], dict[str
         if not isinstance(overrides, dict):
             continue
         for key, values in overrides.items():
-            if key not in STICKER_KEYS or not isinstance(values, list):
+            allowed = STICKER_KEYS if section == "bubbles" else (*STICKER_KEYS, *TOPIC_QUERIES)
+            if key not in allowed or not isinstance(values, list):
                 continue
             cleaned = tuple(value.strip() for value in values if isinstance(value, str) and value.strip())
             if cleaned:
@@ -602,10 +673,10 @@ class StickerSource:
         return template.replace("{target}", activity.get("target", ""))
 
     def klipy_results(self, key: str) -> list[KlipyResult]:
-        """A fresh search (new phrase, random page) while under the hourly budget,
-        otherwise everything already fetched for this sticker."""
+        """A fresh search (next phrase of the topic) while under the hourly budget,
+        otherwise everything already fetched for this topic."""
         assert self.klipy is not None
-        queries = self.queries.get(key) or DEFAULT_QUERIES.get(key, ())
+        queries = self.queries.get(key) or DEFAULT_QUERIES.get(key) or TOPIC_QUERIES.get(key, ())
         if not queries:
             return []
         query = self.phrases.draw(key, queries)
@@ -633,9 +704,10 @@ class StickerSource:
         chosen = self.recent.pick(list(pool))
         return pool[chosen] if chosen is not None else None
 
-    def pick(self, key: str, activity: Mapping[str, str] | None = None) -> StickerChoice:
+    def pick(self, key: str, activity: Mapping[str, str] | None = None, topic: str | None = None) -> StickerChoice:
+        """GIF for `topic` (defaults to the sticker key); bubble about `activity` or a funny line."""
         bubble = self.activity_bubble(activity) or self.bubble(key)
-        klipy = self.pick_klipy(key)
+        klipy = self.pick_klipy(topic or key)
         if klipy is not None:
             data, slug = klipy
             return StickerChoice(key, None, bubble, "klipy", data=data, title=slug)

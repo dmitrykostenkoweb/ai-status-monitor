@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-10-09
+
+### Changed
+
+- Sticker bubbles mix both: a new task from Claude/Codex is shown for 5 seconds, then a funny line until the next task.
+- GIFs now match the task: editing, reading, searching, tests, `git push`, installs/builds, web, sub-agents, to-do updates and permission requests each have their own meme topic. A session window changes GIF only on a new topic (at most every 15 s; waiting/error at once), so the coding ↔ analyzing flip after every tool call no longer reshuffles GIFs.
+
 ## [0.3.6] - 2026-10-09
 
 ### Added
@@ -77,7 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove the widget toggle command and launcher in favor of the explicit start and stop helpers.
 
-[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/1068ad7...HEAD
+[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/f59c6b8...HEAD
+[0.3.7]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/1068ad7...f59c6b8
 [0.3.6]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/a24f26f...1068ad7
 [0.3.5]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/d7003b8...a24f26f
 [0.3.4]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/466f5b8...d7003b8
