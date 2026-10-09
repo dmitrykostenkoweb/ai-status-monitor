@@ -11,6 +11,7 @@ import json
 import random
 import threading
 import time
+from collections import deque
 import urllib.parse
 import urllib.request
 import uuid
@@ -55,122 +56,99 @@ LIMIT_THRESHOLD_PERCENT = 90.0
 # Speech-bubble lines per sticker (short: the bubble wraps at ~18 characters per line).
 DEFAULT_BUBBLES: dict[str, tuple[str, ...]] = {
     "analyzing": (
-        "hmm… 2 + 2 = ?",
-        "hold on, thinking…",
-        "let me read that…",
-        "reading the docs. for once.",
-        "connecting the dots…",
-        "big brain time",
-        "wait, why does this work?",
-        "following the stack trace",
-        "grep, grep, grep…",
-        "it's all making sense now",
-        "plotting a cunning plan",
-        "one more file, I promise",
-        "squinting at your code",
-        "loading genius.exe",
+        "hmm… 2 + 2 = ?", "hold on, thinking…", "let me read that…", "reading the docs. for once.",
+        "connecting the dots…", "big brain time", "wait, why does this work?", "following the stack trace",
+        "grep, grep, grep…", "it's all making sense now", "plotting a cunning plan", "one more file, I promise",
+        "squinting at your code", "loading genius.exe", "who wrote this? oh. me.", "consulting the rubber duck",
+        "enhance… enhance…", "reading between the lines", "so many tabs open", "deep in the call stack",
+        "detective mode: on", "hmm, interesting…",
     ),
     "coding": (
-        "typing, typing!",
-        "shipping code, do not disturb",
-        "keyboard go brrr",
-        "it compiles in my head",
-        "refactoring like a pro",
-        "adding just one more feature",
-        "trust me, I'm an AI",
-        "writing tests. probably.",
-        "deleting more than I add",
-        "copy, paste, improve",
-        "in the zone 🔥",
-        "this diff is beautiful",
-        "semicolons everywhere",
-        "running it… fingers crossed",
+        "typing, typing!", "shipping code, do not disturb", "keyboard go brrr", "it compiles in my head",
+        "refactoring like a pro", "adding just one more feature", "trust me, I'm an AI", "writing tests. probably.",
+        "deleting more than I add", "copy, paste, improve", "in the zone 🔥", "this diff is beautiful",
+        "semicolons everywhere", "running it… fingers crossed", "hold my coffee", "making the linter happy",
+        "art, not code", "naming things is hard", "tiny commits, big dreams", "fixing yesterday's me",
+        "hacker voice: I'm in", "lines go up",
     ),
     "waiting": (
-        "hello? anyone there?",
-        "your turn!",
-        "need a yes from you",
-        "knock knock 👀",
-        "may I? pretty please?",
-        "waiting for the boss",
-        "press Enter, I dare you",
-        "I'll just wait here…",
-        "permission to proceed?",
-        "ping! you there?",
-        "the suspense is killing me",
-        "coffee break? I'll wait.",
-        "one click and I'm off",
+        "hello? anyone there?", "your turn!", "need a yes from you", "knock knock 👀", "may I? pretty please?",
+        "waiting for the boss", "press Enter, I dare you", "I'll just wait here…", "permission to proceed?",
+        "ping! you there?", "the suspense is killing me", "coffee break? I'll wait.", "one click and I'm off",
+        "blink twice if you agree", "*taps desk*", "still here. still waiting.", "I brought snacks. approve?",
+        "your call, captain", "awaiting orders", "don't leave me hanging",
     ),
     "done": (
-        "done!",
-        "I deserve a coffee",
-        "ta-da!",
-        "mic drop 🎤",
-        "nailed it",
-        "ship it! 🚀",
-        "all green, my friend",
-        "another one bites the dust",
-        "easy peasy",
-        "task complete. high five?",
-        "look ma, no bugs!",
-        "your move, human",
-        "and that's a wrap",
+        "done!", "I deserve a coffee", "ta-da!", "mic drop 🎤", "nailed it", "ship it! 🚀", "all green, my friend",
+        "another one bites the dust", "easy peasy", "task complete. high five?", "look ma, no bugs!",
+        "your move, human", "and that's a wrap", "victory lap time", "chef's kiss 👌", "flawless victory",
+        "achievement unlocked", "boom. done.", "time for a break", "nothing left to fix. today.",
     ),
     "error": (
-        "this is fine.",
-        "everything is under control.",
-        "well… that broke",
-        "oops. that was not me.",
-        "it worked on my machine",
-        "the server said no",
-        "let's pretend that didn't happen",
-        "plot twist!",
-        "error 418: I'm a teapot",
-        "a small fire. nothing serious.",
-        "the logs are not happy",
-        "have you tried turning it off and on?",
+        "this is fine.", "everything is under control.", "well… that broke", "oops. that was not me.",
+        "it worked on my machine", "the server said no", "let's pretend that didn't happen", "plot twist!",
+        "error 418: I'm a teapot", "a small fire. nothing serious.", "the logs are not happy",
+        "have you tried turning it off and on?", "houston, we have a problem", "red is my new favorite color",
+        "nobody panic", "stack trace says hi", "that escalated quickly", "I can explain…", "ctrl+z, anyone?",
+        "brb, debugging",
     ),
     "limit": (
-        "save your tokens, friend",
-        "running on fumes",
-        "token diet starts now",
-        "almost out of juice 🔋",
-        "spend wisely",
-        "limits, limits everywhere",
-        "maybe take a walk?",
-        "rationing my words",
-        "the meter is ticking",
+        "save your tokens, friend", "running on fumes", "token diet starts now", "almost out of juice 🔋",
+        "spend wisely", "limits, limits everywhere", "maybe take a walk?", "rationing my words", "the meter is ticking",
+        "low battery mode", "budget meeting needed", "every token counts", "running out of words",
+        "time to touch grass?",
     ),
     "idle": (
-        "zzz…",
-        "still here, just napping",
-        "wake me up when you need me",
-        "dreaming of clean code",
-        "on standby",
-        "it's quiet… too quiet",
-        "counting electric sheep",
-        "taking five",
-        "lunch break?",
+        "zzz…", "still here, just napping", "wake me up when you need me", "dreaming of clean code", "on standby",
+        "it's quiet… too quiet", "counting electric sheep", "taking five", "lunch break?", "screensaver mode",
+        "waiting for inspiration", "ready when you are", "just chilling", "stretching my neurons",
     ),
 }
 
-# KLIPY search phrases per sticker; one is chosen at random for each new search.
+# KLIPY search phrases per sticker. They are dealt like a shuffled deck (every phrase once
+# before any repeats) and each search asks for a random page, so GIFs rarely come back.
 DEFAULT_QUERIES: dict[str, tuple[str, ...]] = {
-    "analyzing": ("thinking", "calculating", "hmm", "math lady", "detective", "confused", "galaxy brain", "reading"),
-    "coding": ("typing fast", "hacker", "cat keyboard", "programmer", "coding", "busy working", "matrix", "speed typing"),
-    "waiting": ("waiting", "skeleton waiting", "hello is anyone there", "tapping fingers", "dog waiting door",
-                "still waiting", "knock knock", "impatient"),
-    "done": ("victory dance", "nailed it", "celebration", "mic drop", "success kid", "high five", "mission accomplished",
-             "happy dance"),
-    "error": ("this is fine", "explosion", "fail", "facepalm", "oops", "everything is fine fire", "panic", "computer crash"),
-    "limit": ("low battery", "running on empty", "out of fuel", "tired", "exhausted", "empty wallet"),
-    "idle": ("sleeping", "tumbleweed", "bored", "sleeping cat", "nap time", "yawn", "waiting forever"),
+    "analyzing": (
+        "thinking", "calculating", "hmm", "math lady", "detective", "confused", "galaxy brain", "reading",
+        "sherlock", "investigating", "mind blown", "processing", "let me think", "nerd", "magnifying glass",
+    ),
+    "coding": (
+        "typing fast", "hacker", "cat keyboard", "programmer", "coding", "busy working", "matrix", "speed typing",
+        "developer", "working hard", "keyboard smash", "computer work", "in the zone", "multitasking", "focus",
+    ),
+    "waiting": (
+        "waiting", "skeleton waiting", "hello is anyone there", "tapping fingers", "dog waiting door",
+        "still waiting", "knock knock", "impatient", "bored waiting", "hurry up", "anybody home", "checking watch",
+        "please", "staring", "waiting patiently",
+    ),
+    "done": (
+        "victory dance", "nailed it", "celebration", "mic drop", "success kid", "high five", "mission accomplished",
+        "happy dance", "we did it", "thumbs up", "applause", "party", "winning", "cheers", "fist pump",
+    ),
+    "error": (
+        "this is fine", "explosion", "fail", "facepalm", "oops", "everything is fine fire", "panic",
+        "computer crash", "disaster", "epic fail", "oh no", "chaos", "screaming", "shocked", "broken",
+    ),
+    "limit": (
+        "low battery", "running on empty", "out of fuel", "tired", "exhausted", "empty wallet", "no money",
+        "out of energy", "running out of time", "sleepy", "dead battery", "broke",
+    ),
+    "idle": (
+        "sleeping", "tumbleweed", "bored", "sleeping cat", "nap time", "yawn", "waiting forever", "relax",
+        "chilling", "lazy", "sloth", "zzz",
+    ),
 }
 
 IMAGE_SUFFIXES = (".gif", ".webp", ".png", ".jpg", ".jpeg")
 
 KLIPY_API_BASE = "https://api.klipy.com/api/v1"
-KLIPY_PER_PAGE = 24
+KLIPY_PER_PAGE = 50
+# A random page of 1..KLIPY_PAGES is requested, so one phrase can yield up to 150 GIFs.
+KLIPY_PAGES = 3
+# Self-imposed cap on new searches (cached ones are free) below the test key's 100/hour.
+KLIPY_SEARCHES_PER_HOUR = 60
+# How many recently shown GIFs (across all stickers and windows) are never re-picked.
+RECENT_GIF_MEMORY = 200
 # Search responses (lists of URLs, not media) are reused for a while to spare the API.
 KLIPY_RESULTS_TTL_SECONDS = 60 * 60
 KLIPY_MAX_DOWNLOAD_BYTES = 6 * 1024 * 1024
@@ -220,20 +198,62 @@ def is_image_file(head: bytes) -> bool:
     )
 
 
-class NoRepeatChooser:
-    """Random choice that never returns the same item twice in a row for a given key."""
+class ShuffleBag:
+    """Deals every item once in random order before any item repeats (per key).
+
+    When a bag is refilled, the next first item is never the one just dealt, so even a
+    two-item list alternates instead of repeating.
+    """
 
     def __init__(self, rng: random.Random | None = None) -> None:
         self.rng = rng or random.Random()
+        self.bags: dict[str, list[str]] = {}
+        self.signatures: dict[str, tuple[str, ...]] = {}
         self.last: dict[str, str] = {}
 
-    def choose(self, key: str, items: list[str]) -> str | None:
+    def draw(self, key: str, items: tuple[str, ...] | list[str]) -> str | None:
+        items = tuple(dict.fromkeys(items))
         if not items:
             return None
-        candidates = [item for item in items if item != self.last.get(key)] or items
-        chosen = self.rng.choice(candidates)
+        if self.signatures.get(key) != items or not self.bags.get(key):
+            bag = list(items)
+            self.rng.shuffle(bag)
+            if len(bag) > 1 and bag[-1] == self.last.get(key):
+                bag[0], bag[-1] = bag[-1], bag[0]
+            self.bags[key] = bag
+            self.signatures[key] = items
+        chosen = self.bags[key].pop()
         self.last[key] = chosen
         return chosen
+
+
+class RecentMemory:
+    """Remembers recently shown items and prefers ones not seen lately.
+
+    `pick()` chooses randomly among items not in the memory; when every candidate was
+    shown recently it falls back to the one shown longest ago.
+    """
+
+    def __init__(self, size: int = RECENT_GIF_MEMORY, rng: random.Random | None = None) -> None:
+        self.rng = rng or random.Random()
+        self.recent: deque[str] = deque(maxlen=size)
+        self.lock = threading.Lock()
+
+    def pick(self, items: list[str]) -> str | None:
+        if not items:
+            return None
+        with self.lock:
+            seen = set(self.recent)
+            fresh = [item for item in items if item not in seen]
+            if fresh:
+                chosen = self.rng.choice(fresh)
+            else:
+                order = {item: index for index, item in enumerate(self.recent)}
+                chosen = min(items, key=lambda item: order.get(item, -1))
+            if chosen in self.recent:
+                self.recent.remove(chosen)
+            self.recent.append(chosen)
+            return chosen
 
 
 def local_pool(gifs_dir: Path, key: str) -> list[Path]:
@@ -341,12 +361,14 @@ class KlipyClient:
         self.opener = opener
         self.clock = clock
         self.timeout = timeout
-        self.results: dict[str, tuple[float, list[KlipyResult]]] = {}
+        self.results: dict[tuple[str, int], tuple[float, list[KlipyResult]]] = {}
+        self.search_times: deque[float] = deque()
         self.lock = threading.Lock()
 
-    def search_url(self, query: str) -> str:
+    def search_url(self, query: str, page: int = 1) -> str:
         params = urllib.parse.urlencode({
             "q": query,
+            "page": page,
             "per_page": KLIPY_PER_PAGE,
             "customer_id": self.customer_id,
             "content_filter": "high",
@@ -363,20 +385,48 @@ class KlipyClient:
             raise ValueError("response too large")
         return body
 
-    def search(self, query: str) -> list[KlipyResult]:
+    def cached(self, query: str, page: int = 1) -> list[KlipyResult] | None:
+        with self.lock:
+            entry = self.results.get((query, page))
+            if entry is not None and self.clock() - entry[0] < KLIPY_RESULTS_TTL_SECONDS:
+                return entry[1]
+            return None
+
+    def cached_for(self, queries: tuple[str, ...] | list[str]) -> list[KlipyResult]:
+        """Every still-fresh cached result for any of these phrases (any page)."""
+        wanted = set(queries)
+        now = self.clock()
+        merged: dict[str, KlipyResult] = {}
+        with self.lock:
+            for (query, _page), (fetched, results) in self.results.items():
+                if query in wanted and now - fetched < KLIPY_RESULTS_TTL_SECONDS:
+                    for result in results:
+                        merged.setdefault(result.id, result)
+        return list(merged.values())
+
+    def can_search(self) -> bool:
+        """True while fewer than KLIPY_SEARCHES_PER_HOUR new searches ran in the last hour."""
         now = self.clock()
         with self.lock:
-            cached = self.results.get(query)
-            if cached is not None and now - cached[0] < KLIPY_RESULTS_TTL_SECONDS:
-                return cached[1]
+            while self.search_times and now - self.search_times[0] >= 3600:
+                self.search_times.popleft()
+            return len(self.search_times) < KLIPY_SEARCHES_PER_HOUR
+
+    def search(self, query: str, page: int = 1) -> list[KlipyResult]:
+        cached = self.cached(query, page)
+        if cached is not None:
+            return cached
+        now = self.clock()
+        with self.lock:
+            self.search_times.append(now)
         try:
-            payload = json.loads(self._get(self.search_url(query), 2 * 1024 * 1024).decode("utf-8"))
+            payload = json.loads(self._get(self.search_url(query, page), 2 * 1024 * 1024).decode("utf-8"))
             results = parse_klipy_search(payload)
         except Exception:
             # Never surface the URL: it contains the API key.
             raise RuntimeError("KLIPY search failed") from None
         with self.lock:
-            self.results[query] = (now, results)
+            self.results[(query, page)] = (now, results)
         return results
 
     def load(self, result: KlipyResult) -> bytes:
@@ -425,24 +475,41 @@ class StickerSource:
         self.queries = dict(queries or DEFAULT_QUERIES)
         self.klipy = klipy
         self.rng = rng or random.Random()
-        self.images = NoRepeatChooser(self.rng)
-        self.texts = NoRepeatChooser(self.rng)
+        # Shared by every sticker and session window: no GIF comes back until ~200 others did.
+        self.recent = RecentMemory(rng=self.rng)
+        self.texts = ShuffleBag(self.rng)
+        self.phrases = ShuffleBag(self.rng)
         self.log = log or (lambda _message: None)
 
     def bubble(self, key: str) -> str:
-        return self.texts.choose(key, list(self.bubbles.get(key, ()))) or ""
+        return self.texts.draw(key, self.bubbles.get(key, ())) or ""
+
+    def klipy_results(self, key: str) -> list[KlipyResult]:
+        """A fresh search (new phrase, random page) while under the hourly budget,
+        otherwise everything already fetched for this sticker."""
+        assert self.klipy is not None
+        queries = self.queries.get(key) or DEFAULT_QUERIES.get(key, ())
+        if not queries:
+            return []
+        query = self.phrases.draw(key, queries)
+        page = self.rng.randint(1, KLIPY_PAGES)
+        cached = self.klipy.cached(query, page)
+        if cached is not None:
+            return cached
+        if self.klipy.can_search():
+            results = self.klipy.search(query, page)
+            if results or page == 1:
+                return results
+            return self.klipy.search(query, 1)  # past the last page of a niche phrase
+        self.log("sticker: KLIPY hourly search budget used up; reusing earlier results")
+        return self.klipy.cached_for(queries)
 
     def pick_klipy(self, key: str) -> tuple[bytes, str] | None:
         if self.klipy is None:
             return None
-        queries = self.queries.get(key) or DEFAULT_QUERIES.get(key, ())
-        if not queries:
-            return None
-        query = self.rng.choice(list(queries))
         try:
-            results = self.klipy.search(query)
-            by_id = {result.id: result for result in results}
-            chosen = self.images.choose(key, list(by_id))
+            by_id = {result.id: result for result in self.klipy_results(key)}
+            chosen = self.recent.pick(list(by_id))
             return (self.klipy.load(by_id[chosen]), chosen) if chosen is not None else None
         except Exception as error:
             self.log(f"sticker: {error}; using the local GIF pool")
@@ -450,7 +517,7 @@ class StickerSource:
 
     def pick_local(self, key: str) -> Path | None:
         pool = {str(path): path for path in local_pool(self.gifs_dir, key)}
-        chosen = self.images.choose(key, list(pool))
+        chosen = self.recent.pick(list(pool))
         return pool[chosen] if chosen is not None else None
 
     def pick(self, key: str) -> StickerChoice:

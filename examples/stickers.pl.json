@@ -12,7 +12,15 @@
       "mózg na pełnych obrotach",
       "zaraz wszystko będzie jasne",
       "mrużę oczy nad twoim kodem",
-      "mam plan. chyba."
+      "mam plan. chyba.",
+      "kto to napisał? a, ja.",
+      "pytam gumową kaczkę",
+      "przybliż… jeszcze…",
+      "czytam między wierszami",
+      "za dużo otwartych kart",
+      "głęboko w stosie wywołań",
+      "tryb detektywa: włączony",
+      "hmm, ciekawe…"
     ],
     "coding": [
       "piszę, piszę!",
@@ -26,7 +34,15 @@
       "kasuję więcej, niż dodaję",
       "jestem w strefie 🔥",
       "ten diff jest piękny",
-      "odpalam… trzymaj kciuki"
+      "odpalam… trzymaj kciuki",
+      "potrzymaj mi kawę",
+      "uszczęśliwiam lintera",
+      "to sztuka, nie kod",
+      "nazywanie rzeczy jest trudne",
+      "małe commity, wielkie marzenia",
+      "naprawiam wczorajszego siebie",
+      "hakerski szept: jestem w środku",
+      "linijki rosną"
     ],
     "waiting": [
       "Dima? Halo?",
@@ -40,7 +56,14 @@
       "to ja tu sobie poczekam…",
       "ping! jesteś?",
       "napięcie rośnie",
-      "jedno kliknięcie i lecę"
+      "jedno kliknięcie i lecę",
+      "mrugnij dwa razy, jeśli tak",
+      "*stuka w biurko*",
+      "dalej tu jestem. dalej czekam.",
+      "przyniosłem przekąski. zgoda?",
+      "decyzja należy do ciebie",
+      "czekam na rozkazy",
+      "nie zostawiaj mnie tak"
     ],
     "done": [
       "gotowe!",
@@ -54,7 +77,14 @@
       "przybij piątkę?",
       "patrz, zero bugów!",
       "twój ruch, człowieku",
-      "i to by było na tyle"
+      "i to by było na tyle",
+      "runda honorowa",
+      "palce lizać 👌",
+      "bezbłędne zwycięstwo",
+      "osiągnięcie odblokowane",
+      "bum. zrobione.",
+      "czas na przerwę",
+      "nie ma już co naprawiać. na dziś."
     ],
     "error": [
       "jest dobrze. chyba.",
@@ -67,7 +97,15 @@
       "zwrot akcji!",
       "mały pożar. nic poważnego.",
       "logi nie są zadowolone",
-      "próbowałeś wyłączyć i włączyć?"
+      "próbowałeś wyłączyć i włączyć?",
+      "houston, mamy problem",
+      "czerwony to mój ulubiony kolor",
+      "bez paniki",
+      "stack trace pozdrawia",
+      "szybko się to rozkręciło",
+      "mogę to wyjaśnić…",
+      "ctrl+z, ktoś?",
+      "zaraz wracam, debuguję"
     ],
     "limit": [
       "oszczędzaj tokeny, bracie",
@@ -77,7 +115,12 @@
       "wydawaj z głową",
       "może krótki spacer?",
       "licznik bije",
-      "racjonuję słowa"
+      "racjonuję słowa",
+      "tryb oszczędzania baterii",
+      "trzeba zrobić naradę budżetową",
+      "każdy token się liczy",
+      "kończą mi się słowa",
+      "może pora dotknąć trawy?"
     ],
     "idle": [
       "zzz…",
@@ -87,7 +130,12 @@
       "w trybie czuwania",
       "cicho tu… za cicho",
       "liczę elektryczne owce",
-      "przerwa na kawę?"
+      "przerwa na kawę?",
+      "tryb wygaszacza",
+      "czekam na natchnienie",
+      "gotowy, kiedy ty",
+      "po prostu chillout",
+      "rozciągam neurony"
     ]
   }
 }

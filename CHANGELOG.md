@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- GIF variety: the last 200 GIFs shown are never re-picked, search phrases and bubble lines are dealt like a shuffled deck, and KLIPY searches fetch 50 results from a random page 1–3. New searches are capped at 60/hour.
+- Session windows swap to a new GIF every 2 minutes while the agent works (`AI_STATUS_STICKER_ROTATE_SECONDS`, Settings → Stickers), plus a `Show another GIF` item in the window's right-click menu.
+- More content: 14–22 bubble lines and 12–15 KLIPY phrases per sticker, and a bigger Polish set.
+
 ## [0.3.3] - 2026-10-09
 
 ### Changed
