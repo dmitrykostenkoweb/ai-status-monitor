@@ -32,7 +32,8 @@ The widget looks like a small dark floating card / mini-player:
 - when a newer version is published on GitHub, a small `update ↑` pill appears in the header (see [Updates](#7b-updates))
 - a compact usage section groups Claude Code 5-hour/weekly and Codex weekly utilization beside centered, clickable provider logos
 - **Settings window** — click the `⚙` in the header (or right-click → `Settings…`): shown agents, notification sound, visible rows and timing; changes apply instantly and are saved to the runtime `.env`
-- right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
+- **GIF stickers** — when an agent changes status, a tilted sticker with a GIF and a speech bubble pops out of the top-right corner for a few seconds (see [GIF stickers](#7d-gif-stickers))
+- right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Serious mode (no stickers)`, `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
 
 By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
 
@@ -138,6 +139,8 @@ Available variables:
 - `AI_STATUS_STALE_AFTER_SECONDS`, `AI_STATUS_HIDE_DONE_AFTER_SECONDS`, `AI_STATUS_IDLE_AFTER_SECONDS`, `AI_STATUS_HIDE_STALE_AFTER_SECONDS` — timeouts
 - `AI_STATUS_THEME` — theme name
 - `AI_STATUS_AGENTS` — which agents the widget shows: `claude,codex` (default, also `all`), `claude` or `codex`. Hidden agents get no rows, no usage bars, no sounds and no usage requests. The right-click `Show agents` menu changes it live and saves the choice to the runtime `.env` (a value exported in the process still wins on the next start)
+- `AI_STATUS_SERIOUS_MODE` — `true` turns GIF stickers off (see [GIF stickers](#7d-gif-stickers))
+- `AI_STATUS_KLIPY_API_KEY` — optional KLIPY API key for random sticker GIFs; empty = local GIFs only
 - `AI_STATUS_ENV_FILE` — path to a different runtime file; this variable must be exported in the process, it is not read from `.env`
 
 Example of a local override:
@@ -195,6 +198,39 @@ Claude's `5h`, `Weekly` and `Fable` bars are stacked beside the Claude logo (the
 The Claude request reuses the OAuth access token already stored by Claude Code in `~/.claude/.credentials.json`. The monitor reads it only in memory for the request; it does not copy the token into its cache or logs. Codex authentication remains owned by the installed CLI: the monitor neither reads nor copies its OAuth credential. API-key billing quotas are not supported.
 
 Provider failures are independent. When a refresh fails, an unexpired last-known value remains visible as `stale`; after its reset time passes it becomes `Unavailable`. The status widget and local Codex usage continue to work offline even if Claude usage cannot refresh.
+
+## 7d. GIF stickers
+
+When an agent's status changes, a small tilted sticker with a GIF and a speech bubble pops out of the widget's top-right corner, stays for 4 seconds and tucks away. `waiting` and `error` stickers stay until the status changes, because they need your attention. Hovering an agent row brings its last sticker back. The sticker lives in its own click-through window, so the widget never moves and clicks still reach the buttons underneath. It needs a compositing desktop (Cinnamon has one by default).
+
+| Sticker | Shown for |
+|---|---|
+| `analyzing` | thinking, reading, analyzing |
+| `coding` | editing files, running commands |
+| `waiting` | waiting for approval / your answer |
+| `done` | finished |
+| `error` | API or tool error |
+| `limit` | a usage bar reaches 90% (once per limit window) |
+| `idle` | a silent session turns idle |
+
+**Where the GIFs come from:**
+
+1. **KLIPY (optional)** — paste a KLIPY API key (free test keys at <https://partner.klipy.com>) into **Settings → Stickers**. On each status change the widget searches KLIPY for a phrase that fits the status (e.g. `thinking`, `typing fast`, `victory dance`) and shows a random GIF. Search results are remembered for 6 hours and every downloaded GIF is cached in `~/.cache/ai-cli-status-monitor/stickers/` (trimmed to 50 MB), so a status change normally costs no request at all. Requests run in the background; offline or on any error the widget silently falls back to the local pool.
+2. **Local pool** — any `.gif`, `.webp`, `.png` or `.jpg` in `~/.local/share/ai-cli-status-monitor/gifs/<sticker>/`, e.g. `gifs/waiting/skeleton.gif`. The installer seeds `gifs/analyzing/` and never overwrites your files.
+3. **Placeholder** — with neither, the sticker shows stripes in the status colour.
+
+The same GIF is never picked twice in a row. Bubble texts and KLIPY search phrases can be overridden per sticker in `~/.config/ai-cli-status-monitor/stickers.json`:
+
+```json
+{
+  "bubbles": {"waiting": ["Dima? Halo?", "halo? jest tam kto?"], "done": ["gotowe!"]},
+  "queries": {"coding": ["hacker typing", "cat keyboard"]}
+}
+```
+
+**Serious mode** (Settings, right-click menu or `AI_STATUS_SERIOUS_MODE=true`) turns stickers off completely — no stickers and no KLIPY requests. To preview every sticker: **Settings → Show test sticker**, or `bin/ai-agent-status-widget --sticker all` (or `--sticker waiting`, …).
+
+The KLIPY key is stored in the runtime `.env` (mode `0600`) and is never written to logs.
 
 ## 8. Claude Code hooks
 

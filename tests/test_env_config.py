@@ -65,6 +65,39 @@ class AgentsSettingTests(unittest.TestCase):
         )
         self.assertEqual(default.agents, ("claude", "codex"))
 
+    def test_sticker_settings_default_off_and_allow_an_empty_klipy_key(self) -> None:
+        default = load_settings(
+            environ={"HOME": "/home/test"},
+            env_path=Path("/nonexistent/.env"),
+            dotenv_values={},
+            legacy={},
+        )
+        self.assertFalse(default.serious_mode)
+        self.assertEqual(default.klipy_api_key, "")
+        self.assertEqual(default.as_env()["AI_STATUS_KLIPY_API_KEY"], "")
+
+        configured = load_settings(
+            environ={"HOME": "/home/test"},
+            env_path=Path("/nonexistent/.env"),
+            dotenv_values={"AI_STATUS_SERIOUS_MODE": "yes", "AI_STATUS_KLIPY_API_KEY": " abc123 "},
+            legacy={},
+        )
+        self.assertTrue(configured.serious_mode)
+        self.assertEqual(configured.klipy_api_key, "abc123")
+
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            write_env_value(env_file, "AI_STATUS_KLIPY_API_KEY", "")
+            self.assertEqual(parse_dotenv(env_file)["AI_STATUS_KLIPY_API_KEY"], "")
+            script = 'source "$1"; ai_status_load_env "$2"; printf "%s|%s" "$AI_STATUS_SERIOUS_MODE" "$AI_STATUS_KLIPY_API_KEY"'
+            env_file.write_text("AI_STATUS_SERIOUS_MODE=on\nAI_STATUS_KLIPY_API_KEY=k-1\n", encoding="utf-8")
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("AI_STATUS_")}
+            result = subprocess.run(
+                ["bash", "-c", script, "_", str(ROOT / "bin" / "ai-agent-status-env"), str(env_file)],
+                capture_output=True, text=True, check=True, env=environment,
+            )
+            self.assertEqual(result.stdout, "true|k-1")
+
     def test_write_env_value_replaces_one_key_and_keeps_other_lines(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".env"

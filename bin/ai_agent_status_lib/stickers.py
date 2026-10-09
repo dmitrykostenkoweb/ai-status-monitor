@@ -1,0 +1,379 @@
+"""GIF sticker reactions: status → sticker mapping, local GIF pool and the optional KLIPY source.
+
+Everything here is GTK-free so it can be unit tested. The widget calls `StickerSource.pick()`
+on a short-lived worker thread whenever an agent's sticker status changes; it never blocks
+the GTK main loop and every failure degrades to "local file" → "placeholder" → no sticker.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import random
+import threading
+import time
+import urllib.parse
+import urllib.request
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+
+# Sticker keys from the design spec, in the order the debug cycle shows them.
+STICKER_KEYS = ("analyzing", "coding", "waiting", "done", "error", "limit", "idle")
+
+STICKER_COLORS = {
+    "analyzing": "#F5C542",
+    "coding": "#60A5FA",
+    "waiting": "#C084FC",
+    "done": "#4ADE80",
+    "error": "#F87171",
+    "limit": "#FB923C",
+    "idle": "#8B93A1",
+}
+
+# Structured status kinds (see status_model.STATUS_KINDS) → sticker key. Kinds that are not
+# listed (neutral, stale) never pop a sticker.
+KIND_TO_STICKER = {
+    "thinking": "analyzing",
+    "reading": "analyzing",
+    "analyzing": "analyzing",
+    "coding": "coding",
+    "command": "coding",
+    "waiting": "waiting",
+    "done": "done",
+    "error": "error",
+    "idle": "idle",
+}
+
+# These need attention, so their sticker stays until the status changes.
+STICKY_KEYS = frozenset({"waiting", "error"})
+
+# Usage bars at or above this utilisation pop the `limit` sticker once per window.
+LIMIT_THRESHOLD_PERCENT = 90.0
+
+DEFAULT_BUBBLES: dict[str, tuple[str, ...]] = {
+    "analyzing": ("hmm… 2 + 2 = ?", "hold on, thinking…", "let me read that…"),
+    "coding": ("typing, typing!", "shipping code, do not disturb", "keyboard go brrr"),
+    "waiting": ("hello? anyone there?", "your turn!", "need a yes from you"),
+    "done": ("done!", "I deserve a coffee", "ta-da!"),
+    "error": ("this is fine.", "everything is under control.", "well… that broke"),
+    "limit": ("save your tokens, friend", "running on fumes"),
+    "idle": ("zzz…", "still here, just napping"),
+}
+
+# KLIPY search phrases per sticker; one is chosen at random for each new search.
+DEFAULT_QUERIES: dict[str, tuple[str, ...]] = {
+    "analyzing": ("thinking", "calculating", "hmm"),
+    "coding": ("typing fast", "hacker", "cat keyboard"),
+    "waiting": ("waiting", "skeleton waiting", "hello is anyone there"),
+    "done": ("victory dance", "nailed it", "celebration"),
+    "error": ("this is fine", "explosion", "fail"),
+    "limit": ("low battery", "running on empty"),
+    "idle": ("sleeping", "tumbleweed", "bored"),
+}
+
+IMAGE_SUFFIXES = (".gif", ".webp", ".png", ".jpg", ".jpeg")
+
+KLIPY_API_BASE = "https://api.klipy.com/api/v1"
+KLIPY_PER_PAGE = 24
+KLIPY_RESULTS_TTL_SECONDS = 6 * 60 * 60
+KLIPY_MAX_DOWNLOAD_BYTES = 6 * 1024 * 1024
+KLIPY_CACHE_LIMIT_BYTES = 50 * 1024 * 1024
+KLIPY_TIMEOUT_SECONDS = 6.0
+# Smallest rendition that still looks sharp in a 140×94 px sticker comes first.
+KLIPY_SIZE_PREFERENCE = ("sm", "xs", "md", "hd")
+
+
+def sticker_for_kind(kind: object) -> str | None:
+    return KIND_TO_STICKER.get(kind) if isinstance(kind, str) else None
+
+
+def load_sticker_texts(path: Path) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    """Bubble texts and KLIPY queries, with per-key overrides from an optional `stickers.json`.
+
+    Format: {"bubbles": {"waiting": ["Dima? Halo?"]}, "queries": {"coding": ["hacker"]}}.
+    Unknown keys and non-string entries are ignored; a broken file falls back to defaults.
+    """
+    bubbles = dict(DEFAULT_BUBBLES)
+    queries = dict(DEFAULT_QUERIES)
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return bubbles, queries
+    if not isinstance(loaded, dict):
+        return bubbles, queries
+    for section, target in (("bubbles", bubbles), ("queries", queries)):
+        overrides = loaded.get(section)
+        if not isinstance(overrides, dict):
+            continue
+        for key, values in overrides.items():
+            if key not in STICKER_KEYS or not isinstance(values, list):
+                continue
+            cleaned = tuple(value.strip() for value in values if isinstance(value, str) and value.strip())
+            if cleaned:
+                target[key] = cleaned
+    return bubbles, queries
+
+
+def is_image_file(head: bytes) -> bool:
+    """Magic-byte check so a hostile or broken download never reaches GdkPixbuf as junk."""
+    return (
+        head.startswith((b"GIF87a", b"GIF89a", b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff"))
+        or (head[:4] == b"RIFF" and head[8:12] == b"WEBP")
+    )
+
+
+class NoRepeatChooser:
+    """Random choice that never returns the same item twice in a row for a given key."""
+
+    def __init__(self, rng: random.Random | None = None) -> None:
+        self.rng = rng or random.Random()
+        self.last: dict[str, str] = {}
+
+    def choose(self, key: str, items: list[str]) -> str | None:
+        if not items:
+            return None
+        candidates = [item for item in items if item != self.last.get(key)] or items
+        chosen = self.rng.choice(candidates)
+        self.last[key] = chosen
+        return chosen
+
+
+def local_pool(gifs_dir: Path, key: str) -> list[Path]:
+    folder = gifs_dir / key
+    try:
+        return sorted(
+            path for path in folder.iterdir()
+            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+        )
+    except OSError:
+        return []
+
+
+@dataclass(frozen=True)
+class KlipyResult:
+    id: str
+    url: str
+
+
+def _pick_rendition(file_info: Any) -> str | None:
+    if not isinstance(file_info, dict):
+        return None
+    for size in KLIPY_SIZE_PREFERENCE:
+        rendition = file_info.get(size)
+        if not isinstance(rendition, dict):
+            continue
+        gif = rendition.get("gif")
+        url = gif.get("url") if isinstance(gif, dict) else None
+        if isinstance(url, str) and url.startswith("https://"):
+            return url
+    return None
+
+
+def parse_klipy_search(payload: Any) -> list[KlipyResult]:
+    """Extract GIF results from a KLIPY search response, skipping ads and malformed items.
+
+    KLIPY wraps results as {"result": true, "data": {"data": [item, ...], ...}}; each item has
+    `file` → size (`hd`/`md`/`sm`/`xs`) → format (`gif`/`webp`/`mp4`) → {"url", ...}. Only GIF
+    renditions are used because GdkPixbuf animates GIF out of the box.
+    """
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    items = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return []
+    results: list[KlipyResult] = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("type") == "ad":
+            continue
+        url = _pick_rendition(item.get("file"))
+        if url is None:
+            continue
+        identifier = item.get("slug") or item.get("id") or url
+        results.append(KlipyResult(id=str(identifier), url=url))
+    return results
+
+
+def load_customer_id(path: Path) -> str:
+    """A random, per-install id KLIPY uses to tell end users apart; created on first use."""
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    except OSError:
+        pass
+    value = uuid.uuid4().hex
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    return value
+
+
+class KlipyClient:
+    """KLIPY GIF search with an in-memory result cache and an on-disk GIF cache.
+
+    A search runs at most once per query per `KLIPY_RESULTS_TTL_SECONDS`; a GIF is downloaded
+    at most once and reused from `cache_dir`, which is trimmed to `KLIPY_CACHE_LIMIT_BYTES`.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        cache_dir: Path,
+        customer_id: str,
+        *,
+        opener: Callable[..., Any] = urllib.request.urlopen,
+        clock: Callable[[], float] = time.monotonic,
+        timeout: float = KLIPY_TIMEOUT_SECONDS,
+    ) -> None:
+        self.api_key = api_key
+        self.cache_dir = cache_dir
+        self.customer_id = customer_id
+        self.opener = opener
+        self.clock = clock
+        self.timeout = timeout
+        self.results: dict[str, tuple[float, list[KlipyResult]]] = {}
+        self.lock = threading.Lock()
+
+    def search_url(self, query: str) -> str:
+        params = urllib.parse.urlencode({
+            "q": query,
+            "per_page": KLIPY_PER_PAGE,
+            "customer_id": self.customer_id,
+            "content_filter": "high",
+        })
+        key = urllib.parse.quote(self.api_key, safe="")
+        return f"{KLIPY_API_BASE}/{key}/gifs/search?{params}"
+
+    def _get(self, url: str, limit: int) -> bytes:
+        request = urllib.request.Request(url, headers={"User-Agent": "ai-cli-status-monitor"})
+        with self.opener(request, timeout=self.timeout) as response:
+            body = response.read(limit + 1)
+        if len(body) > limit:
+            raise ValueError("response too large")
+        return body
+
+    def search(self, query: str) -> list[KlipyResult]:
+        now = self.clock()
+        with self.lock:
+            cached = self.results.get(query)
+            if cached is not None and now - cached[0] < KLIPY_RESULTS_TTL_SECONDS:
+                return cached[1]
+        try:
+            payload = json.loads(self._get(self.search_url(query), 2 * 1024 * 1024).decode("utf-8"))
+            results = parse_klipy_search(payload)
+        except Exception:
+            # Never surface the URL: it contains the API key.
+            raise RuntimeError("KLIPY search failed") from None
+        with self.lock:
+            self.results[query] = (now, results)
+        return results
+
+    def cached_path(self, result: KlipyResult) -> Path:
+        digest = hashlib.sha256(result.url.encode("utf-8")).hexdigest()[:32]
+        return self.cache_dir / f"{digest}.gif"
+
+    def download(self, result: KlipyResult) -> Path:
+        path = self.cached_path(result)
+        if path.exists():
+            try:
+                path.touch()
+            except OSError:
+                pass
+            return path
+        try:
+            body = self._get(result.url, KLIPY_MAX_DOWNLOAD_BYTES)
+        except Exception:
+            raise RuntimeError("KLIPY download failed") from None
+        if not is_image_file(body[:16]):
+            raise RuntimeError("KLIPY download is not an image")
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        temporary.write_bytes(body)
+        temporary.replace(path)
+        self.prune()
+        return path
+
+    def prune(self, limit: int = KLIPY_CACHE_LIMIT_BYTES) -> None:
+        try:
+            files = [path for path in self.cache_dir.glob("*.gif") if path.is_file()]
+            files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        except OSError:
+            return
+        total = 0
+        for path in files:
+            try:
+                total += path.stat().st_size
+                if total > limit:
+                    path.unlink()
+            except OSError:
+                continue
+
+
+@dataclass(frozen=True)
+class StickerChoice:
+    key: str
+    image: Path | None
+    bubble: str
+    source: str  # "klipy", "local" or "placeholder"
+
+
+class StickerSource:
+    """Pick the image and bubble for a sticker: KLIPY when configured, else the local pool."""
+
+    def __init__(
+        self,
+        gifs_dir: Path,
+        bubbles: Mapping[str, tuple[str, ...]] | None = None,
+        queries: Mapping[str, tuple[str, ...]] | None = None,
+        klipy: KlipyClient | None = None,
+        rng: random.Random | None = None,
+        log: Callable[[str], None] | None = None,
+    ) -> None:
+        self.gifs_dir = gifs_dir
+        self.bubbles = dict(bubbles or DEFAULT_BUBBLES)
+        self.queries = dict(queries or DEFAULT_QUERIES)
+        self.klipy = klipy
+        self.rng = rng or random.Random()
+        self.images = NoRepeatChooser(self.rng)
+        self.texts = NoRepeatChooser(self.rng)
+        self.log = log or (lambda _message: None)
+
+    def bubble(self, key: str) -> str:
+        return self.texts.choose(key, list(self.bubbles.get(key, ()))) or ""
+
+    def pick_klipy(self, key: str) -> Path | None:
+        if self.klipy is None:
+            return None
+        queries = self.queries.get(key) or DEFAULT_QUERIES.get(key, ())
+        if not queries:
+            return None
+        query = self.rng.choice(list(queries))
+        try:
+            results = self.klipy.search(query)
+            by_id = {result.id: result for result in results}
+            chosen = self.images.choose(key, list(by_id))
+            return self.klipy.download(by_id[chosen]) if chosen is not None else None
+        except Exception as error:
+            self.log(f"sticker: {error}; using the local GIF pool")
+            return None
+
+    def pick_local(self, key: str) -> Path | None:
+        pool = {str(path): path for path in local_pool(self.gifs_dir, key)}
+        chosen = self.images.choose(key, list(pool))
+        return pool[chosen] if chosen is not None else None
+
+    def pick(self, key: str) -> StickerChoice:
+        bubble = self.bubble(key)
+        image = self.pick_klipy(key)
+        if image is not None:
+            return StickerChoice(key, image, bubble, "klipy")
+        image = self.pick_local(key)
+        if image is not None:
+            return StickerChoice(key, image, bubble, "local")
+        return StickerChoice(key, None, bubble, "placeholder")

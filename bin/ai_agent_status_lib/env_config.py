@@ -24,7 +24,12 @@ DEFAULT_VALUES = {
     "AI_STATUS_HIDE_STALE_AFTER_SECONDS": "900",
     "AI_STATUS_THEME": "dark",
     "AI_STATUS_AGENTS": "claude,codex",
+    "AI_STATUS_SERIOUS_MODE": "false",
+    "AI_STATUS_KLIPY_API_KEY": "",
 }
+
+# Keys whose value may legitimately be empty (an unset optional credential).
+OPTIONAL_KEYS = frozenset({"AI_STATUS_KLIPY_API_KEY"})
 
 SUPPORTED_AGENTS = ("claude", "codex")
 
@@ -61,6 +66,8 @@ class Settings:
     hide_stale_after_seconds: int
     theme: str
     agents: tuple[str, ...] = SUPPORTED_AGENTS
+    serious_mode: bool = False
+    klipy_api_key: str = ""
 
     @property
     def widget_config(self) -> dict[str, object]:
@@ -88,6 +95,8 @@ class Settings:
             "AI_STATUS_HIDE_STALE_AFTER_SECONDS": str(self.hide_stale_after_seconds),
             "AI_STATUS_THEME": self.theme,
             "AI_STATUS_AGENTS": format_agents(self.agents),
+            "AI_STATUS_SERIOUS_MODE": "true" if self.serious_mode else "false",
+            "AI_STATUS_KLIPY_API_KEY": self.klipy_api_key,
         }
 
 
@@ -305,6 +314,13 @@ def load_settings(
             warn(f"invalid {key} from {source}; using next configuration source")
         raise AssertionError(f"missing valid default for {key}")
 
+    def resolve_optional_string(key: str) -> str:
+        for source, value in candidates(key, legacy_values):
+            if isinstance(value, str) and "\n" not in value:
+                return value.strip()
+            warn(f"invalid {key} from {source}; using next configuration source")
+        raise AssertionError(f"missing valid default for {key}")
+
     def resolve_agents(key: str) -> tuple[str, ...]:
         for source, value in candidates(key, legacy_values):
             parsed = parse_agents(value)
@@ -328,4 +344,6 @@ def load_settings(
         hide_stale_after_seconds=resolve_int("AI_STATUS_HIDE_STALE_AFTER_SECONDS", 0),
         theme=resolve_string("AI_STATUS_THEME"),
         agents=resolve_agents("AI_STATUS_AGENTS"),
+        serious_mode=resolve_bool("AI_STATUS_SERIOUS_MODE"),
+        klipy_api_key=resolve_optional_string("AI_STATUS_KLIPY_API_KEY"),
     )
