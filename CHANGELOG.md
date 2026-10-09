@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Use the canonical GitHub repository address for update checks and self-updates.
+- Keep the widget on every workspace: window hints now target the widget's own window id instead of the first window whose title contains the widget title (e.g. a terminal titled after this project).
+- Stop the GIF sticker from flickering on row hover: the sticker window is truly click-through and spurious leave events are ignored.
 
 ## [0.2.1] - 2026-07-01
 
