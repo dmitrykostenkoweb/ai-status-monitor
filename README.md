@@ -223,7 +223,7 @@ Provider failures are independent. When a refresh fails, an unexpired last-known
 2. **Local pool** — any `.gif`, `.webp`, `.png` or `.jpg` in `~/.local/share/ai-cli-status-monitor/gifs/<sticker>/`, e.g. `gifs/waiting/skeleton.gif`. The installer seeds `gifs/analyzing/` and never overwrites your files.
 3. **Placeholder** — with neither, the sticker shows stripes in the status colour.
 
-The same GIF is never picked twice in a row. Bubble texts and KLIPY search phrases can be overridden per sticker in `~/.config/ai-cli-status-monitor/stickers.json`:
+The same GIF and the same bubble line are never picked twice in a row; every sticker has 9–14 built-in lines and 6–8 KLIPY search phrases. A ready-made **Polish** set lives in [`examples/stickers.pl.json`](examples/stickers.pl.json) — copy it to `~/.config/ai-cli-status-monitor/stickers.json` and restart the widget. Bubble texts and KLIPY search phrases can be overridden per sticker in that file:
 
 ```json
 {

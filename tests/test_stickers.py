@@ -59,6 +59,26 @@ class StickerMappingTests(unittest.TestCase):
             self.assertTrue(stickers.DEFAULT_BUBBLES[key])
             self.assertTrue(stickers.DEFAULT_QUERIES[key])
 
+    def test_bubble_texts_and_queries_are_short_unique_and_plentiful(self) -> None:
+        for key in stickers.STICKER_KEYS:
+            with self.subTest(key=key):
+                bubbles = stickers.DEFAULT_BUBBLES[key]
+                queries = stickers.DEFAULT_QUERIES[key]
+                self.assertGreaterEqual(len(bubbles), 8)
+                self.assertEqual(len(set(bubbles)), len(bubbles))
+                self.assertEqual(len(set(queries)), len(queries))
+                # The bubble wraps at ~18 chars per line; keep every line to at most 3 lines.
+                self.assertTrue(all(len(text) <= 40 for text in bubbles), [t for t in bubbles if len(t) > 40])
+
+    def test_polish_example_overrides_every_bubble(self) -> None:
+        bubbles, queries = stickers.load_sticker_texts(ROOT / "examples" / "stickers.pl.json")
+        for key in stickers.STICKER_KEYS:
+            with self.subTest(key=key):
+                self.assertNotEqual(bubbles[key], stickers.DEFAULT_BUBBLES[key])
+                self.assertTrue(all(len(text) <= 40 for text in bubbles[key]))
+        self.assertEqual(queries, stickers.DEFAULT_QUERIES)
+        self.assertIn("Dima? Halo?", bubbles["waiting"])
+
     def test_sticker_for_kind(self) -> None:
         self.assertEqual(stickers.sticker_for_kind("thinking"), "analyzing")
         self.assertEqual(stickers.sticker_for_kind("command"), "coding")
