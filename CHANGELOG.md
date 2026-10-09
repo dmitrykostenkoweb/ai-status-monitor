@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-10-09
+
 ### Reverted
 
 - Sticker bubbles and GIF picking are back to their 0.3.4 behaviour: funny bubble lines only (no task descriptions) and the broader KLIPY search phrases across several result pages. The 0.3.6 activity bubbles and meme-only queries and the 0.3.7 task-matched GIFs are removed; the hook no longer records `activity`. Everything else (KLIPY key guide, session windows, settings) is unchanged.
@@ -88,7 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove the widget toggle command and launcher in favor of the explicit start and stop helpers.
 
-[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/f59c6b8...HEAD
+[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/ac74f24...HEAD
+[0.3.8]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/f59c6b8...ac74f24
 [0.3.7]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/1068ad7...f59c6b8
 [0.3.6]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/a24f26f...1068ad7
 [0.3.5]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/d7003b8...a24f26f
