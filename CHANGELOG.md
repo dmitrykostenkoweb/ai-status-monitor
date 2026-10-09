@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- In-app "Get a free KLIPY key" guide (Settings → Stickers → `Get a free key…`, or the right-click menu while no key is set): step-by-step instructions, an `Open the KLIPY Partner Panel` button, `Copy` buttons for every form field, and `Test & save`, which checks the key with one search and saves it only when it works.
+
 ## [0.3.4] - 2026-10-09
 
 ### Added
