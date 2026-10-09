@@ -219,7 +219,7 @@ Provider failures are independent. When a refresh fails, an unexpired last-known
 
 **Where the GIFs come from:**
 
-1. **KLIPY (optional)** — paste a KLIPY API key (free test keys at <https://partner.klipy.com>) into **Settings → Stickers**. On each status change the widget searches KLIPY for a phrase that fits the status (e.g. `thinking`, `typing fast`, `victory dance`) and shows a random GIF. Search results are remembered for 6 hours and every downloaded GIF is cached in `~/.cache/ai-cli-status-monitor/stickers/` (trimmed to 50 MB), so a status change normally costs no request at all. Requests run in the background; offline or on any error the widget silently falls back to the local pool.
+1. **KLIPY (optional)** — paste a KLIPY API key (free test keys at <https://partner.klipy.com>) into **Settings → Stickers**. On each status change the widget searches KLIPY for a phrase that fits the status (e.g. `thinking`, `typing fast`, `victory dance`) and shows a random GIF. Following KLIPY's [integration requirements](https://docs.klipy.com/integration-requirements), each GIF is loaded directly from KLIPY's URL into memory and is **never stored on disk**; only the search result list (URLs) is reused for an hour to spare the API. Requests run in the background; offline or on any error the widget silently falls back to the local pool. Stickers showing a KLIPY GIF carry a small `KLIPY` mark ("Powered by KLIPY").
 2. **Local pool** — any `.gif`, `.webp`, `.png` or `.jpg` in `~/.local/share/ai-cli-status-monitor/gifs/<sticker>/`, e.g. `gifs/waiting/skeleton.gif`. The installer seeds `gifs/analyzing/` and never overwrites your files.
 3. **Placeholder** — with neither, the sticker shows stripes in the status colour.
 

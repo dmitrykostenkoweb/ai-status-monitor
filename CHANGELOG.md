@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- KLIPY GIFs are now loaded directly from KLIPY's URLs into memory and never cached on disk, as KLIPY's integration requirements ask; the old `~/.cache/ai-cli-status-monitor/stickers/` cache is removed at startup. Searches request GIF-only results, only `*.klipy.com` media URLs are accepted, and stickers with KLIPY GIFs show a small `KLIPY` mark.
+
 ## [0.3.1] - 2026-10-09
 
 ### Added

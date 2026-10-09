@@ -7,7 +7,6 @@ the GTK main loop and every failure degrades to "local file" → "placeholder" �
 
 from __future__ import annotations
 
-import hashlib
 import json
 import random
 import threading
@@ -172,10 +171,12 @@ IMAGE_SUFFIXES = (".gif", ".webp", ".png", ".jpg", ".jpeg")
 
 KLIPY_API_BASE = "https://api.klipy.com/api/v1"
 KLIPY_PER_PAGE = 24
-KLIPY_RESULTS_TTL_SECONDS = 6 * 60 * 60
+# Search responses (lists of URLs, not media) are reused for a while to spare the API.
+KLIPY_RESULTS_TTL_SECONDS = 60 * 60
 KLIPY_MAX_DOWNLOAD_BYTES = 6 * 1024 * 1024
-KLIPY_CACHE_LIMIT_BYTES = 50 * 1024 * 1024
 KLIPY_TIMEOUT_SECONDS = 6.0
+# KLIPY serves media from klipy.com, static.klipy.com, static1.klipy.com, static2.klipy.com.
+KLIPY_MEDIA_DOMAIN = "klipy.com"
 # Smallest rendition that still looks sharp in a 140×94 px sticker comes first.
 KLIPY_SIZE_PREFERENCE = ("sm", "xs", "md", "hd")
 
@@ -261,9 +262,18 @@ def _pick_rendition(file_info: Any) -> str | None:
             continue
         gif = rendition.get("gif")
         url = gif.get("url") if isinstance(gif, dict) else None
-        if isinstance(url, str) and url.startswith("https://"):
+        if isinstance(url, str) and is_klipy_media_url(url):
             return url
     return None
+
+
+def is_klipy_media_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and (host == KLIPY_MEDIA_DOMAIN or host.endswith("." + KLIPY_MEDIA_DOMAIN))
 
 
 def parse_klipy_search(payload: Any) -> list[KlipyResult]:
@@ -309,16 +319,17 @@ def load_customer_id(path: Path) -> str:
 
 
 class KlipyClient:
-    """KLIPY GIF search with an in-memory result cache and an on-disk GIF cache.
+    """KLIPY GIF search; media is loaded straight from KLIPY's URLs into memory.
 
-    A search runs at most once per query per `KLIPY_RESULTS_TTL_SECONDS`; a GIF is downloaded
-    at most once and reused from `cache_dir`, which is trimmed to `KLIPY_CACHE_LIMIT_BYTES`.
+    Per KLIPY's integration requirements the media is never stored, mirrored or kept on disk:
+    every sticker downloads its GIF from the URL in the API response and only holds it in
+    memory while it is shown. Search responses (URL lists) are reused for
+    `KLIPY_RESULTS_TTL_SECONDS` so a busy session does not hammer the API.
     """
 
     def __init__(
         self,
         api_key: str,
-        cache_dir: Path,
         customer_id: str,
         *,
         opener: Callable[..., Any] = urllib.request.urlopen,
@@ -326,7 +337,6 @@ class KlipyClient:
         timeout: float = KLIPY_TIMEOUT_SECONDS,
     ) -> None:
         self.api_key = api_key
-        self.cache_dir = cache_dir
         self.customer_id = customer_id
         self.opener = opener
         self.clock = clock
@@ -340,6 +350,7 @@ class KlipyClient:
             "per_page": KLIPY_PER_PAGE,
             "customer_id": self.customer_id,
             "content_filter": "high",
+            "format_filter": "gif",
         })
         key = urllib.parse.quote(self.api_key, safe="")
         return f"{KLIPY_API_BASE}/{key}/gifs/search?{params}"
@@ -368,53 +379,33 @@ class KlipyClient:
             self.results[query] = (now, results)
         return results
 
-    def cached_path(self, result: KlipyResult) -> Path:
-        digest = hashlib.sha256(result.url.encode("utf-8")).hexdigest()[:32]
-        return self.cache_dir / f"{digest}.gif"
-
-    def download(self, result: KlipyResult) -> Path:
-        path = self.cached_path(result)
-        if path.exists():
-            try:
-                path.touch()
-            except OSError:
-                pass
-            return path
+    def load(self, result: KlipyResult) -> bytes:
+        """Fetch one GIF directly from its KLIPY URL; the bytes live only in memory."""
+        if not is_klipy_media_url(result.url):
+            raise RuntimeError("KLIPY media URL rejected")
         try:
             body = self._get(result.url, KLIPY_MAX_DOWNLOAD_BYTES)
         except Exception:
             raise RuntimeError("KLIPY download failed") from None
         if not is_image_file(body[:16]):
             raise RuntimeError("KLIPY download is not an image")
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_bytes(body)
-        temporary.replace(path)
-        self.prune()
-        return path
-
-    def prune(self, limit: int = KLIPY_CACHE_LIMIT_BYTES) -> None:
-        try:
-            files = [path for path in self.cache_dir.glob("*.gif") if path.is_file()]
-            files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-        except OSError:
-            return
-        total = 0
-        for path in files:
-            try:
-                total += path.stat().st_size
-                if total > limit:
-                    path.unlink()
-            except OSError:
-                continue
+        return body
 
 
 @dataclass(frozen=True)
 class StickerChoice:
     key: str
-    image: Path | None
+    image: Path | None  # a local file (local pool)
     bubble: str
     source: str  # "klipy", "local" or "placeholder"
+    data: bytes | None = None  # KLIPY media, held in memory only
+    title: str = ""
+
+    @property
+    def label(self) -> str:
+        if self.image is not None:
+            return self.image.name
+        return self.title or ("in-memory GIF" if self.data else "placeholder")
 
 
 class StickerSource:
@@ -441,7 +432,7 @@ class StickerSource:
     def bubble(self, key: str) -> str:
         return self.texts.choose(key, list(self.bubbles.get(key, ()))) or ""
 
-    def pick_klipy(self, key: str) -> Path | None:
+    def pick_klipy(self, key: str) -> tuple[bytes, str] | None:
         if self.klipy is None:
             return None
         queries = self.queries.get(key) or DEFAULT_QUERIES.get(key, ())
@@ -452,7 +443,7 @@ class StickerSource:
             results = self.klipy.search(query)
             by_id = {result.id: result for result in results}
             chosen = self.images.choose(key, list(by_id))
-            return self.klipy.download(by_id[chosen]) if chosen is not None else None
+            return (self.klipy.load(by_id[chosen]), chosen) if chosen is not None else None
         except Exception as error:
             self.log(f"sticker: {error}; using the local GIF pool")
             return None
@@ -464,9 +455,10 @@ class StickerSource:
 
     def pick(self, key: str) -> StickerChoice:
         bubble = self.bubble(key)
-        image = self.pick_klipy(key)
-        if image is not None:
-            return StickerChoice(key, image, bubble, "klipy")
+        klipy = self.pick_klipy(key)
+        if klipy is not None:
+            data, slug = klipy
+            return StickerChoice(key, None, bubble, "klipy", data=data, title=slug)
         image = self.pick_local(key)
         if image is not None:
             return StickerChoice(key, image, bubble, "local")

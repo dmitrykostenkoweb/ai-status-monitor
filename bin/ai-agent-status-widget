@@ -43,7 +43,8 @@ PID_FILE = CACHE_DIR / "widget.pid"
 NOTIFICATION_SOUND = DATA_DIR / "notification.mp3"
 GIFS_DIR = DATA_DIR / "gifs"
 STICKER_TEXTS_FILE = CONFIG_DIR / "stickers.json"
-STICKER_CACHE_DIR = CACHE_DIR / "stickers"
+# Obsolete: KLIPY media must not be stored, so an old on-disk GIF cache is removed at startup.
+LEGACY_STICKER_CACHE_DIR = CACHE_DIR / "stickers"
 KLIPY_CUSTOMER_ID_FILE = CONFIG_DIR / "klipy_customer_id"
 SESSION_WINDOWS_FILE = CONFIG_DIR / "session_windows.json"
 SESSION_WINDOW_POSITION_TTL_SECONDS = 14 * 24 * 60 * 60
@@ -424,20 +425,29 @@ class StickerOverlay(Gtk.Window):
         sticker_top = card_top + STICKER_OFFSET_TOP
         self.move(sticker_left - OVERLAY_LEFT_ROOM, sticker_top - OVERLAY_TOP_ROOM)
 
-    def load_image(self, path: Path | None) -> None:
+    def load_image(self, choice: stickers.StickerChoice) -> None:
+        """Load a local file, or KLIPY media straight from memory (it is never written to disk)."""
         self.stop_source("frame_source")
         self.pixbuf = None
         self.animation_iter = None
-        if path is None:
+        if choice.image is None and choice.data is None:
             return
         try:
-            animation = GdkPixbuf.PixbufAnimation.new_from_file(str(path))
+            if choice.data is not None:
+                loader = GdkPixbuf.PixbufLoader()
+                loader.write(choice.data)
+                loader.close()
+                animation = loader.get_animation()
+            else:
+                animation = GdkPixbuf.PixbufAnimation.new_from_file(str(choice.image))
         except Exception as error:
-            log(f"sticker: cannot load {path.name}: {error}")
+            log(f"sticker: cannot load {choice.label}: {error}")
+            return
+        if animation is None:
             return
         if animation.is_static_image():
             self.pixbuf = animation.get_static_image()
-            log(f"sticker: {path.name} is a still image (no animation frames)")
+            log(f"sticker: {choice.label} is a still image (no animation frames)")
             return
         self.animation_iter = animation.get_iter(None)
         self.pixbuf = self.animation_iter.get_pixbuf()
@@ -475,7 +485,7 @@ class StickerOverlay(Gtk.Window):
         self.choice = choice
         self.color = stickers.STICKER_COLORS.get(choice.key, "#8B93A1")
         self.sticky = sticky
-        self.load_image(choice.image)
+        self.load_image(choice)
         self.phase = "in"
         self.phase_started = GLib.get_monotonic_time()
         self.show_all()
@@ -596,9 +606,26 @@ class StickerOverlay(Gtk.Window):
             cr.restore()
         else:
             self.draw_placeholder(cr, inner_w, inner_h)
+        if self.choice is not None and self.choice.source == "klipy" and PANGOCAIRO_OK:
+            self.draw_klipy_mark(cr, inner_w, inner_h)
         cr.pop_group_to_source()
         cr.paint_with_alpha(opacity)
         cr.restore()
+
+    def draw_klipy_mark(self, cr: "cairo.Context", width: float, height: float) -> None:
+        """Small "KLIPY" attribution mark in the image's bottom-right corner."""
+        layout = PangoCairo.create_layout(cr)
+        layout.set_font_description(Pango.FontDescription.from_string("IBM Plex Sans, Cantarell, sans-serif Bold 6"))
+        layout.set_text("KLIPY", -1)
+        text_w, text_h = layout.get_pixel_size()
+        x = width / 2 - text_w - 8
+        y = height / 2 - text_h - 5
+        rounded_rect(cr, x - 4, y - 1, text_w + 8, text_h + 2, (4, 4, 4, 4))
+        cr.set_source_rgba(0, 0, 0, 0.45)
+        cr.fill()
+        cr.move_to(x, y)
+        cr.set_source_rgba(1, 1, 1, 0.9)
+        PangoCairo.show_layout(cr, layout)
 
     def draw_placeholder(self, cr: "cairo.Context", width: float, height: float) -> None:
         """Diagonal stripes in the status colour (the spec's "no GIF in the pool" look)."""
@@ -773,7 +800,7 @@ class SessionCard(Gtk.Window):
         if self.closed or self.overlay is None or request != self.sticker_request or self.owner.serious_mode:
             return False
         log(f"sticker: {self.session_id} {choice.key} from {choice.source}"
-            + (f" ({choice.image.name})" if choice.image else ""))
+            + f" ({choice.label})")
         self.place_overlay()
         self.overlay.present_sticker(choice, sticky=True)
         return False
@@ -975,7 +1002,7 @@ class SettingsWindow(Gtk.Window):
         self.klipy_entry.set_text(owner.klipy_api_key)
         self.klipy_entry.connect("changed", self.on_klipy_changed)
         self.klipy_save_source: int | None = None
-        self.attach_row(grid, 1, "KLIPY API key", "random GIFs from klipy.com search", self.klipy_entry)
+        self.attach_row(grid, 1, "KLIPY API key", "random GIFs · Powered by KLIPY", self.klipy_entry)
 
         test = Gtk.Button(label="Show test sticker")
         test.set_name("settingsClose")
@@ -2397,7 +2424,6 @@ class StatusWidget(Gtk.Window):
         if self.klipy_api_key:
             klipy = stickers.KlipyClient(
                 self.klipy_api_key,
-                STICKER_CACHE_DIR,
                 stickers.load_customer_id(KLIPY_CUSTOMER_ID_FILE),
             )
         return stickers.StickerSource(GIFS_DIR, bubbles, queries, klipy, log=log)
@@ -2479,7 +2505,7 @@ class StatusWidget(Gtk.Window):
             return False
         self.last_stickers[session_id] = choice
         self.sticker_owner = session_id
-        log(f"sticker: {choice.key} from {choice.source}" + (f" ({choice.image.name})" if choice.image else ""))
+        log(f"sticker: {choice.key} from {choice.source} ({choice.label})")
         self.sticker_hovered = None
         self.position_sticker_overlay()
         overlay.present_sticker(choice, sticky)
@@ -2941,6 +2967,9 @@ def main() -> int:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if LEGACY_STICKER_CACHE_DIR.is_dir():
+        shutil.rmtree(LEGACY_STICKER_CACHE_DIR, ignore_errors=True)
+        log("removed the old on-disk KLIPY GIF cache (KLIPY media is now loaded directly)")
     for warning in CONFIG_WARNINGS:
         log(f"configuration: {warning}")
     PID_FILE.write_text(f"{os.getpid()}\n", encoding="utf-8")
