@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-09
+
+### Added
+
+- Sticker speech bubbles now say what the agent is doing right now (`patching stickers.py`, `Run the sticker tests`, `hunting for 'KLIPY'`, `may I use git push?`). The hook records a privacy-safe `activity` (file names only, command descriptions or program + subcommand, never arguments or prompts); the bubble text updates live while the GIF stays. Polish activity templates are included in `examples/stickers.pl.json`.
+
+### Fixed
+
+- Off-topic GIFs: KLIPY searches now use only the most relevant first page (top 16) and specific, meme-style phrases instead of generic words and random deeper pages.
+
 ## [0.3.5] - 2026-10-09
 
 ### Added
@@ -67,7 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove the widget toggle command and launcher in favor of the explicit start and stop helpers.
 
-[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/a24f26f...HEAD
+[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/1068ad7...HEAD
+[0.3.6]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/a24f26f...1068ad7
 [0.3.5]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/d7003b8...a24f26f
 [0.3.4]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/466f5b8...d7003b8
 [0.3.3]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/afdac1d...466f5b8

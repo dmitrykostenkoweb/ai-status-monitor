@@ -137,5 +137,64 @@
       "po prostu chillout",
       "rozciągam neurony"
     ]
+  },
+  "activity": {
+    "read": [
+      "czytam {target}…",
+      "zaglądam do {target} 👀",
+      "studiuję {target}",
+      "otwieram {target}"
+    ],
+    "read:post": [
+      "hmm, {target}…",
+      "trawię {target}",
+      "czyli tak wygląda {target}…"
+    ],
+    "edit": [
+      "edytuję {target}…",
+      "łatam {target} 🔧",
+      "przepisuję {target}",
+      "poprawiam {target}"
+    ],
+    "edit:post": [
+      "{target} poprawiony ✓",
+      "skończyłem z {target}",
+      "{target} wygląda lepiej"
+    ],
+    "command": [
+      "{target}…",
+      "odpalam: {target}",
+      "{target} 🤞"
+    ],
+    "command:post": [
+      "sprawdzam: {target}",
+      "czytam wynik…",
+      "{target} — zobaczmy"
+    ],
+    "search": [
+      "szukam '{target}'",
+      "grep '{target}'…",
+      "gdzie jest '{target}'?"
+    ],
+    "web": [
+      "przeglądam {target}…",
+      "sprawdzam {target}",
+      "czytam {target}"
+    ],
+    "agent": [
+      "wysyłam pomocnika: {target}",
+      "deleguję: {target}",
+      "subagent działa: {target}"
+    ],
+    "plan": [
+      "aktualizuję listę zadań",
+      "planuję kolejne kroki",
+      "odhaczam punkty ✓"
+    ],
+    "permission": [
+      "mogę użyć {target}?",
+      "potrzebuję zgody na {target}",
+      "zatwierdzisz {target}? 🙏"
+    ]
   }
 }

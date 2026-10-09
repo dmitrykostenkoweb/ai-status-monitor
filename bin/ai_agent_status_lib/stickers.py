@@ -106,46 +106,73 @@ DEFAULT_BUBBLES: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# KLIPY search phrases per sticker. They are dealt like a shuffled deck (every phrase once
-# before any repeats) and each search asks for a random page, so GIFs rarely come back.
+# KLIPY search phrases per sticker: specific, meme-y phrases whose *first* page of results
+# is on topic (generic words like "focus" or deep result pages drift off-topic fast).
+# They are dealt like a shuffled deck, so variety comes from the number of phrases.
 DEFAULT_QUERIES: dict[str, tuple[str, ...]] = {
     "analyzing": (
-        "thinking", "calculating", "hmm", "math lady", "detective", "confused", "galaxy brain", "reading",
-        "sherlock", "investigating", "mind blown", "processing", "let me think", "nerd", "magnifying glass",
+        "math lady meme", "thinking meme", "confused travolta", "calculating meme", "galaxy brain meme",
+        "sherlock thinking", "detective pikachu thinking", "hmm thinking", "big brain meme", "let me think meme",
+        "nerd thinking", "reading glasses meme", "processing meme", "hmm interesting meme", "confused math",
+        "thinking hard meme", "investigating meme", "mind blown meme", "the office thinking", "zoom enhance meme",
     ),
     "coding": (
-        "typing fast", "hacker", "cat keyboard", "programmer", "coding", "busy working", "matrix", "speed typing",
-        "developer", "working hard", "keyboard smash", "computer work", "in the zone", "multitasking", "focus",
+        "hackerman", "hacker typing meme", "typing fast meme", "cat typing", "programmer meme", "coding meme",
+        "keyboard smash meme", "spongebob typing", "matrix code meme", "im in hacker", "nerd typing", "cat keyboard",
+        "developer meme", "working hard meme", "busy typing meme", "typing furiously", "hacker cat",
+        "programming meme", "speed typing meme", "computer work meme",
     ),
     "waiting": (
-        "waiting", "skeleton waiting", "hello is anyone there", "tapping fingers", "dog waiting door",
-        "still waiting", "knock knock", "impatient", "bored waiting", "hurry up", "anybody home", "checking watch",
-        "please", "staring", "waiting patiently",
+        "skeleton waiting", "waiting meme", "mr bean waiting", "tapping fingers meme", "dog waiting door",
+        "still waiting meme", "hello is anyone there meme", "waiting patiently meme", "checking watch meme",
+        "impatient waiting", "knock knock meme", "spongebob waiting", "waiting for you meme", "bored waiting meme",
+        "are you there meme", "waiting forever meme", "hurry up meme", "staring waiting meme",
     ),
     "done": (
-        "victory dance", "nailed it", "celebration", "mic drop", "success kid", "high five", "mission accomplished",
-        "happy dance", "we did it", "thumbs up", "applause", "party", "winning", "cheers", "fist pump",
+        "victory dance", "nailed it meme", "success kid", "mic drop meme", "mission accomplished meme",
+        "celebration meme", "happy dance meme", "we did it meme", "thumbs up meme", "applause meme",
+        "fist pump meme", "yes yes yes meme", "the office celebration", "high five meme", "winning meme",
+        "leonardo dicaprio cheers", "dance party meme", "nice meme",
     ),
     "error": (
-        "this is fine", "explosion", "fail", "facepalm", "oops", "everything is fine fire", "panic",
-        "computer crash", "disaster", "epic fail", "oh no", "chaos", "screaming", "shocked", "broken",
+        "this is fine dog", "this is fine meme", "facepalm meme", "epic fail meme", "oops meme",
+        "everything is on fire meme", "shocked pikachu", "disaster girl", "oh no meme", "computer crash meme",
+        "panic meme", "explosion meme", "screaming meme", "computer rage", "error meme", "fail meme",
+        "surprised pikachu", "it's broken meme",
     ),
     "limit": (
-        "low battery", "running on empty", "out of fuel", "tired", "exhausted", "empty wallet", "no money",
-        "out of energy", "running out of time", "sleepy", "dead battery", "broke",
+        "low battery meme", "running on empty meme", "no money meme", "tired meme", "exhausted meme",
+        "empty wallet meme", "broke meme", "out of energy meme", "dead battery meme", "running out of time meme",
     ),
     "idle": (
-        "sleeping", "tumbleweed", "bored", "sleeping cat", "nap time", "yawn", "waiting forever", "relax",
-        "chilling", "lazy", "sloth", "zzz",
+        "sleeping meme", "bored meme", "tumbleweed", "sleeping cat", "nap time meme", "yawn meme", "sloth meme",
+        "relax meme", "chilling meme", "zzz meme",
     ),
+}
+
+# Speech-bubble templates that say what the agent is doing right now ({target} comes from
+# the hook's activity: a file name, a command or its description, a search pattern…).
+# A "<type>:post" entry is used right after the tool finished; it falls back to "<type>".
+DEFAULT_ACTIVITY_TEMPLATES: dict[str, tuple[str, ...]] = {
+    "read": ("reading {target}…", "peeking at {target} 👀", "studying {target}", "opening {target}"),
+    "read:post": ("hmm, {target}…", "digesting {target}", "so that's {target}…"),
+    "edit": ("editing {target}…", "patching {target} 🔧", "rewriting {target}", "tweaking {target}"),
+    "edit:post": ("{target} updated ✓", "done with {target}", "{target} looks better"),
+    "command": ("{target}…", "running: {target}", "{target} 🤞"),
+    "command:post": ("checking: {target}", "reading the output…", "{target} — let's see"),
+    "search": ("hunting for '{target}'", "grep '{target}'…", "where is '{target}'?"),
+    "web": ("browsing {target}…", "looking up {target}", "reading {target}"),
+    "agent": ("sending a helper: {target}", "delegating: {target}", "sub-agent on it: {target}"),
+    "plan": ("updating the to-do list", "planning the next steps", "ticking boxes ✓"),
+    "permission": ("may I use {target}?", "need your OK for {target}", "approve {target}? 🙏"),
 }
 
 IMAGE_SUFFIXES = (".gif", ".webp", ".png", ".jpg", ".jpeg")
 
 KLIPY_API_BASE = "https://api.klipy.com/api/v1"
-KLIPY_PER_PAGE = 50
-# A random page of 1..KLIPY_PAGES is requested, so one phrase can yield up to 150 GIFs.
-KLIPY_PAGES = 3
+# Only the first, most relevant page of results is used: deeper pages drift off-topic.
+KLIPY_PER_PAGE = 16
+KLIPY_PAGES = 1
 # Self-imposed cap on new searches (cached ones are free) below the test key's 100/hour.
 KLIPY_SEARCHES_PER_HOUR = 60
 # How many recently shown GIFs (across all stickers and windows) are never re-picked.
@@ -189,6 +216,28 @@ def load_sticker_texts(path: Path) -> tuple[dict[str, tuple[str, ...]], dict[str
             if cleaned:
                 target[key] = cleaned
     return bubbles, queries
+
+
+def load_activity_templates(path: Path) -> dict[str, tuple[str, ...]]:
+    """Activity bubble templates with overrides from `stickers.json` → "activity" (e.g. Polish).
+
+    "{target}" is optional in a template; non-string or empty entries are ignored.
+    """
+    templates = dict(DEFAULT_ACTIVITY_TEMPLATES)
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return templates
+    overrides = loaded.get("activity") if isinstance(loaded, dict) else None
+    if not isinstance(overrides, dict):
+        return templates
+    for key, values in overrides.items():
+        if key not in DEFAULT_ACTIVITY_TEMPLATES or not isinstance(values, list):
+            continue
+        cleaned = tuple(value.strip() for value in values if isinstance(value, str) and value.strip())
+        if cleaned:
+            templates[key] = cleaned
+    return templates
 
 
 def is_image_file(head: bytes) -> bool:
@@ -529,6 +578,7 @@ class StickerSource:
         self.bubbles = dict(bubbles or DEFAULT_BUBBLES)
         self.queries = dict(queries or DEFAULT_QUERIES)
         self.klipy = klipy
+        self.activity_templates = dict(DEFAULT_ACTIVITY_TEMPLATES)
         self.rng = rng or random.Random()
         # Shared by every sticker and session window: no GIF comes back until ~200 others did.
         self.recent = RecentMemory(rng=self.rng)
@@ -539,6 +589,18 @@ class StickerSource:
     def bubble(self, key: str) -> str:
         return self.texts.draw(key, self.bubbles.get(key, ())) or ""
 
+    def activity_bubble(self, activity: Mapping[str, str] | None) -> str | None:
+        """What the agent is doing right now, phrased with a (shuffled) template."""
+        if not activity:
+            return None
+        kind = activity.get("type", "")
+        phase_key = f"{kind}:post" if activity.get("phase") == "post" else kind
+        templates = self.activity_templates.get(phase_key) or self.activity_templates.get(kind)
+        if not templates:
+            return None
+        template = self.texts.draw(f"activity:{phase_key}", templates) or templates[0]
+        return template.replace("{target}", activity.get("target", ""))
+
     def klipy_results(self, key: str) -> list[KlipyResult]:
         """A fresh search (new phrase, random page) while under the hourly budget,
         otherwise everything already fetched for this sticker."""
@@ -547,15 +609,11 @@ class StickerSource:
         if not queries:
             return []
         query = self.phrases.draw(key, queries)
-        page = self.rng.randint(1, KLIPY_PAGES)
-        cached = self.klipy.cached(query, page)
+        cached = self.klipy.cached(query, 1)
         if cached is not None:
             return cached
         if self.klipy.can_search():
-            results = self.klipy.search(query, page)
-            if results or page == 1:
-                return results
-            return self.klipy.search(query, 1)  # past the last page of a niche phrase
+            return self.klipy.search(query, 1)
         self.log("sticker: KLIPY hourly search budget used up; reusing earlier results")
         return self.klipy.cached_for(queries)
 
@@ -575,8 +633,8 @@ class StickerSource:
         chosen = self.recent.pick(list(pool))
         return pool[chosen] if chosen is not None else None
 
-    def pick(self, key: str) -> StickerChoice:
-        bubble = self.bubble(key)
+    def pick(self, key: str, activity: Mapping[str, str] | None = None) -> StickerChoice:
+        bubble = self.activity_bubble(activity) or self.bubble(key)
         klipy = self.pick_klipy(key)
         if klipy is not None:
             data, slug = klipy

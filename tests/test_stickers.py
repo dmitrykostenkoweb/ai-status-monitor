@@ -193,7 +193,7 @@ class KlipyTests(unittest.TestCase):
             self.assertIn("customer_id=customer-1", calls[0])
             self.assertIn("format_filter=gif", calls[0])
             self.assertIn("content_filter=high", calls[0])
-            self.assertIn("per_page=50", calls[0])
+            self.assertIn("per_page=16", calls[0])
             self.assertIn("page=1", calls[0])
             client.search("thinking", page=2)
             self.assertIn("page=2", calls[-1])
@@ -314,6 +314,42 @@ class KlipyKeyCheckTests(unittest.TestCase):
 
 
 class StickerSourceTests(unittest.TestCase):
+    def test_activity_bubbles_say_what_the_agent_is_doing(self) -> None:
+        source = stickers.StickerSource(Path("/nonexistent"), rng=random.Random(5))
+        edit = {"type": "edit", "target": "stickers.py", "phase": "pre"}
+        texts = {source.activity_bubble(edit) for _ in range(8)}
+        self.assertTrue(all("stickers.py" in text for text in texts))
+        self.assertGreater(len(texts), 1, "templates rotate")
+        post = source.activity_bubble({"type": "command", "target": "pytest", "phase": "post"})
+        self.assertIn(post.replace("pytest", "{target}"), stickers.DEFAULT_ACTIVITY_TEMPLATES["command:post"])
+        self.assertIn("plan", " ".join(stickers.DEFAULT_ACTIVITY_TEMPLATES["plan"]) + " plan")
+        self.assertIsNone(source.activity_bubble(None))
+        self.assertIsNone(source.activity_bubble({"type": "unknown", "target": "x"}))
+        picked = source.pick("coding", edit)
+        self.assertIn("stickers.py", picked.bubble)
+        self.assertIn(source.pick("coding").bubble, stickers.DEFAULT_BUBBLES["coding"])
+
+    def test_activity_templates_load_and_validate_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stickers.json"
+            path.write_text(json.dumps({"activity": {
+                "edit": ["edytuję {target}…", "missing placeholder", 7],
+                "plan": ["planuję"],
+                "bogus": ["{target}"],
+            }}), encoding="utf-8")
+            templates = stickers.load_activity_templates(path)
+            self.assertEqual(templates["edit"], ("edytuję {target}…", "missing placeholder"))
+            self.assertEqual(templates["plan"], ("planuję",))
+            self.assertNotIn("bogus", templates)
+            self.assertEqual(templates["read"], stickers.DEFAULT_ACTIVITY_TEMPLATES["read"])
+        polish = stickers.load_activity_templates(ROOT / "examples" / "stickers.pl.json")
+        self.assertEqual(set(polish), set(stickers.DEFAULT_ACTIVITY_TEMPLATES))
+        self.assertEqual(polish["command:post"][1], "czytam wynik…", "templates without {target} are kept")
+        for key, values in stickers.DEFAULT_ACTIVITY_TEMPLATES.items():
+            for value in values:
+                with self.subTest(key=key, value=value):
+                    self.assertLessEqual(len(value.replace("{target}", "x" * 20)), 48)
+
     def test_many_picks_spread_over_phrases_pages_and_gifs(self) -> None:
         searches: list[tuple[str, int]] = []
 
@@ -336,7 +372,7 @@ class StickerSourceTests(unittest.TestCase):
         queries = stickers.DEFAULT_QUERIES["coding"]
         self.assertEqual(sorted({query for query, _page in searches[:len(queries)]}), sorted(queries),
                          "every phrase is used once before any repeats")
-        self.assertGreater(len({page for _query, page in searches}), 1, "pages vary")
+        self.assertEqual({page for _query, page in searches}, {1}, "only the most relevant first page")
         self.assertEqual(len({pick.title for pick in picks}), 45, "no GIF repeats")
         bubbles = [pick.bubble for pick in picks[:len(stickers.DEFAULT_BUBBLES["coding"])]]
         self.assertEqual(len(set(bubbles)), len(bubbles), "every bubble line once before repeats")
