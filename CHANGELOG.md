@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-09
+
 ### Added
 
 - GIF variety: the last 200 GIFs shown are never re-picked, search phrases and bubble lines are dealt like a shuffled deck, and KLIPY searches fetch 50 results from a random page 1–3. New searches are capped at 60/hour.
@@ -59,7 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove the widget toggle command and launcher in favor of the explicit start and stop helpers.
 
-[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/466f5b8...HEAD
+[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/d7003b8...HEAD
+[0.3.4]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/466f5b8...d7003b8
 [0.3.3]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/afdac1d...466f5b8
 [0.3.2]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/be5f35c...afdac1d
 [0.3.1]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/639ff88...be5f35c
