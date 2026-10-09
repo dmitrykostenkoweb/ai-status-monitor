@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- With session windows the widget is only the usage panel: no intro splash and no idle lockup animation. Agent runs appear as their own windows with GIFs.
+
 ## [0.3.2] - 2026-10-09
 
 ### Changed

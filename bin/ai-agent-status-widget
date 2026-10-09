@@ -1218,8 +1218,15 @@ class StatusWidget(Gtk.Window):
         self.connect("key-press-event", self.on_key_press)
         self.connect("configure-event", self.on_configure)
 
-        self.build_intro()
-        GLib.timeout_add_seconds(3, self.end_intro)
+        if self.session_windows:
+            # The widget is just the usage panel; agents appear as their own windows.
+            # No intro splash and no idle lockup animation.
+            self.intro = False
+            self.signature = json.dumps(["session-windows"])
+            self.rebuild_body([], 0, show_lockup=False)
+        else:
+            self.build_intro()
+            GLib.timeout_add_seconds(3, self.end_intro)
         GLib.timeout_add_seconds(1, self.refresh_status)
         GLib.timeout_add(200, self.tick_animation)
         GLib.timeout_add_seconds(4, self.apply_wmctrl_hints)
@@ -1746,11 +1753,11 @@ class StatusWidget(Gtk.Window):
 
         if self.session_windows:
             self.sync_session_cards(visible)
-            # Rows live in their own windows; the card keeps header + usage (+ idle lockup).
-            signature = json.dumps(["session-windows", bool(visible)])
+            # Rows live in their own windows; the card is only header + usage, even when idle.
+            signature = json.dumps(["session-windows"])
             if signature != self.signature:
                 self.signature = signature
-                self.rebuild_body([], 0, show_lockup=not visible)
+                self.rebuild_body([], 0, show_lockup=False)
         else:
             signature = json.dumps(
                 [[s["name"], s["status"], s["project"], s["time"], s["kind"]] for s in visible] + [hidden_done],

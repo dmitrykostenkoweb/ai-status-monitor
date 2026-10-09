@@ -48,7 +48,19 @@ class SessionWindowTests(unittest.TestCase):
                 return row
 
             assert widget.session_windows is True
-            widget.sync_session_cards([session("a", "coding"), session("b", "waiting", "codex")])
+            # Startup: only the usage panel; no intro splash and no idle lockup animation.
+            assert widget.intro is False
+            assert not widget.body.get_visible() and widget.spinning == []
+            current_sessions = []
+            widget.collect_sessions = lambda: list(current_sessions)
+            widget.refresh_status()
+            assert not widget.body.get_visible() and widget.spinning == []
+
+            def sync(sessions):
+                # Keep the widget's own refreshes (e.g. after a settings change) in step.
+                current_sessions[:] = sessions
+                widget.sync_session_cards(sessions)
+            sync([session("a", "coding"), session("b", "waiting", "codex")])
             assert list(widget.session_cards) == ["a", "b"]
             card_a, card_b = widget.session_cards["a"], widget.session_cards["b"]
             assert card_a.get_title() == "AI agent session"
@@ -68,9 +80,9 @@ class SessionWindowTests(unittest.TestCase):
 
             # same sticker status → same GIF; done → sticker tucks away, card stays
             first_choice = card_a.overlay.choice
-            widget.sync_session_cards([session("a", "command"), session("b", "waiting", "codex")])
+            sync([session("a", "command"), session("b", "waiting", "codex")])
             assert card_a.sticker_debounce is None and card_a.overlay.choice is first_choice
-            widget.sync_session_cards([session("a", "done"), session("b", "waiting", "codex")])
+            sync([session("a", "done"), session("b", "waiting", "codex")])
             assert card_a.overlay.phase == "out" and widget.session_cards["a"] is card_a
 
             # a dragged (floating) card remembers its position; docking forgets it
@@ -89,7 +101,7 @@ class SessionWindowTests(unittest.TestCase):
             assert card_b.sticker_debounce is not None
 
             # a session that disappears closes its window
-            widget.sync_session_cards([session("b", "waiting", "codex")])
+            sync([session("b", "waiting", "codex")])
             assert list(widget.session_cards) == ["b"] and card_a.closed
 
             # the classic list layout closes all session windows

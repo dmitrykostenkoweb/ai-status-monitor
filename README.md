@@ -28,8 +28,8 @@ The widget looks like a small dark floating card / mini-player:
 - colors depend on the state (thinking, reading code, coding, running a command, analyzing output, waiting for approval, finished)
 - active states get an animated `...`; `done` sessions are dimmed, and any overflow is collapsed behind a `+N finished, hidden automatically` footer
 - each row has a clickable `→` on the right that activates the terminal window of that session; a `waiting for approval` row is additionally highlighted in red with a pulsing border
-- when nothing is running: an empty/idle state shows the "AI Status Monitor" lockup (radar logo + wordmark) with a rotating radar sweep and `no active agents`
-- on startup the same lockup is shown for ~3 seconds as an intro splash
+- with session windows (default) the widget itself is just the header + usage limits: on startup and when nothing is running you see only the limits, and each agent run appears as its own window with a GIF
+- classic list only: when nothing is running an empty/idle state shows the "AI Status Monitor" lockup (radar logo + wordmark) with a rotating radar sweep and `no active agents`, and on startup the same lockup is shown for ~3 seconds as an intro splash
 - when a newer version is published on GitHub, a small `update ↑` pill appears in the header (see [Updates](#7b-updates))
 - a compact usage section groups Claude Code 5-hour/weekly and Codex weekly utilization beside centered, clickable provider logos
 - **Settings window** — click the `⚙` in the header (or right-click → `Settings…`): shown agents, notification sound, visible rows and timing; changes apply instantly and are saved to the runtime `.env`
