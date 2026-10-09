@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-09
+
 ### Added
 
 - In-app "Get a free KLIPY key" guide (Settings → Stickers → `Get a free key…`, or the right-click menu while no key is set): step-by-step instructions, an `Open the KLIPY Partner Panel` button, `Copy` buttons for every form field, and `Test & save`, which checks the key with one search and saves it only when it works.
@@ -65,7 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove the widget toggle command and launcher in favor of the explicit start and stop helpers.
 
-[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/d7003b8...HEAD
+[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/a24f26f...HEAD
+[0.3.5]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/d7003b8...a24f26f
 [0.3.4]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/466f5b8...d7003b8
 [0.3.3]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/afdac1d...466f5b8
 [0.3.2]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/be5f35c...afdac1d
