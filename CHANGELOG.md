@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Reverted
+
+- Sticker bubbles and GIF picking are back to their 0.3.4 behaviour: funny bubble lines only (no task descriptions) and the broader KLIPY search phrases across several result pages. The 0.3.6 activity bubbles and meme-only queries and the 0.3.7 task-matched GIFs are removed; the hook no longer records `activity`. Everything else (KLIPY key guide, session windows, settings) is unchanged.
+
 ## [0.3.7] - 2026-10-09
 
 ### Changed
