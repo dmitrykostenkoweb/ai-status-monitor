@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-09
+
+### Added
+
+- Many more sticker speech-bubble lines and KLIPY search phrases per status, plus a Polish bubble set in `examples/stickers.pl.json`.
+
 ## [0.3.0] - 2026-10-09
 
 ### Added
@@ -35,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove the widget toggle command and launcher in favor of the explicit start and stop helpers.
 
-[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/639ff88...HEAD
+[Unreleased]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/be5f35c...HEAD
+[0.3.1]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/639ff88...be5f35c
 [0.3.0]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/a44e0da...639ff88
 [0.2.1]: https://github.com/dmitrykostenkoweb/ai-status-monitor/compare/c2e15ae...a44e0da

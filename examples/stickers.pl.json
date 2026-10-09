@@ -1,0 +1,93 @@
+{
+  "bubbles": {
+    "analyzing": [
+      "hmm… 2 + 2 = ?",
+      "chwila, liczę…",
+      "czytam, czytam…",
+      "łączę kropki…",
+      "czemu to w ogóle działa?",
+      "grepuję jak szalony",
+      "już prawie rozumiem",
+      "jeszcze jeden plik, obiecuję",
+      "mózg na pełnych obrotach",
+      "zaraz wszystko będzie jasne",
+      "mrużę oczy nad twoim kodem",
+      "mam plan. chyba."
+    ],
+    "coding": [
+      "piszę, piszę!",
+      "klepię kod, nie przeszkadzać",
+      "klawiatura się grzeje",
+      "w mojej głowie się kompiluje",
+      "refaktoruję jak zawodowiec",
+      "jeszcze tylko jeden ficzer",
+      "zaufaj mi, jestem AI",
+      "piszę testy. chyba.",
+      "kasuję więcej, niż dodaję",
+      "jestem w strefie 🔥",
+      "ten diff jest piękny",
+      "odpalam… trzymaj kciuki"
+    ],
+    "waiting": [
+      "Dima? Halo?",
+      "halo? jest tam kto?",
+      "twoja kolej!",
+      "potrzebuję twojego „tak”",
+      "puk, puk 👀",
+      "mogę? no proszę…",
+      "czekam na szefa",
+      "wciśnij Enter, no dalej",
+      "to ja tu sobie poczekam…",
+      "ping! jesteś?",
+      "napięcie rośnie",
+      "jedno kliknięcie i lecę"
+    ],
+    "done": [
+      "gotowe!",
+      "należy mi się kawa",
+      "ta-dam!",
+      "mic drop 🎤",
+      "zrobione na cacy",
+      "wypuszczamy! 🚀",
+      "wszystko na zielono",
+      "bułka z masłem",
+      "przybij piątkę?",
+      "patrz, zero bugów!",
+      "twój ruch, człowieku",
+      "i to by było na tyle"
+    ],
+    "error": [
+      "jest dobrze. chyba.",
+      "wszystko jest w porządku.",
+      "no… to się wysypało",
+      "ups. to nie ja.",
+      "u mnie działało",
+      "serwer powiedział nie",
+      "udawajmy, że nic się nie stało",
+      "zwrot akcji!",
+      "mały pożar. nic poważnego.",
+      "logi nie są zadowolone",
+      "próbowałeś wyłączyć i włączyć?"
+    ],
+    "limit": [
+      "oszczędzaj tokeny, bracie",
+      "jadę na oparach",
+      "dieta tokenowa od teraz",
+      "bateria prawie pusta 🔋",
+      "wydawaj z głową",
+      "może krótki spacer?",
+      "licznik bije",
+      "racjonuję słowa"
+    ],
+    "idle": [
+      "zzz…",
+      "jestem, tylko drzemię",
+      "obudź mnie, jak będę potrzebny",
+      "śni mi się czysty kod",
+      "w trybie czuwania",
+      "cicho tu… za cicho",
+      "liczę elektryczne owce",
+      "przerwa na kawę?"
+    ]
+  }
+}
