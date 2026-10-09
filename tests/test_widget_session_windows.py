@@ -85,6 +85,16 @@ class SessionWindowTests(unittest.TestCase):
             assert card_a.sticker_request == before + 1
             assert pump(lambda: card_a.sticker_debounce is None and card_a.overlay.phase == "shown", 4)
 
+            # The bubble says what the agent is doing now: a new activity swaps the text only.
+            before = card_a.sticker_request
+            gif_before = card_a.overlay.choice.label
+            editing = session("a", "coding")
+            editing["activity"] = {"type": "edit", "target": "stickers.py", "phase": "pre"}
+            sync([editing, session("b", "waiting", "codex")])
+            assert card_a.sticker_request == before, "same GIF, no new pick"
+            assert "stickers.py" in card_a.overlay.choice.bubble, card_a.overlay.choice.bubble
+            assert card_a.overlay.choice.label == gif_before
+
             # docked cards stack under the widget in first-seen order
             for _ in range(30):
                 GLib.MainContext.default().iteration(False)

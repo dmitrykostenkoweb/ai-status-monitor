@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import html
 import json
 import math
@@ -25,6 +26,7 @@ from ai_agent_status_lib.status_model import IN_PROGRESS_KINDS
 from ai_agent_status_lib.status_model import INACTIVE_KINDS
 from ai_agent_status_lib.status_model import classify_status_text
 from ai_agent_status_lib.status_model import normalize_kind
+from ai_agent_status_lib.status_model import parse_activity
 from ai_agent_status_lib.status_model import StatusKind
 
 
@@ -494,6 +496,12 @@ class StickerOverlay(Gtk.Window):
         if not sticky and hold_ms is not None:
             self.hold_source = GLib.timeout_add(hold_ms, self.on_hold_done)
 
+    def set_bubble(self, text: str) -> None:
+        """Swap the speech-bubble text in place (no pop animation, same GIF)."""
+        if self.choice is not None and text and text != self.choice.bubble:
+            self.choice = dataclasses.replace(self.choice, bubble=text)
+            self.area.queue_draw()
+
     def on_hold_done(self) -> bool:
         self.hold_source = None
         self.tuck()
@@ -727,6 +735,7 @@ class SessionCard(Gtk.Window):
         self.floating = False
         self.closed = False
         self.sticker_key: str | None = None
+        self.activity_signature = "null"
         self.sticker_request = 0
         self.sticker_debounce: int | None = None
         self.rotate_source: int | None = None
@@ -767,9 +776,18 @@ class SessionCard(Gtk.Window):
         if self.owner.serious_mode or key in (None, "done", "idle"):
             self.clear_sticker()
             return
+        activity = session.get("activity") if session is not None else None
+        activity_signature = json.dumps(activity, sort_keys=True)
         if key == self.sticker_key:
+            if activity_signature != self.activity_signature:
+                # Same GIF, but say what the agent is doing now.
+                self.activity_signature = activity_signature
+                text = self.owner.sticker_source.activity_bubble(activity)
+                if text and self.overlay is not None and self.overlay.visible:
+                    self.overlay.set_bubble(text)
             return
         self.sticker_key = key
+        self.activity_signature = activity_signature
         self.request_sticker(key)
 
     def request_sticker(self, key: str) -> None:
@@ -783,10 +801,11 @@ class SessionCard(Gtk.Window):
 
         def pick_in_background() -> bool:
             self.sticker_debounce = None
+            activity = self.session.get("activity") if self.session is not None else None
 
             def worker() -> None:
                 try:
-                    choice = source.pick(key)
+                    choice = source.pick(key, activity)
                 except Exception as error:  # never let a sticker take the widget down
                     log(f"sticker: pick failed: {error}")
                     choice = stickers.StickerChoice(key, None, "", "placeholder")
@@ -1838,6 +1857,7 @@ class StatusWidget(Gtk.Window):
             "cwd": cwd,
             "client_pids": client_pids or [],
             "id": f"{agent}:{project}",
+            "activity": None,
             "color": STATE_COLORS.get(normalized_kind, STATE_COLORS["neutral"]),
         }
 
@@ -1882,6 +1902,8 @@ class StatusWidget(Gtk.Window):
             session = self.make_session(agent, clean, project, hhmm, cwd, client_pids, display_kind, source_kind)
             session["name"] = name
             session["id"] = path.stem
+            if display_kind == source_kind:  # a stale/idle row is no longer doing it
+                session["activity"] = parse_activity(data.get("activity"))
             sessions.append(session)
         return sessions
 
@@ -2675,15 +2697,19 @@ class StatusWidget(Gtk.Window):
                 self.klipy_api_key,
                 stickers.load_customer_id(KLIPY_CUSTOMER_ID_FILE),
             )
-        return stickers.StickerSource(GIFS_DIR, bubbles, queries, klipy, log=log)
+        source = stickers.StickerSource(GIFS_DIR, bubbles, queries, klipy, log=log)
+        source.activity_templates = stickers.load_activity_templates(STICKER_TEXTS_FILE)
+        return source
 
     def update_stickers(self, sessions: list[dict[str, object]]) -> None:
         """Pop a sticker for the session whose sticker status changed (waiting rows first)."""
         current: dict[str, str] = {}
+        activities: dict[str, object] = {}
         for session in sessions:
             key = stickers.sticker_for_kind(session["kind"])
             if key is not None:
                 current[str(session["id"])] = key
+                activities[str(session["id"])] = session.get("activity")
         changed = [session_id for session_id, key in current.items() if self.sticker_kinds.get(session_id) != key]
         self.sticker_kinds = current
         if not self.sticker_primed:
@@ -2699,7 +2725,9 @@ class StatusWidget(Gtk.Window):
             overlay.tuck()
             self.sticker_owner = None
         if changed:
-            self.request_sticker(current[changed[0]], changed[0])
+            activity = activities.get(changed[0])
+            self.request_sticker(current[changed[0]], changed[0],
+                                 activity=activity if isinstance(activity, dict) else None)
 
     def note_usage_limits(self, snapshot: object, *, trigger: bool) -> None:
         providers = snapshot.get("providers") if isinstance(snapshot, dict) else None
@@ -2721,7 +2749,15 @@ class StatusWidget(Gtk.Window):
                 if trigger:
                     self.request_sticker("limit", f"limit:{provider}")
 
-    def request_sticker(self, key: str, session_id: str, *, sticky: bool | None = None, debounce_ms: int = STICKER_DEBOUNCE_MS) -> None:
+    def request_sticker(
+        self,
+        key: str,
+        session_id: str,
+        *,
+        sticky: bool | None = None,
+        debounce_ms: int = STICKER_DEBOUNCE_MS,
+        activity: dict[str, str] | None = None,
+    ) -> None:
         """Debounced: rapid status changes collapse into one sticker for the latest change."""
         if self.serious_mode or self.sticker_overlay is None:
             return
@@ -2737,7 +2773,7 @@ class StatusWidget(Gtk.Window):
 
             def worker() -> None:
                 try:
-                    choice = source.pick(key)
+                    choice = source.pick(key, activity)
                 except Exception as error:  # never let a sticker take the widget down
                     log(f"sticker: pick failed: {error}")
                     choice = stickers.StickerChoice(key, None, "", "placeholder")

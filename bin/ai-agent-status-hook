@@ -11,6 +11,7 @@ from typing import Any
 
 from ai_agent_status_lib.env_config import load_settings
 from ai_agent_status_lib.status_model import agent_semantic
+from ai_agent_status_lib.status_model import describe_activity
 
 SETTINGS = load_settings()
 CACHE_DIR = SETTINGS.cache_dir
@@ -143,6 +144,10 @@ def build_status(agent: str, payload: dict[str, Any], raw_payload_path: Path) ->
     project = Path(cwd).name if cwd else ""
 
     semantic = agent_semantic(agent, event, tool, payload)
+    try:
+        activity = describe_activity(event, tool, payload)
+    except Exception:  # the hook must never fail the calling CLI
+        activity = None
 
     return {
         "id": stable_session_id(agent, payload),
@@ -157,6 +162,7 @@ def build_status(agent: str, payload: dict[str, Any], raw_payload_path: Path) ->
         "timestamp_hhmm": now.strftime("%H:%M"),
         "client_pids": ancestor_pids(),
         "raw_payload_path": str(raw_payload_path),
+        "activity": activity,
     }
 
 

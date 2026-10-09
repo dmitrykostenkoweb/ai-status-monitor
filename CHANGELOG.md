@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Sticker speech bubbles now say what the agent is doing right now (`patching stickers.py`, `Run the sticker tests`, `hunting for 'KLIPY'`, `may I use git push?`). The hook records a privacy-safe `activity` (file names only, command descriptions or program + subcommand, never arguments or prompts); the bubble text updates live while the GIF stays. Polish activity templates are included in `examples/stickers.pl.json`.
+
+### Fixed
+
+- Off-topic GIFs: KLIPY searches now use only the most relevant first page (top 16) and specific, meme-style phrases instead of generic words and random deeper pages.
+
 ## [0.3.5] - 2026-10-09
 
 ### Added
