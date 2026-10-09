@@ -31,7 +31,8 @@ The widget looks like a small dark floating card / mini-player:
 - on startup the same lockup is shown for ~3 seconds as an intro splash
 - when a newer version is published on GitHub, a small `update ↑` pill appears in the header (see [Updates](#7b-updates))
 - a compact usage section groups Claude Code 5-hour/weekly and Codex weekly utilization beside centered, clickable provider logos
-- right-click menu: `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
+- **Settings window** — click the `⚙` in the header (or right-click → `Settings…`): shown agents, notification sound, visible rows and timing; changes apply instantly and are saved to the runtime `.env`
+- right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
 
 By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
 
@@ -126,6 +127,8 @@ The widget should start automatically after you log in to Cinnamon.
 ## 7a. `.env` configuration
 
 Public defaults live in `.env.default`. Your local `.env` is ignored by Git. On the first install a private `~/.config/ai-cli-status-monitor/.env` is created with `0600` permissions; subsequent installs do not overwrite it.
+
+Most of these can also be changed from the widget's **Settings** window (`⚙` in the header), which rewrites only the changed keys in the runtime `.env`. Title, card width and directories still need a manual edit and a widget restart.
 
 Available variables:
 
