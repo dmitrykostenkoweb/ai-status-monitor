@@ -163,7 +163,6 @@ class KlipyTests(unittest.TestCase):
 
         return stickers.KlipyClient(
             "secret key/1",
-            Path(directory) / "cache",
             "customer-1",
             opener=opener,
             clock=lambda: now[0],
@@ -181,6 +180,8 @@ class KlipyTests(unittest.TestCase):
             self.assertIn("/api/v1/secret%20key%2F1/gifs/search?", calls[0])
             self.assertIn("q=thinking", calls[0])
             self.assertIn("customer_id=customer-1", calls[0])
+            self.assertIn("format_filter=gif", calls[0])
+            self.assertIn("content_filter=high", calls[0])
 
             now[0] += stickers.KLIPY_RESULTS_TTL_SECONDS + 1
             client.search("thinking")
@@ -194,27 +195,48 @@ class KlipyTests(unittest.TestCase):
             self.assertNotIn("secret", str(caught.exception))
             self.assertIsNone(caught.exception.__cause__)
 
-    def test_downloads_once_validates_images_and_prunes_the_cache(self) -> None:
+    def test_loads_media_into_memory_only_and_validates_it(self) -> None:
         calls: list[str] = []
         with tempfile.TemporaryDirectory() as directory:
             client = self.make_client(directory, {"a-sm.gif": GIF_BYTES, "bad-sm.gif": b"<html>"}, calls, [0.0])
             good = stickers.KlipyResult("a", "https://static.klipy.com/a-sm.gif")
 
-            path = client.download(good)
-            self.assertEqual(path.read_bytes(), GIF_BYTES)
-            self.assertEqual(client.download(good), path)
-            self.assertEqual(len(calls), 1)
+            self.assertEqual(client.load(good), GIF_BYTES)
+            self.assertEqual(client.load(good), GIF_BYTES)
+            self.assertEqual(len(calls), 2, "media is loaded from KLIPY each time, never from a local copy")
+            self.assertEqual(list(Path(directory).iterdir()), [], "nothing is written to disk")
 
             with self.assertRaises(RuntimeError):
-                client.download(stickers.KlipyResult("bad", "https://static.klipy.com/bad-sm.gif"))
-            self.assertEqual(sorted(p.name for p in client.cache_dir.iterdir()), [path.name])
+                client.load(stickers.KlipyResult("bad", "https://static.klipy.com/bad-sm.gif"))
+            with self.assertRaises(RuntimeError):
+                client.load(stickers.KlipyResult("evil", "https://evil.example/klipy.com.gif"))
+            self.assertEqual(len(calls), 3, "a non-KLIPY URL is rejected before any request")
 
-            older = client.cache_dir / "older.gif"
-            older.write_bytes(GIF_BYTES)
-            os.utime(older, (time.time() - 100, time.time() - 100))
-            client.prune(limit=len(GIF_BYTES))
-            self.assertTrue(path.exists())
-            self.assertFalse(older.exists())
+    def test_only_klipy_media_hosts_are_accepted(self) -> None:
+        for url in ("https://static.klipy.com/x.gif", "https://static2.klipy.com/x.gif", "https://klipy.com/x.gif"):
+            self.assertTrue(stickers.is_klipy_media_url(url), url)
+        for url in ("http://static.klipy.com/x.gif", "https://klipy.com.evil.example/x.gif",
+                    "https://notklipy.com/x.gif", "not a url"):
+            self.assertFalse(stickers.is_klipy_media_url(url), url)
+
+    def test_parses_the_documented_search_response(self) -> None:
+        documented = {
+            "result": True,
+            "data": {
+                "data": [{
+                    "id": 8041071659142944, "slug": "hello-hi-662", "title": "Hello", "type": "gif",
+                    "file": {
+                        "hd": {"gif": {"url": "https://static.klipy.com/ii/x/14/af/um0L4dFH.gif", "width": 498}},
+                        "sm": {"gif": {"url": "https://static.klipy.com/ii/x/14/af/y6iepZM7.gif", "width": 220}},
+                        "xs": {"gif": {"url": "https://static.klipy.com/ii/x/14/af/A4bPjSsj.gif", "width": 90}},
+                    },
+                }],
+                "current_page": 1, "per_page": 24, "has_next": True,
+            },
+        }
+        self.assertEqual(stickers.parse_klipy_search(documented), [
+            stickers.KlipyResult("hello-hi-662", "https://static.klipy.com/ii/x/14/af/y6iepZM7.gif"),
+        ])
 
     def test_customer_id_is_created_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -235,8 +257,8 @@ class StickerSourceTests(unittest.TestCase):
                     raise RuntimeError("KLIPY search failed")
                 return [stickers.KlipyResult("x", "https://static.klipy.com/x.gif")]
 
-            def download(self, result: stickers.KlipyResult) -> Path:
-                return Path("/cache/x.gif")
+            def load(self, result: stickers.KlipyResult) -> bytes:
+                return GIF_BYTES
 
         messages: list[str] = []
         with tempfile.TemporaryDirectory() as directory:
@@ -246,7 +268,7 @@ class StickerSourceTests(unittest.TestCase):
 
             online = stickers.StickerSource(gifs, klipy=FakeKlipy(fail=False), rng=random.Random(3))  # type: ignore[arg-type]
             choice = online.pick("done")
-            self.assertEqual((choice.source, choice.image), ("klipy", Path("/cache/x.gif")))
+            self.assertEqual((choice.source, choice.image, choice.data, choice.label), ("klipy", None, GIF_BYTES, "x"))
             self.assertIn(choice.bubble, stickers.DEFAULT_BUBBLES["done"])
 
             offline = stickers.StickerSource(gifs, klipy=FakeKlipy(fail=True), log=messages.append)  # type: ignore[arg-type]

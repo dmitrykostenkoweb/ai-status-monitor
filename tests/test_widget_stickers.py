@@ -79,6 +79,14 @@ class WidgetStickerTests(unittest.TestCase):
             widget.update_setting("AI_STATUS_KLIPY_API_KEY", "")
             assert widget.sticker_source.klipy is None
 
+            # KLIPY media arrives as in-memory bytes and still animates.
+            import base64
+            gif = base64.b64decode("R0lGODlhBAAEAPAAAP8AAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACH/C0ltYWdlTWFnaWNrDmdhbW1hPTAuNDU0NTQ1ACwAAAAABAAEAAACBISPCQUAIfkEAAoAAAAh/wtJbWFnZU1hZ2ljaw5nYW1tYT0wLjQ1NDU0NQAsAAAAAAQABACAAAD/AAAAAgSEjwkFADs=")
+            from_klipy = module["stickers"].StickerChoice("done", None, "ta-da", "klipy", data=gif, title="party-1")
+            overlay.present_sticker(from_klipy, sticky=True)
+            assert overlay.animation_iter is not None and overlay.pixbuf is not None
+            assert from_klipy.label == "party-1"
+
             widget.note_usage_limits({"providers": {"claude": [
                 {"window": "5h", "used_percent": 93.0, "resets_at": "2030-01-01T00:00:00+00:00"},
             ]}}, trigger=True)
