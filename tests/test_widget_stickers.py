@@ -117,5 +117,74 @@ class WidgetStickerTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
 
 
+    @unittest.skipUnless(shutil.which("xvfb-run"), "xvfb-run is required")
+    def test_window_hints_target_own_window_and_hover_survives_spurious_leaves(self) -> None:
+        probe = textwrap.dedent(
+            """
+            import runpy
+            import sys
+            import time
+            from pathlib import Path
+
+            sys.path.insert(0, "bin")
+            module = runpy.run_path("bin/ai-agent-status-widget", run_name="widget_hints_smoke")
+            GLib = module["GLib"]
+            stickers = module["stickers"]
+            widget = module["StatusWidget"](demo=True)
+            widget.show_all()
+            context = GLib.MainContext.default()
+            for _ in range(50):
+                context.iteration(False)
+
+            # wmctrl must address this widget by window id, never by a title substring
+            # that a terminal ("... AI Agents Status ...") could also match.
+            calls = []
+            module["shutil"].which = lambda name: "/usr/bin/" + name
+            module["subprocess"].run = lambda args, **kwargs: calls.append(args)
+            assert widget.apply_wmctrl_hints() is True
+            window_id = widget.own_window_id()
+            assert window_id and window_id.startswith("0x"), window_id
+            assert calls[-1][1:4] == ["-i", "-r", window_id], calls[-1]
+
+            # Hover: a leave event while the pointer is still on the row must not tuck.
+            overlay = widget.sticker_overlay
+            choice = stickers.StickerChoice("coding", None, "hi", "placeholder")
+            widget.last_stickers["claude:app"] = choice
+            widget.sticker_owner = "claude:app"
+            widget.sticker_hovered = "claude:app"
+            overlay.present_sticker(choice, sticky=False, hold_ms=None)
+            widget.pointer_inside = lambda _box: True
+            class Crossing:
+                detail = module["Gdk"].NotifyType.NONLINEAR
+            widget.on_row_leave(widget, Crossing(), "claude:app")
+            assert overlay.phase == "in" and widget.sticker_hovered == "claude:app"
+
+            # After a row rebuild the hover is re-checked; pointer gone → tuck.
+            widget.row_hover_boxes = {}
+            widget.verify_hover()
+            assert overlay.phase == "out" and widget.sticker_hovered is None
+            widget.destroy()
+            """
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("AI_STATUS_")}
+            environment.update({
+                "AI_STATUS_ENV_FILE": str(Path(directory) / ".env"),
+                "AI_STATUS_CACHE_DIR": str(Path(directory) / "cache"),
+                "AI_STATUS_CONFIG_DIR": str(Path(directory) / "config"),
+                "AI_STATUS_DATA_DIR": str(ROOT / "assets"),
+            })
+            completed = subprocess.run(
+                ["xvfb-run", "-a", sys.executable, "-c", probe],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

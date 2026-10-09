@@ -120,6 +120,12 @@ except Exception as error:  # pragma: no cover
     CAIRO_OK = False
 
 try:
+    gi.require_version("GdkX11", "3.0")
+    from gi.repository import GdkX11  # noqa: F401  (adds GdkWindow.get_xid on X11)
+except Exception:  # pragma: no cover - Wayland-only or minimal installs
+    pass
+
+try:
     gi.require_version("PangoCairo", "1.0")
     from gi.repository import PangoCairo
 
@@ -388,7 +394,11 @@ class StickerOverlay(Gtk.Window):
         self.area = Gtk.DrawingArea()
         self.area.connect("draw", self.on_draw)
         self.add(self.area)
-        self.connect("realize", self.on_realize)
+        if CAIRO_OK:
+            # Click-through: an empty input shape lets the pointer and clicks reach the widget
+            # below. Set through GTK (not GdkWindow) so GtkWindow does not reset it on resize.
+            self.input_shape_combine_region(cairo.Region())
+            self.area.input_shape_combine_region(cairo.Region())
 
         self.choice: stickers.StickerChoice | None = None
         self.color = "#8B93A1"
@@ -401,13 +411,6 @@ class StickerOverlay(Gtk.Window):
         self.tick_source: int | None = None
         self.frame_source: int | None = None
         self.hold_source: int | None = None
-
-    def on_realize(self, _widget: Gtk.Widget) -> None:
-        # Click-through: an empty input shape lets every click reach the widget below.
-        if CAIRO_OK:
-            window = self.get_window()
-            if window is not None:
-                window.input_shape_combine_region(cairo.Region(), 0, 0)
 
     @property
     def visible(self) -> bool:
@@ -431,6 +434,7 @@ class StickerOverlay(Gtk.Window):
             return
         if animation.is_static_image():
             self.pixbuf = animation.get_static_image()
+            log(f"sticker: {path.name} is a still image (no animation frames)")
             return
         self.animation_iter = animation.get_iter(None)
         self.pixbuf = self.animation_iter.get_pixbuf()
@@ -893,6 +897,7 @@ class StatusWidget(Gtk.Window):
         self.sticker_debounce: int | None = None
         self.sticker_owner: str | None = None
         self.sticker_hovered: str | None = None
+        self.row_hover_boxes: dict[str, Gtk.Widget] = {}
         self.last_stickers: dict[str, stickers.StickerChoice] = {}
         self.limits_seen: set[tuple[str, str, str]] = set()
         self.test_sticker_index = 0
@@ -1500,9 +1505,7 @@ class StatusWidget(Gtk.Window):
         return True
 
     def rebuild_body(self, sessions: list[dict[str, object]], hidden_done: int) -> None:
-        if self.sticker_hovered is not None:
-            # The hovered row is about to be destroyed, so its leave event will never come.
-            self.on_row_leave(None, None, self.sticker_hovered)
+        self.row_hover_boxes = {}
         for child in self.body.get_children():
             self.body.remove(child)
         self.anim_dot_labels = []
@@ -1520,6 +1523,7 @@ class StatusWidget(Gtk.Window):
                 hover.connect("enter-notify-event", self.on_row_enter, session_id)
                 hover.connect("leave-notify-event", self.on_row_leave, session_id)
                 self.body.pack_start(hover, False, False, 0)
+                self.row_hover_boxes[session_id] = hover
             if hidden_done > 0:
                 footer = Gtk.Label(label=f"+{hidden_done} finished, hidden automatically")
                 footer.set_name("footer")
@@ -1527,6 +1531,10 @@ class StatusWidget(Gtk.Window):
 
         self.body.show_all()
         self.resize_to_content()
+        if self.sticker_hovered is not None:
+            # The hovered row was rebuilt, so its leave event will never come: re-check once
+            # the new rows are laid out and tuck the sticker only if the pointer really left.
+            GLib.idle_add(self.verify_hover)
 
     def build_row(self, session: dict[str, object]) -> Gtk.Widget:
         kind = str(session["kind"])
@@ -2096,6 +2104,7 @@ class StatusWidget(Gtk.Window):
             return False
         self.last_stickers[session_id] = choice
         self.sticker_owner = session_id
+        log(f"sticker: {choice.key} from {choice.source}" + (f" ({choice.image.name})" if choice.image else ""))
         self.sticker_hovered = None
         self.position_sticker_overlay()
         overlay.present_sticker(choice, sticky)
@@ -2114,7 +2123,10 @@ class StatusWidget(Gtk.Window):
         if overlay is None or self.serious_mode or event.detail == Gdk.NotifyType.INFERIOR:
             return False
         choice = self.last_stickers.get(session_id)
-        if choice is None or (overlay.visible and self.sticker_owner == session_id):
+        if choice is None:
+            return False
+        if overlay.phase in ("in", "shown") and self.sticker_owner == session_id:
+            self.sticker_hovered = session_id  # already showing this row's sticker: keep it
             return False
         self.sticker_hovered = session_id
         self.sticker_owner = session_id
@@ -2122,14 +2134,42 @@ class StatusWidget(Gtk.Window):
         overlay.present_sticker(choice, sticky=False, hold_ms=None)
         return False
 
-    def on_row_leave(self, _widget: Gtk.Widget | None, event: Gdk.EventCrossing | None, session_id: str) -> bool:
-        if event is not None and event.detail == Gdk.NotifyType.INFERIOR:
+    def on_row_leave(self, widget: Gtk.Widget, event: Gdk.EventCrossing, session_id: str) -> bool:
+        if event.detail == Gdk.NotifyType.INFERIOR:
             return False
         if self.sticker_hovered != session_id:
             return False
+        if self.pointer_inside(widget):
+            return False  # a spurious crossing (e.g. a window mapped above): still hovering
         self.sticker_hovered = None
         if self.sticker_overlay is not None:
             self.sticker_overlay.tuck()
+        return False
+
+    def pointer_inside(self, widget: Gtk.Widget) -> bool:
+        window = self.get_window()
+        display = self.get_display()
+        seat = display.get_default_seat() if display is not None else None
+        pointer = seat.get_pointer() if seat is not None else None
+        if window is None or pointer is None or not widget.get_mapped():
+            return False
+        _window, x, y, _mask = window.get_device_position(pointer)
+        origin = widget.translate_coordinates(self, 0, 0)
+        if origin is None:
+            return False
+        allocation = widget.get_allocation()
+        left, top = origin
+        return left <= x < left + allocation.width and top <= y < top + allocation.height
+
+    def verify_hover(self) -> bool:
+        session_id = self.sticker_hovered
+        if session_id is None:
+            return False
+        box = self.row_hover_boxes.get(session_id)
+        if box is None or not self.pointer_inside(box):
+            self.sticker_hovered = None
+            if self.sticker_overlay is not None:
+                self.sticker_overlay.tuck()
         return False
 
     def show_test_sticker(self, key: str | None = None) -> None:
@@ -2448,13 +2488,32 @@ class StatusWidget(Gtk.Window):
         except OSError as error:
             log(f"wmctrl activate {window_id} failed: {error}")
 
+    def own_window_id(self) -> str | None:
+        """This widget's X11 window id as wmctrl expects it (hex), or None off X11."""
+        window = self.get_window()
+        get_xid = getattr(window, "get_xid", None)
+        if get_xid is None:
+            return None
+        try:
+            return hex(get_xid())
+        except Exception:
+            return None
+
     def apply_wmctrl_hints(self) -> bool:
+        # GTK-level hints first; cheap no-ops when the state already holds.
+        self.stick()
+        self.set_keep_above(True)
         wmctrl = shutil.which("wmctrl")
         if not wmctrl:
             return False  # nothing to reinforce (e.g. pure Wayland); stop the timer
+        # Target our own window by id. Matching by title (`wmctrl -r TITLE`) hits the first
+        # window whose title merely *contains* it, e.g. a terminal whose title mentions
+        # "AI Agents Status", which then becomes sticky instead of the widget.
+        window_id = self.own_window_id()
+        target = ["-i", "-r", window_id] if window_id else ["-r", TITLE]
         try:
             subprocess.run(
-                [wmctrl, "-r", TITLE, "-b", "add,above,sticky,skip_taskbar"],
+                [wmctrl, *target, "-b", "add,above,sticky,skip_taskbar"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
