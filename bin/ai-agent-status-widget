@@ -13,6 +13,7 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
+from ai_agent_status_lib import stickers
 from ai_agent_status_lib import updates
 from ai_agent_status_lib import usage_limits
 from ai_agent_status_lib.env_config import format_agents
@@ -39,6 +40,10 @@ WIDGET_CONFIG = CONFIG_DIR / "widget.json"
 LOG_FILE = CACHE_DIR / "widget.log"
 PID_FILE = CACHE_DIR / "widget.pid"
 NOTIFICATION_SOUND = DATA_DIR / "notification.mp3"
+GIFS_DIR = DATA_DIR / "gifs"
+STICKER_TEXTS_FILE = CONFIG_DIR / "stickers.json"
+STICKER_CACHE_DIR = CACHE_DIR / "stickers"
+KLIPY_CUSTOMER_ID_FILE = CONFIG_DIR / "klipy_customer_id"
 OPENAI_LOGO = DATA_DIR / "openai-logo.svg"
 ANTHROPIC_LOGO = DATA_DIR / "anthropic-logo.png"
 TITLE = SETTINGS.title
@@ -113,6 +118,15 @@ try:
 except Exception as error:  # pragma: no cover
     log(f"cairo import failed, using flat dots: {error}")
     CAIRO_OK = False
+
+try:
+    gi.require_version("PangoCairo", "1.0")
+    from gi.repository import PangoCairo
+
+    PANGOCAIRO_OK = True
+except Exception as error:  # pragma: no cover
+    log(f"PangoCairo import failed, stickers will have no speech bubble: {error}")
+    PANGOCAIRO_OK = False
 
 
 def hex_to_rgb(value: str) -> tuple[float, float, float]:
@@ -304,6 +318,325 @@ class RotatingProviderLogo(Gtk.DrawingArea):
         return False
 
 
+# ---- GIF sticker geometry (design spec "C · Naklejka wyskakuje", card-relative) ----
+STICKER_WIDTH = 150
+STICKER_HEIGHT = 104
+STICKER_PADDING = 5
+STICKER_ROTATION_DEG = 6.0
+STICKER_OFFSET_RIGHT = -18   # sticker's right edge sits 18 px outside the card's right edge
+STICKER_OFFSET_TOP = -78     # and 78 px above the card's top edge
+BUBBLE_MAX_WIDTH = 150
+BUBBLE_GAP = 8
+# The overlay window leaves room for the bubble on the left and the tuck-away slide below.
+OVERLAY_LEFT_ROOM = 190
+OVERLAY_TOP_ROOM = 22
+OVERLAY_BOTTOM_ROOM = 56
+OVERLAY_RIGHT_ROOM = 22
+POP_IN_MS = 260
+BUBBLE_DELAY_MS = 80
+TUCK_AWAY_MS = 200
+STICKER_HOLD_MS = 4000
+STICKER_DEBOUNCE_MS = 500
+STICKER_FRAME_MS = 16
+
+
+def ease_out_back(progress: float) -> float:
+    """Close match for the spec's cubic-bezier(.34, 1.56, .64, 1) overshoot."""
+    c1 = 1.70158
+    c3 = c1 + 1
+    t = max(0.0, min(1.0, progress)) - 1
+    return 1 + c3 * t * t * t + c1 * t * t
+
+
+def rounded_rect(cr: "cairo.Context", x: float, y: float, w: float, h: float, radii: tuple[float, float, float, float]) -> None:
+    """Rounded rectangle path; radii are (top-left, top-right, bottom-right, bottom-left)."""
+    tl, tr, br, bl = radii
+    cr.new_sub_path()
+    cr.arc(x + w - tr, y + tr, tr, -math.pi / 2, 0)
+    cr.arc(x + w - br, y + h - br, br, 0, math.pi / 2)
+    cr.arc(x + bl, y + h - bl, bl, math.pi / 2, math.pi)
+    cr.arc(x + tl, y + tl, tl, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+class StickerOverlay(Gtk.Window):
+    """Transparent, click-through popup that shows a tilted GIF sticker plus a speech bubble.
+
+    It lives in its own window so the widget card never changes size or shifts. Only GTK's
+    built-in GdkPixbuf GIF animation is used; nothing here touches the network.
+    """
+
+    WIDTH = OVERLAY_LEFT_ROOM + STICKER_WIDTH + OVERLAY_RIGHT_ROOM
+    HEIGHT = OVERLAY_TOP_ROOM + STICKER_HEIGHT + OVERLAY_BOTTOM_ROOM
+
+    def __init__(self) -> None:
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_name("stickerOverlay")
+        self.set_app_paintable(True)
+        self.set_decorated(False)
+        self.set_keep_above(True)
+        self.set_accept_focus(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_default_size(self.WIDTH, self.HEIGHT)
+        self.set_size_request(self.WIDTH, self.HEIGHT)
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        self.transparent = visual is not None and screen.is_composited()
+        if visual is not None:
+            self.set_visual(visual)
+        self.area = Gtk.DrawingArea()
+        self.area.connect("draw", self.on_draw)
+        self.add(self.area)
+        self.connect("realize", self.on_realize)
+
+        self.choice: stickers.StickerChoice | None = None
+        self.color = "#8B93A1"
+        self.pixbuf: GdkPixbuf.Pixbuf | None = None
+        self.animation_iter: GdkPixbuf.PixbufAnimationIter | None = None
+        self.phase = "hidden"  # hidden → in → shown → out → hidden
+        self.phase_started = 0
+        self.sticky = False
+        self.reduced_motion = False
+        self.tick_source: int | None = None
+        self.frame_source: int | None = None
+        self.hold_source: int | None = None
+
+    def on_realize(self, _widget: Gtk.Widget) -> None:
+        # Click-through: an empty input shape lets every click reach the widget below.
+        if CAIRO_OK:
+            window = self.get_window()
+            if window is not None:
+                window.input_shape_combine_region(cairo.Region(), 0, 0)
+
+    @property
+    def visible(self) -> bool:
+        return self.phase != "hidden"
+
+    def place_for_card(self, card_right: int, card_top: int) -> None:
+        sticker_left = card_right - STICKER_OFFSET_RIGHT - STICKER_WIDTH
+        sticker_top = card_top + STICKER_OFFSET_TOP
+        self.move(sticker_left - OVERLAY_LEFT_ROOM, sticker_top - OVERLAY_TOP_ROOM)
+
+    def load_image(self, path: Path | None) -> None:
+        self.stop_source("frame_source")
+        self.pixbuf = None
+        self.animation_iter = None
+        if path is None:
+            return
+        try:
+            animation = GdkPixbuf.PixbufAnimation.new_from_file(str(path))
+        except Exception as error:
+            log(f"sticker: cannot load {path.name}: {error}")
+            return
+        if animation.is_static_image():
+            self.pixbuf = animation.get_static_image()
+            return
+        self.animation_iter = animation.get_iter(None)
+        self.pixbuf = self.animation_iter.get_pixbuf()
+        self.schedule_frame()
+
+    def schedule_frame(self) -> None:
+        if self.animation_iter is None:
+            return
+        delay = self.animation_iter.get_delay_time()
+        if delay < 0:
+            return  # last frame of a non-looping GIF
+        self.frame_source = GLib.timeout_add(max(20, delay), self.on_frame)
+
+    def on_frame(self) -> bool:
+        self.frame_source = None
+        if self.animation_iter is None or not self.visible:
+            return False
+        self.animation_iter.advance(None)
+        self.pixbuf = self.animation_iter.get_pixbuf()
+        self.area.queue_draw()
+        self.schedule_frame()
+        return False
+
+    def stop_source(self, name: str) -> None:
+        source = getattr(self, name)
+        if source is not None:
+            GLib.source_remove(source)
+            setattr(self, name, None)
+
+    def present_sticker(self, choice: stickers.StickerChoice, sticky: bool, hold_ms: int | None = STICKER_HOLD_MS) -> None:
+        """Pop a sticker in. `hold_ms=None` keeps it until `tuck()` (hover, sticky states)."""
+        settings = Gtk.Settings.get_default()
+        self.reduced_motion = settings is not None and not settings.get_property("gtk-enable-animations")
+        self.stop_source("hold_source")
+        self.choice = choice
+        self.color = stickers.STICKER_COLORS.get(choice.key, "#8B93A1")
+        self.sticky = sticky
+        self.load_image(choice.image)
+        self.phase = "in"
+        self.phase_started = GLib.get_monotonic_time()
+        self.show_all()
+        self.area.queue_draw()
+        self.start_tick()
+        if not sticky and hold_ms is not None:
+            self.hold_source = GLib.timeout_add(hold_ms, self.on_hold_done)
+
+    def on_hold_done(self) -> bool:
+        self.hold_source = None
+        self.tuck()
+        return False
+
+    def tuck(self) -> None:
+        if self.phase in ("hidden", "out"):
+            return
+        self.stop_source("hold_source")
+        self.phase = "out"
+        self.phase_started = GLib.get_monotonic_time()
+        self.start_tick()
+
+    def hide_now(self) -> None:
+        for name in ("hold_source", "tick_source", "frame_source"):
+            self.stop_source(name)
+        self.phase = "hidden"
+        self.choice = None
+        self.pixbuf = None
+        self.animation_iter = None
+        self.hide()
+
+    def start_tick(self) -> None:
+        if self.tick_source is None:
+            self.tick_source = GLib.timeout_add(STICKER_FRAME_MS, self.on_tick)
+
+    def elapsed_ms(self) -> float:
+        return (GLib.get_monotonic_time() - self.phase_started) / 1000.0
+
+    def on_tick(self) -> bool:
+        elapsed = self.elapsed_ms()
+        if self.phase == "in" and elapsed >= POP_IN_MS + BUBBLE_DELAY_MS:
+            self.phase = "shown"
+        elif self.phase == "out" and elapsed >= TUCK_AWAY_MS:
+            self.tick_source = None
+            self.hide_now()
+            return False
+        self.area.queue_draw()
+        if self.phase == "shown":
+            self.tick_source = None
+            return False
+        return True
+
+    def transform(self, delay_ms: float = 0.0) -> tuple[float, float, float, float]:
+        """(scale, rotation factor 0..1, opacity, y offset) for the current animation phase."""
+        elapsed = self.elapsed_ms()
+        if self.phase == "in":
+            progress = max(0.0, elapsed - delay_ms) / POP_IN_MS
+            if self.reduced_motion:
+                return 1.0, 1.0, min(1.0, progress), 0.0
+            eased = ease_out_back(progress)
+            return 0.6 + 0.4 * eased, eased, max(0.0, min(1.0, progress * 1.4)), 0.0
+        if self.phase == "out":
+            progress = min(1.0, elapsed / TUCK_AWAY_MS)
+            if self.reduced_motion:
+                return 1.0, 1.0, 1.0 - progress, 0.0
+            eased = progress * progress
+            return 1.0 - 0.1 * eased, 1.0, 1.0 - eased, 40.0 * eased
+        return 1.0, 1.0, 1.0, 0.0
+
+    def on_draw(self, _area: Gtk.Widget, cr: "cairo.Context") -> bool:
+        if not CAIRO_OK:
+            return False
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        if self.choice is None or not self.visible:
+            return False
+        self.draw_sticker(cr)
+        if self.choice.bubble and PANGOCAIRO_OK:
+            self.draw_bubble(cr)
+        return False
+
+    def draw_sticker(self, cr: "cairo.Context") -> None:
+        scale, turn, opacity, dy = self.transform()
+        if opacity <= 0:
+            return
+        cx = OVERLAY_LEFT_ROOM + STICKER_WIDTH / 2
+        cy = OVERLAY_TOP_ROOM + STICKER_HEIGHT / 2 + dy
+        cr.save()
+        cr.translate(cx, cy)
+        cr.rotate(math.radians(STICKER_ROTATION_DEG * turn))
+        cr.scale(scale, scale)
+        cr.push_group()
+        half_w, half_h = STICKER_WIDTH / 2, STICKER_HEIGHT / 2
+
+        # Soft drop shadow: a few stacked translucent layers approximate a 24 px blur.
+        for spread, alpha in ((10, 0.06), (6, 0.10), (3, 0.16), (0, 0.22)):
+            rounded_rect(cr, -half_w - spread, -half_h + 10 - spread, STICKER_WIDTH + 2 * spread,
+                         STICKER_HEIGHT + 2 * spread, (10 + spread,) * 4)
+            cr.set_source_rgba(0, 0, 0, alpha)
+            cr.fill()
+
+        rounded_rect(cr, -half_w, -half_h, STICKER_WIDTH, STICKER_HEIGHT, (10, 10, 10, 10))
+        cr.set_source_rgb(*hex_to_rgb("#F4F1EA"))
+        cr.fill()
+
+        inner_w = STICKER_WIDTH - 2 * STICKER_PADDING
+        inner_h = STICKER_HEIGHT - 2 * STICKER_PADDING
+        rounded_rect(cr, -inner_w / 2, -inner_h / 2, inner_w, inner_h, (6, 6, 6, 6))
+        cr.clip()
+        if self.pixbuf is not None:
+            width, height = self.pixbuf.get_width(), self.pixbuf.get_height()
+            cover = max(inner_w / width, inner_h / height)
+            cr.save()
+            cr.scale(cover, cover)
+            Gdk.cairo_set_source_pixbuf(cr, self.pixbuf, -width / 2, -height / 2)
+            cr.paint()
+            cr.restore()
+        else:
+            self.draw_placeholder(cr, inner_w, inner_h)
+        cr.pop_group_to_source()
+        cr.paint_with_alpha(opacity)
+        cr.restore()
+
+    def draw_placeholder(self, cr: "cairo.Context", width: float, height: float) -> None:
+        """Diagonal stripes in the status colour (the spec's "no GIF in the pool" look)."""
+        red, green, blue = hex_to_rgb(self.color)
+        cr.set_source_rgb(red * 0.35, green * 0.35, blue * 0.35)
+        cr.paint()
+        cr.set_source_rgba(red, green, blue, 0.55)
+        cr.set_line_width(8)
+        for offset in range(-int(height) - int(width), int(width) + int(height), 22):
+            cr.move_to(-width / 2 + offset, height / 2)
+            cr.line_to(-width / 2 + offset + height, -height / 2)
+        cr.stroke()
+
+    def draw_bubble(self, cr: "cairo.Context") -> None:
+        scale, turn, opacity, dy = self.transform(delay_ms=BUBBLE_DELAY_MS if self.phase == "in" else 0.0)
+        if opacity <= 0 or self.choice is None:
+            return
+        layout = PangoCairo.create_layout(cr)
+        layout.set_font_description(Pango.FontDescription.from_string("JetBrains Mono, IBM Plex Mono, monospace Semi-Bold 9"))
+        layout.set_width((BUBBLE_MAX_WIDTH - 20) * Pango.SCALE)
+        layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+        layout.set_text(self.choice.bubble, -1)
+        text_w, text_h = layout.get_pixel_size()
+        bubble_w, bubble_h = text_w + 20, text_h + 12
+        right = OVERLAY_LEFT_ROOM - BUBBLE_GAP
+        top = OVERLAY_TOP_ROOM + 14 + dy
+        cr.save()
+        cr.translate(right - bubble_w / 2, top + bubble_h / 2)
+        cr.rotate(math.radians(-3.0 * turn))
+        cr.scale(scale, scale)
+        cr.push_group()
+        rounded_rect(cr, -bubble_w / 2, -bubble_h / 2 + 3, bubble_w, bubble_h, (12, 12, 2, 12))
+        cr.set_source_rgba(0, 0, 0, 0.30)
+        cr.fill()
+        rounded_rect(cr, -bubble_w / 2, -bubble_h / 2, bubble_w, bubble_h, (12, 12, 2, 12))
+        cr.set_source_rgb(*hex_to_rgb(self.color))
+        cr.fill()
+        cr.move_to(-text_w / 2, -text_h / 2)
+        cr.set_source_rgb(*hex_to_rgb("#0E1218"))
+        PangoCairo.show_layout(cr, layout)
+        cr.pop_group_to_source()
+        cr.paint_with_alpha(opacity)
+        cr.restore()
+
+
 # Timing settings shown in the Settings window: (env key, widget config key, label, hint).
 TIMING_SETTINGS = (
     ("AI_STATUS_STALE_AFTER_SECONDS", "stale_after_seconds",
@@ -334,6 +667,7 @@ class SettingsWindow(Gtk.Window):
         self.set_border_width(0)
         self.agent_checks: dict[str, Gtk.CheckButton] = {}
         self.connect("key-press-event", self.on_key_press)
+        self.connect("delete-event", lambda *_args: self.close_window() or True)
         # Native controls (switch, spin buttons, checkboxes) follow the widget's dark look.
         gtk_settings = Gtk.Settings.get_default()
         if gtk_settings is not None:
@@ -396,6 +730,36 @@ class SettingsWindow(Gtk.Window):
         self.attach_row(grid, 1, "Visible rows", "sessions shown at once", self.rows_spin)
         content.pack_start(grid, False, False, 0)
 
+        # ---- stickers ----
+        content.pack_start(self.section_label("Stickers"), False, False, 0)
+        grid = self.new_grid()
+        self.serious_switch = Gtk.Switch()
+        self.serious_switch.set_halign(Gtk.Align.END)
+        self.serious_switch.set_active(owner.serious_mode)
+        self.serious_switch.connect("notify::active", self.on_serious_changed)
+        self.attach_row(grid, 0, "Serious mode", "no GIF stickers, good for meetings", self.serious_switch)
+
+        self.klipy_entry = Gtk.Entry()
+        self.klipy_entry.set_name("settingsEntry")
+        self.klipy_entry.set_visibility(False)
+        self.klipy_entry.set_width_chars(16)
+        self.klipy_entry.set_placeholder_text("optional")
+        self.klipy_entry.set_text(owner.klipy_api_key)
+        self.klipy_entry.connect("changed", self.on_klipy_changed)
+        self.klipy_save_source: int | None = None
+        self.attach_row(grid, 1, "KLIPY API key", "random GIFs from klipy.com search", self.klipy_entry)
+
+        test = Gtk.Button(label="Show test sticker")
+        test.set_name("settingsClose")
+        test.connect("clicked", lambda _button: owner.show_test_sticker())
+        self.attach_row(grid, 2, "Preview", "cycles through every status", test)
+        content.pack_start(grid, False, False, 0)
+        gifs_hint = self.hint_label(f"Local GIFs: {display_path(GIFS_DIR)}/<status>/")
+        gifs_hint.set_line_wrap(True)
+        gifs_hint.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        gifs_hint.set_max_width_chars(48)
+        content.pack_start(gifs_hint, False, False, 0)
+
         # ---- timing ----
         content.pack_start(self.section_label("Timing (minutes)"), False, False, 0)
         grid = self.new_grid()
@@ -412,12 +776,13 @@ class SettingsWindow(Gtk.Window):
         footer.set_name("settingsFooter")
         saved = self.hint_label(f"Saved automatically to {display_path(SETTINGS.env_file)}")
         saved.set_line_wrap(True)
+        saved.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
         saved.set_max_width_chars(34)
         footer.pack_start(saved, True, True, 0)
         close = Gtk.Button(label="Close")
         close.set_name("settingsClose")
         close.set_valign(Gtk.Align.CENTER)
-        close.connect("clicked", lambda _button: self.destroy())
+        close.connect("clicked", lambda _button: self.close_window())
         footer.pack_end(close, False, False, 0)
         outer.pack_start(footer, False, False, 0)
 
@@ -454,9 +819,15 @@ class SettingsWindow(Gtk.Window):
         control.set_valign(Gtk.Align.CENTER)
         grid.attach(control, 1, row, 1, 1)
 
+    def close_window(self) -> None:
+        if self.klipy_save_source is not None:
+            GLib.source_remove(self.klipy_save_source)
+            self.save_klipy_key()
+        self.destroy()
+
     def on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> bool:
         if event.keyval == Gdk.KEY_Escape:
-            self.destroy()
+            self.close_window()
             return True
         return False
 
@@ -470,6 +841,23 @@ class SettingsWindow(Gtk.Window):
 
     def on_sound_changed(self, switch: Gtk.Switch, _param: object) -> None:
         self.owner.update_setting("AI_STATUS_SOUND_ENABLED", "true" if switch.get_active() else "false")
+
+    def on_serious_changed(self, switch: Gtk.Switch, _param: object) -> None:
+        if switch.get_active() != self.owner.serious_mode:
+            self.owner.set_serious_mode(switch.get_active())
+
+    def on_klipy_changed(self, _entry: Gtk.Entry) -> None:
+        # Save once typing/pasting settles instead of on every keystroke.
+        if self.klipy_save_source is not None:
+            GLib.source_remove(self.klipy_save_source)
+        self.klipy_save_source = GLib.timeout_add(700, self.save_klipy_key)
+
+    def save_klipy_key(self) -> bool:
+        self.klipy_save_source = None
+        value = self.klipy_entry.get_text().strip()
+        if value != self.owner.klipy_api_key:
+            self.owner.update_setting("AI_STATUS_KLIPY_API_KEY", value)
+        return False
 
     def on_rows_changed(self, spin: Gtk.SpinButton) -> None:
         self.owner.update_setting("AI_STATUS_MAX_ROWS", str(spin.get_value_as_int()))
@@ -495,6 +883,19 @@ class StatusWidget(Gtk.Window):
         self.agents: tuple[str, ...] = SETTINGS.agents
         self.max_rows = MAX_ROWS
         self.settings_window: SettingsWindow | None = None
+        self.serious_mode = SETTINGS.serious_mode
+        self.klipy_api_key = SETTINGS.klipy_api_key
+        self.sticker_overlay = StickerOverlay() if CAIRO_OK else None
+        self.sticker_source = self.build_sticker_source()
+        self.sticker_kinds: dict[str, str] = {}
+        self.sticker_primed = False
+        self.sticker_request = 0
+        self.sticker_debounce: int | None = None
+        self.sticker_owner: str | None = None
+        self.sticker_hovered: str | None = None
+        self.last_stickers: dict[str, stickers.StickerChoice] = {}
+        self.limits_seen: set[tuple[str, str, str]] = set()
+        self.test_sticker_index = 0
         self.was_waiting_for_interaction = False
         self.was_done = False
         self.anim_frame = 0
@@ -515,6 +916,7 @@ class StatusWidget(Gtk.Window):
             "providers": usage_limits.load_usage_cache(USAGE_CACHE_FILE),
             "errors": {},
         }
+        self.note_usage_limits(self.usage_snapshot, trigger=False)
         self.demo_usage_scenarios = usage_limits.demo_usage_states()
         if demo:
             self.usage_snapshot = self.demo_usage_scenarios[0]["snapshot"]
@@ -663,6 +1065,12 @@ class StatusWidget(Gtk.Window):
         }
         #settingsWindow spinbutton button:hover { color: #ffffff; background: rgba(255,255,255,0.06); }
         #settingsWindow spinbutton button:disabled { color: #3a4350; }
+        #settingsWindow entry {
+          background: #151C25; background-image: none; color: #E6EDF3;
+          border: 1px solid rgba(255,255,255,0.10); border-radius: 7px; box-shadow: none;
+          font-family: 'IBM Plex Mono', monospace; font-size: 11px; min-height: 26px;
+        }
+        #settingsWindow entry:focus { border-color: rgba(45,212,191,0.55); }
         #settingsWindow switch {
           background: #151C25; background-image: none;
           border: 1px solid rgba(255,255,255,0.10); box-shadow: none;
@@ -882,8 +1290,11 @@ class StatusWidget(Gtk.Window):
     def collect_sessions(self) -> list[dict[str, object]]:
         if self.demo:
             scenario = self.demo_scenarios[self.demo_index % len(self.demo_scenarios)]
-            sessions = [self.make_session(agent, status, project, hhmm)
-                        for agent, status, project, hhmm in scenario]
+            sessions = []
+            for agent, status, project, hhmm in scenario:
+                session = self.make_session(agent, status, project, hhmm)
+                session["id"] = f"{agent}:{project}"
+                sessions.append(session)
         else:
             structured = self.read_structured_sessions()
             sessions = structured if structured is not None else self.read_combined_sessions()
@@ -918,6 +1329,7 @@ class StatusWidget(Gtk.Window):
             "time": hhmm,
             "cwd": cwd,
             "client_pids": client_pids or [],
+            "id": f"{agent}:{project}",
             "color": STATE_COLORS.get(normalized_kind, STATE_COLORS["neutral"]),
         }
 
@@ -961,6 +1373,7 @@ class StatusWidget(Gtk.Window):
             name, clean = self.split_agent_status(status, agent)
             session = self.make_session(agent, clean, project, hhmm, cwd, client_pids, display_kind, source_kind)
             session["name"] = name
+            session["id"] = path.stem
             sessions.append(session)
         return sessions
 
@@ -985,6 +1398,7 @@ class StatusWidget(Gtk.Window):
             name, clean = self.split_agent_status(text, agent)
             session = self.make_session(agent, clean, project.strip(), hhmm)
             session["name"] = name
+            session["id"] = f"{agent}:{project.strip()}"
             sessions.append(session)
         return sessions
 
@@ -1053,6 +1467,9 @@ class StatusWidget(Gtk.Window):
         if self.demo:
             self.apply_demo_usage_state(self.demo_index)
         sessions = self.order_sessions(self.collect_sessions())
+        if not self.demo:
+            # Demo statuses rotate every second; stickers there come from --sticker / Settings.
+            self.update_stickers(sessions)
         visible = sessions[:self.max_rows]
         hidden_done = sum(1 for s in sessions[self.max_rows:] if s["kind"] in INACTIVE)
 
@@ -1083,6 +1500,9 @@ class StatusWidget(Gtk.Window):
         return True
 
     def rebuild_body(self, sessions: list[dict[str, object]], hidden_done: int) -> None:
+        if self.sticker_hovered is not None:
+            # The hovered row is about to be destroyed, so its leave event will never come.
+            self.on_row_leave(None, None, self.sticker_hovered)
         for child in self.body.get_children():
             self.body.remove(child)
         self.anim_dot_labels = []
@@ -1093,7 +1513,13 @@ class StatusWidget(Gtk.Window):
             self.build_empty_state()
         else:
             for session in sessions:
-                self.body.pack_start(self.build_row(session), False, False, 0)
+                hover = Gtk.EventBox()
+                hover.set_visible_window(False)
+                hover.add(self.build_row(session))
+                session_id = str(session["id"])
+                hover.connect("enter-notify-event", self.on_row_enter, session_id)
+                hover.connect("leave-notify-event", self.on_row_leave, session_id)
+                self.body.pack_start(hover, False, False, 0)
             if hidden_done > 0:
                 footer = Gtk.Label(label=f"+{hidden_done} finished, hidden automatically")
                 footer.set_name("footer")
@@ -1418,6 +1844,7 @@ class StatusWidget(Gtk.Window):
 
     def on_usage_result(self, snapshot: usage_limits.UsageSnapshot) -> bool:
         self.usage_snapshot = snapshot
+        self.note_usage_limits(snapshot, trigger=True)
         self.stop_usage_animation()
         self.usage_refreshing = False
         self.usage_refreshing_providers = set()
@@ -1565,6 +1992,9 @@ class StatusWidget(Gtk.Window):
         settings_item.connect("activate", lambda _item: self.open_settings())
         agents_item = Gtk.MenuItem(label="Show agents")
         agents_item.set_submenu(self.build_agents_menu())
+        serious_item = Gtk.CheckMenuItem(label="Serious mode (no stickers)")
+        serious_item.set_active(self.serious_mode)
+        serious_item.connect("toggled", lambda item: self.set_serious_mode(item.get_active()))
         reload_item.connect("activate", lambda _item: self.refresh_status())
         logs_item.connect("activate", lambda _item: self.open_logs_folder())
         if self.update_available:
@@ -1572,10 +2002,148 @@ class StatusWidget(Gtk.Window):
         else:
             update_item.connect("activate", lambda _item: self.start_update_check())
         quit_item.connect("activate", self.quit)
-        for item in (settings_item, agents_item, reload_item, logs_item, update_item, quit_item):
+        for item in (settings_item, agents_item, serious_item, reload_item, logs_item, update_item, quit_item):
             menu.append(item)
         menu.show_all()
         menu.popup_at_pointer(event)
+
+    # ----------------------------- GIF stickers -----------------------------
+    def build_sticker_source(self) -> stickers.StickerSource:
+        bubbles, queries = stickers.load_sticker_texts(STICKER_TEXTS_FILE)
+        klipy = None
+        if self.klipy_api_key:
+            klipy = stickers.KlipyClient(
+                self.klipy_api_key,
+                STICKER_CACHE_DIR,
+                stickers.load_customer_id(KLIPY_CUSTOMER_ID_FILE),
+            )
+        return stickers.StickerSource(GIFS_DIR, bubbles, queries, klipy, log=log)
+
+    def update_stickers(self, sessions: list[dict[str, object]]) -> None:
+        """Pop a sticker for the session whose sticker status changed (waiting rows first)."""
+        current: dict[str, str] = {}
+        for session in sessions:
+            key = stickers.sticker_for_kind(session["kind"])
+            if key is not None:
+                current[str(session["id"])] = key
+        changed = [session_id for session_id, key in current.items() if self.sticker_kinds.get(session_id) != key]
+        self.sticker_kinds = current
+        if not self.sticker_primed:
+            # Do not greet every already-running session with a sticker on startup.
+            self.sticker_primed = True
+            return
+        overlay = self.sticker_overlay
+        owner = self.sticker_owner
+        if (
+            overlay is not None and overlay.visible and overlay.sticky and owner is not None
+            and overlay.choice is not None and current.get(owner) != overlay.choice.key
+        ):
+            overlay.tuck()
+            self.sticker_owner = None
+        if changed:
+            self.request_sticker(current[changed[0]], changed[0])
+
+    def note_usage_limits(self, snapshot: object, *, trigger: bool) -> None:
+        providers = snapshot.get("providers") if isinstance(snapshot, dict) else None
+        if not isinstance(providers, dict):
+            return
+        for provider, limits in providers.items():
+            if provider not in self.agents or not isinstance(limits, list):
+                continue
+            for limit in limits:
+                if not isinstance(limit, dict):
+                    continue
+                used = limit.get("used_percent")
+                if not isinstance(used, (int, float)) or used < stickers.LIMIT_THRESHOLD_PERCENT:
+                    continue
+                token = (str(provider), str(limit.get("window")), str(limit.get("resets_at")))
+                if token in self.limits_seen:
+                    continue
+                self.limits_seen.add(token)
+                if trigger:
+                    self.request_sticker("limit", f"limit:{provider}")
+
+    def request_sticker(self, key: str, session_id: str, *, sticky: bool | None = None, debounce_ms: int = STICKER_DEBOUNCE_MS) -> None:
+        """Debounced: rapid status changes collapse into one sticker for the latest change."""
+        if self.serious_mode or self.sticker_overlay is None:
+            return
+        if self.sticker_debounce is not None:
+            GLib.source_remove(self.sticker_debounce)
+        self.sticker_request += 1
+        request = self.sticker_request
+        is_sticky = key in stickers.STICKY_KEYS if sticky is None else sticky
+
+        def pick_in_background() -> bool:
+            self.sticker_debounce = None
+            source = self.sticker_source
+
+            def worker() -> None:
+                try:
+                    choice = source.pick(key)
+                except Exception as error:  # never let a sticker take the widget down
+                    log(f"sticker: pick failed: {error}")
+                    choice = stickers.StickerChoice(key, None, "", "placeholder")
+                GLib.idle_add(self.show_sticker, request, session_id, choice, is_sticky)
+
+            threading.Thread(target=worker, daemon=True).start()
+            return False
+
+        self.sticker_debounce = GLib.timeout_add(max(1, debounce_ms), pick_in_background)
+
+    def show_sticker(self, request: int, session_id: str, choice: stickers.StickerChoice, sticky: bool) -> bool:
+        overlay = self.sticker_overlay
+        if overlay is None or request != self.sticker_request or self.serious_mode:
+            return False
+        self.last_stickers[session_id] = choice
+        self.sticker_owner = session_id
+        self.sticker_hovered = None
+        self.position_sticker_overlay()
+        overlay.present_sticker(choice, sticky)
+        return False
+
+    def position_sticker_overlay(self) -> None:
+        if self.sticker_overlay is None:
+            return
+        x, y = self.get_position()
+        width, _height = self.get_size()
+        # The card sits inside an 8 px transparent margin of the widget window.
+        self.sticker_overlay.place_for_card(x + width - 8, y + 8)
+
+    def on_row_enter(self, _widget: Gtk.Widget, event: Gdk.EventCrossing, session_id: str) -> bool:
+        overlay = self.sticker_overlay
+        if overlay is None or self.serious_mode or event.detail == Gdk.NotifyType.INFERIOR:
+            return False
+        choice = self.last_stickers.get(session_id)
+        if choice is None or (overlay.visible and self.sticker_owner == session_id):
+            return False
+        self.sticker_hovered = session_id
+        self.sticker_owner = session_id
+        self.position_sticker_overlay()
+        overlay.present_sticker(choice, sticky=False, hold_ms=None)
+        return False
+
+    def on_row_leave(self, _widget: Gtk.Widget | None, event: Gdk.EventCrossing | None, session_id: str) -> bool:
+        if event is not None and event.detail == Gdk.NotifyType.INFERIOR:
+            return False
+        if self.sticker_hovered != session_id:
+            return False
+        self.sticker_hovered = None
+        if self.sticker_overlay is not None:
+            self.sticker_overlay.tuck()
+        return False
+
+    def show_test_sticker(self, key: str | None = None) -> None:
+        """Debug / Settings helper: show one sticker now, cycling through every status."""
+        if key is None:
+            key = stickers.STICKER_KEYS[self.test_sticker_index % len(stickers.STICKER_KEYS)]
+            self.test_sticker_index += 1
+        self.request_sticker(key, f"test:{key}", sticky=False, debounce_ms=1)
+
+    def set_serious_mode(self, enabled: bool) -> None:
+        self.update_setting("AI_STATUS_SERIOUS_MODE", "true" if enabled else "false")
+        window = self.settings_window
+        if window is not None and window.serious_switch.get_active() != enabled:
+            window.serious_switch.set_active(enabled)
 
     def open_settings(self) -> None:
         if self.settings_window is None:
@@ -1617,13 +2185,26 @@ class StatusWidget(Gtk.Window):
         """Apply one setting to the running widget and save it to the runtime .env."""
         if key == "AI_STATUS_SOUND_ENABLED":
             self.config["sound_enabled"] = value == "true"
+        elif key == "AI_STATUS_SERIOUS_MODE":
+            self.serious_mode = value == "true"
+            if self.serious_mode:
+                if self.sticker_debounce is not None:
+                    GLib.source_remove(self.sticker_debounce)
+                    self.sticker_debounce = None
+                self.sticker_request += 1
+                if self.sticker_overlay is not None:
+                    self.sticker_overlay.hide_now()
+        elif key == "AI_STATUS_KLIPY_API_KEY":
+            self.klipy_api_key = value
+            self.sticker_source = self.build_sticker_source()
         elif key == "AI_STATUS_MAX_ROWS":
             self.max_rows = max(1, int(value))
         else:
             for env_key, config_key, _label, _hint in TIMING_SETTINGS:
                 if env_key == key:
                     self.config[config_key] = max(0, int(value))
-        log(f"setting {key}={value}")
+        shown = "(hidden)" if key == "AI_STATUS_KLIPY_API_KEY" and value else value
+        log(f"setting {key}={shown}")
         try:
             write_env_value(SETTINGS.env_file, key, value)
         except OSError as error:
@@ -1774,6 +2355,8 @@ class StatusWidget(Gtk.Window):
 
     def on_configure(self, _widget: Gtk.Widget, _event: Gdk.EventConfigure) -> bool:
         self.save_position()
+        if self.sticker_overlay is not None and self.sticker_overlay.visible:
+            self.position_sticker_overlay()
         return False
 
     def on_delete(self, *_args: object) -> bool:
@@ -1783,6 +2366,8 @@ class StatusWidget(Gtk.Window):
 
     def quit(self, *_args: object) -> None:
         self.save_position()
+        if self.sticker_overlay is not None:
+            self.sticker_overlay.hide_now()
         Gtk.main_quit()
 
     def switch_to_session(self, project: str, cwd: str, client_pids: list[int]) -> None:
@@ -1884,6 +2469,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Floating GTK widget for ai-cli-status-monitor.")
     parser.add_argument("--demo", action="store_true", help="cycle through demo states")
     parser.add_argument("--version", action="store_true", help="print the installed version and exit")
+    parser.add_argument(
+        "--sticker",
+        choices=(*stickers.STICKER_KEYS, "all"),
+        help="debug: show this GIF sticker after the intro ('all' cycles through every status)",
+    )
     args = parser.parse_args()
 
     if args.version:
@@ -1898,6 +2488,20 @@ def main() -> int:
     PID_FILE.write_text(f"{os.getpid()}\n", encoding="utf-8")
     widget = StatusWidget(demo=args.demo)
     widget.show_all()
+    if args.sticker:
+        def show_debug_sticker() -> bool:
+            if args.sticker == "all":
+                widget.show_test_sticker()
+                return True  # keep cycling, one status every 5 s
+            widget.show_test_sticker(args.sticker)
+            return False
+
+        def start_debug_stickers() -> bool:
+            if show_debug_sticker():
+                GLib.timeout_add(5000, show_debug_sticker)
+            return False
+
+        GLib.timeout_add(3500, start_debug_stickers)
     log("widget started" + (" in demo mode" if args.demo else ""))
     Gtk.main()
     log("widget stopped")

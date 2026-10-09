@@ -111,6 +111,11 @@ cp "$project_dir/assets/notification.mp3" "$notification_sound_file"
 cp "$project_dir/assets/openai-logo.svg" "$openai_logo_file"
 cp "$project_dir/assets/anthropic-logo.png" "$anthropic_logo_file"
 
+# Seed the local GIF sticker pool (gifs/<status>/*). Never overwrite or delete the
+# user's own GIFs: only files that are not there yet are added.
+mkdir -p "$data_dir/gifs"
+cp -R -n "$project_dir/assets/gifs/." "$data_dir/gifs/"
+
 # Record the version and where we installed from, so ai-agent-status-update can
 # pull the right clone and the widget can tell when a newer version is published.
 cp "$project_dir/VERSION" "$data_dir/VERSION"

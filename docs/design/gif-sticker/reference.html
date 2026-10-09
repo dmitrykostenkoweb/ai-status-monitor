@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>GIF sticker – reference</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root{--bg-card:#0e1218;--border:#232a35;--divider:#1c222c;--text:#e6edf3;--muted:#7d8590;--claude:#e8825f;--sticker:#f4f1ea;--c:#f5c542}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:#1d2130;color:var(--text);font-family:"IBM Plex Sans",sans-serif;display:flex;flex-direction:column;align-items:center;padding:110px 16px 32px;gap:28px}
+  .mono{font-family:"JetBrains Mono",monospace}
+  .wrap{position:relative;width:400px;max-width:100%}
+  .react{position:absolute;top:-78px;right:-18px;z-index:2;display:flex;align-items:flex-start;gap:10px;pointer-events:none}
+  .sticker{width:150px;height:104px;padding:5px;background:var(--sticker);border-radius:10px;box-shadow:0 10px 24px rgba(0,0,0,.55);
+    transform:scale(.6) rotate(0);opacity:0;transition:transform 260ms cubic-bezier(.34,1.56,.64,1),opacity 200ms}
+  .sticker .gif{width:100%;height:100%;border-radius:6px;overflow:hidden;background:#151a22}
+  .sticker img{width:100%;height:100%;object-fit:cover;display:block}
+  .ph{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:6px;text-align:center;font-size:11px;color:var(--c);
+    background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--c) 14%,transparent) 0 8px,transparent 8px 16px)}
+  .bubble{margin-top:14px;max-width:150px;font:600 12px "JetBrains Mono",monospace;color:#0e1218;background:var(--c);padding:8px 12px;border-radius:12px 12px 2px 12px;
+    box-shadow:0 6px 16px rgba(0,0,0,.4);transform:scale(.6) rotate(0);opacity:0;transition:transform 260ms cubic-bezier(.34,1.56,.64,1) 80ms,opacity 200ms 80ms}
+  .react.on .sticker{transform:scale(1) rotate(6deg);opacity:1}
+  .react.on .bubble{transform:scale(1) rotate(-3deg);opacity:1}
+  .react.out .sticker,.react.out .bubble{transform:translateY(40px) scale(.9);opacity:0;transition:transform 200ms ease-in,opacity 200ms ease-in}
+  @media (prefers-reduced-motion:reduce){.sticker,.bubble,.react.out .sticker,.react.out .bubble{transition:opacity 200ms!important;transform:rotate(6deg)!important}.bubble{transform:rotate(-3deg)!important}}
+  .card{position:relative;z-index:1;background:var(--bg-card);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:0 18px 40px rgba(0,0,0,.45)}
+  .head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--divider);font-weight:600;font-size:15px}
+  .agent{display:flex;align-items:center;gap:14px;padding:16px;border-bottom:1px solid var(--divider)}
+  .dot{width:9px;height:9px;flex-shrink:0;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c)}
+  .name{font-weight:600;font-size:16px;color:var(--claude)}
+  .label{font-size:13px;color:var(--c);margin-left:8px}
+  .meta{font-size:12px;color:var(--muted)}
+  .usage{display:flex;flex-direction:column;gap:6px;padding:16px;font-size:11px;color:#c9d1d9}
+  .row{display:flex;justify-content:space-between}
+  .bar{height:4px;background:#1f2630;border-radius:4px}.bar i{display:block;height:4px;background:#4ade80;border-radius:4px}
+  .pills{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;max-width:440px}
+  .pills button{min-height:36px;padding:0 14px;border-radius:18px;cursor:pointer;font:12px "JetBrains Mono",monospace;background:transparent;color:#c9d1d9;border:1px solid #39414e}
+  .pills button[aria-pressed=true]{background:var(--pc);border-color:var(--pc);color:#0e1218;font-weight:600}
+  label{font-size:12px;color:#aeb6c0;display:flex;gap:6px;align-items:center}
+</style>
+</head>
+<body>
+  <div class="wrap" id="wrap">
+    <div class="react" id="react" aria-live="polite">
+      <div class="bubble" id="bubble"></div>
+      <div class="sticker"><div class="gif" id="gif"></div></div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c9d1d9" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        AI Agents Status
+      </div>
+      <div class="agent" id="agent">
+        <span class="dot"></span>
+        <div style="flex-grow:1">
+          <div><span class="name">Claude</span><span class="label mono" id="label"></span></div>
+          <div class="meta mono">unitbox-front · 11:05</div>
+        </div>
+        <span class="meta mono">→</span>
+      </div>
+      <div class="usage mono">
+        <div class="row"><span>Claude 5h</span><span>2%</span></div><div class="bar"><i style="width:2%"></i></div>
+        <div class="row" style="margin-top:6px"><span>Codex weekly</span><span>57%</span></div><div class="bar"><i style="width:57%"></i></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pills" id="pills"></div>
+  <label><input type="checkbox" id="serious"> Tryb poważny (bez naklejek)</label>
+
+<script>
+const STATUSES = {
+  analyzing:{label:'analyzing',color:'#f5c542',quips:['hmm… 2 + 2 = ?','chwila, liczę…'],gifs:['gifs/analyzing/eyes.png','gifs/analyzing/math.png']},
+  coding:{label:'coding',color:'#60a5fa',quips:['piszę, piszę!','klepię kod, nie przeszkadzać'],gifs:[],ph:'kot wali w klawiaturę'},
+  waiting:{label:'waiting for you',color:'#c084fc',quips:['Dima? Halo?','halo? jest tam kto?'],gifs:[],ph:'szkielet czeka na ławce',sticky:true},
+  done:{label:'done',color:'#4ade80',quips:['gotowe!','należy mi się kawa'],gifs:[],ph:'taniec zwycięstwa'},
+  error:{label:'error',color:'#f87171',quips:['jest dobrze. chyba.','wszystko jest w porządku.'],gifs:[],ph:'spokój w płonącym pokoju',sticky:true},
+  limit:{label:'limit > 90%',color:'#fb923c',quips:['oszczędzaj tokeny, bracie'],gifs:[],ph:'bateria 1%'},
+  idle:{label:'idle',color:'#8b93a1',quips:['zzz…'],gifs:[],ph:'śpiący kot'}
+};
+const SHOW_MS = 4000;
+const last = {};
+const pick = (arr, key) => { if (!arr.length) return null; let i; do { i = Math.floor(Math.random()*arr.length); } while (arr.length > 1 && i === last[key]); last[key] = i; return arr[i]; };
+
+const $ = id => document.getElementById(id);
+let current = null, timer = null, debounce = null;
+
+function render(key){
+  const s = STATUSES[key]; current = key;
+  document.documentElement.style.setProperty('--c', s.color);
+  $('label').textContent = s.label;
+  document.querySelectorAll('#pills button').forEach(b => b.setAttribute('aria-pressed', b.dataset.k === key));
+  if ($('serious').checked) { hide(); return; }
+  const src = pick(s.gifs, key);
+  $('gif').innerHTML = src ? `<img src="${src}" alt="">` : `<div class="ph"><b class="mono">GIF</b><span style="color:#c9d1d9">${s.ph}</span></div>`;
+  $('bubble').textContent = s.quips[Math.floor(Math.random()*s.quips.length)];
+  show();
+  clearTimeout(timer);
+  if (!s.sticky) timer = setTimeout(hide, SHOW_MS);
+}
+function show(){ const r = $('react'); r.classList.remove('out','on'); void r.offsetWidth; r.classList.add('on'); }
+function hide(){ const r = $('react'); if (r.classList.contains('on')) { r.classList.remove('on'); r.classList.add('out'); } }
+function setStatus(key){ clearTimeout(debounce); debounce = setTimeout(() => render(key), key === current ? 0 : 0); }
+
+$('agent').addEventListener('mouseenter', () => { if (!$('serious').checked && current) { clearTimeout(timer); show(); } });
+$('agent').addEventListener('mouseleave', () => { if (current && !STATUSES[current].sticky) timer = setTimeout(hide, 600); });
+$('serious').addEventListener('change', () => current && render(current));
+
+for (const [k, s] of Object.entries(STATUSES)) {
+  const b = document.createElement('button');
+  b.textContent = s.label; b.dataset.k = k; b.style.setProperty('--pc', s.color);
+  b.onclick = () => setStatus(k);
+  $('pills').appendChild(b);
+}
+render('analyzing');
+</script>
+</body>
+</html>
