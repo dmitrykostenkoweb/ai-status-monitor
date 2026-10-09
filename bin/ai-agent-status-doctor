@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from ai_agent_status_lib import updates
+from ai_agent_status_lib.env_config import format_agents
 from ai_agent_status_lib.env_config import load_settings
 
 CONFIG_WARNINGS: list[str] = []
@@ -105,6 +106,7 @@ def main() -> int:
     ok(f"Resolved cache dir: {CACHE_DIR}")
     ok(f"Resolved config dir: {SETTINGS.config_dir}")
     ok(f"Resolved data dir: {SETTINGS.data_dir}")
+    ok(f"Shown agents: {format_agents(SETTINGS.agents)}")
     for message in CONFIG_WARNINGS:
         warn(f"Configuration: {message}")
 

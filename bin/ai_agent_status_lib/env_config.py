@@ -23,7 +23,10 @@ DEFAULT_VALUES = {
     "AI_STATUS_IDLE_AFTER_SECONDS": "600",
     "AI_STATUS_HIDE_STALE_AFTER_SECONDS": "900",
     "AI_STATUS_THEME": "dark",
+    "AI_STATUS_AGENTS": "claude,codex",
 }
+
+SUPPORTED_AGENTS = ("claude", "codex")
 
 KNOWN_KEYS = frozenset(DEFAULT_VALUES)
 LEGACY_KEYS = {
@@ -37,6 +40,7 @@ LEGACY_KEYS = {
 
 TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+AGENT_SEPARATOR = re.compile(r"[\s,]+")
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
 Diagnostic = Callable[[str], None]
 
@@ -56,6 +60,7 @@ class Settings:
     idle_after_seconds: int
     hide_stale_after_seconds: int
     theme: str
+    agents: tuple[str, ...] = SUPPORTED_AGENTS
 
     @property
     def widget_config(self) -> dict[str, object]:
@@ -82,6 +87,7 @@ class Settings:
             "AI_STATUS_IDLE_AFTER_SECONDS": str(self.idle_after_seconds),
             "AI_STATUS_HIDE_STALE_AFTER_SECONDS": str(self.hide_stale_after_seconds),
             "AI_STATUS_THEME": self.theme,
+            "AI_STATUS_AGENTS": format_agents(self.agents),
         }
 
 
@@ -162,6 +168,22 @@ def _parse_int(value: object, minimum: int) -> int | None:
     return parsed if parsed >= minimum else None
 
 
+def parse_agents(value: object) -> tuple[str, ...] | None:
+    """Parse AI_STATUS_AGENTS: a comma/space list drawn from SUPPORTED_AGENTS (or "all")."""
+    if not isinstance(value, str):
+        return None
+    tokens = {token for token in AGENT_SEPARATOR.split(value.strip().lower()) if token}
+    if tokens == {"all"} or tokens == {"both"}:
+        return SUPPORTED_AGENTS
+    if not tokens or not tokens <= set(SUPPORTED_AGENTS):
+        return None
+    return tuple(agent for agent in SUPPORTED_AGENTS if agent in tokens)
+
+
+def format_agents(agents: tuple[str, ...]) -> str:
+    return ",".join(agents)
+
+
 def _legacy_widget_config(config_dir: Path, diagnostic: Diagnostic) -> dict[str, object]:
     path = config_dir / "widget.json"
     try:
@@ -185,6 +207,40 @@ def serialize_env(values: Mapping[str, str]) -> str:
     lines = ["# ai-cli-status-monitor runtime configuration"]
     lines.extend(f"{key}={_serialize_value(values[key])}" for key in DEFAULT_VALUES)
     return "\n".join(lines) + "\n"
+
+
+def write_env_value(path: Path, key: str, value: str) -> None:
+    """Set one known key in a runtime dotenv file, keeping every other line as written.
+
+    Replaces the last assignment of ``key`` (the one the loaders honour) or appends
+    one, then writes atomically with mode 0600 like the installer does.
+    """
+    if key not in KNOWN_KEYS:
+        raise ValueError(f"unknown configuration key {key}")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = ["# ai-cli-status-monitor runtime configuration"]
+    assignment = f"{key}={_serialize_value(value)}"
+    indexes = [
+        index for index, line in enumerate(lines)
+        if (match := ASSIGNMENT.match(line.strip())) and match.group(1) == key
+    ]
+    if indexes:
+        lines[indexes[-1]] = assignment
+    else:
+        lines.append(assignment)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def load_settings(
@@ -249,6 +305,14 @@ def load_settings(
             warn(f"invalid {key} from {source}; using next configuration source")
         raise AssertionError(f"missing valid default for {key}")
 
+    def resolve_agents(key: str) -> tuple[str, ...]:
+        for source, value in candidates(key, legacy_values):
+            parsed = parse_agents(value)
+            if parsed is not None:
+                return parsed
+            warn(f"invalid {key} from {source}; using next configuration source")
+        raise AssertionError(f"missing valid default for {key}")
+
     return Settings(
         env_file=selected_env,
         cache_dir=resolve_path("AI_STATUS_CACHE_DIR"),
@@ -263,4 +327,5 @@ def load_settings(
         idle_after_seconds=resolve_int("AI_STATUS_IDLE_AFTER_SECONDS", 0),
         hide_stale_after_seconds=resolve_int("AI_STATUS_HIDE_STALE_AFTER_SECONDS", 0),
         theme=resolve_string("AI_STATUS_THEME"),
+        agents=resolve_agents("AI_STATUS_AGENTS"),
     )

@@ -15,7 +15,10 @@ from pathlib import Path
 
 from ai_agent_status_lib import updates
 from ai_agent_status_lib import usage_limits
+from ai_agent_status_lib.env_config import format_agents
 from ai_agent_status_lib.env_config import load_settings
+from ai_agent_status_lib.env_config import SUPPORTED_AGENTS
+from ai_agent_status_lib.env_config import write_env_value
 from ai_agent_status_lib.status_model import IN_PROGRESS_KINDS
 from ai_agent_status_lib.status_model import INACTIVE_KINDS
 from ai_agent_status_lib.status_model import classify_status_text
@@ -65,6 +68,12 @@ STATE_COLORS = {
     "neutral": "#9AA4B2",
 }
 AGENT_NAME_COLORS = {"claude": "#FF9B7A", "codex": "#7DD3FC"}
+# Right-click "Show agents" choices: (label, agents shown).
+AGENT_FILTER_CHOICES = (
+    ("Claude Code + Codex", SUPPORTED_AGENTS),
+    ("Claude Code only", ("claude",)),
+    ("Codex only", ("codex",)),
+)
 ACCENT = "#2DD4BF"
 META_COLOR = "#566173"
 TITLE_COLOR = "#E6EDF3"
@@ -302,6 +311,7 @@ class StatusWidget(Gtk.Window):
         self.demo = demo
         self.demo_index = 0
         self.config = self.load_config()
+        self.agents: tuple[str, ...] = SETTINGS.agents
         self.was_waiting_for_interaction = False
         self.was_done = False
         self.anim_frame = 0
@@ -612,12 +622,18 @@ class StatusWidget(Gtk.Window):
     def collect_sessions(self) -> list[dict[str, object]]:
         if self.demo:
             scenario = self.demo_scenarios[self.demo_index % len(self.demo_scenarios)]
-            return [self.make_session(agent, status, project, hhmm)
-                    for agent, status, project, hhmm in scenario]
-        sessions = self.read_structured_sessions()
-        if sessions is not None:
-            return sessions
-        return self.read_combined_sessions()
+            sessions = [self.make_session(agent, status, project, hhmm)
+                        for agent, status, project, hhmm in scenario]
+        else:
+            structured = self.read_structured_sessions()
+            sessions = structured if structured is not None else self.read_combined_sessions()
+        return [session for session in sessions if self.agent_enabled(str(session["agent"]))]
+
+    def agent_enabled(self, agent: str) -> bool:
+        """Sessions of an unrecognised agent stay visible only while every agent is shown."""
+        if agent in SUPPORTED_AGENTS:
+            return agent in self.agents
+        return self.agents == SUPPORTED_AGENTS
 
     def make_session(
         self,
@@ -1006,6 +1022,8 @@ class StatusWidget(Gtk.Window):
         self.usage_logo_buttons = {}
         for group in usage_limits.build_usage_groups(self.usage_snapshot):
             provider_key = str(group["provider_key"])
+            if provider_key not in self.agents:
+                continue
             provider_name = str(group["provider"])
             block = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
             block.set_name("usageProviderBlock")
@@ -1095,7 +1113,7 @@ class StatusWidget(Gtk.Window):
             self.stop_usage_animation()
         self.usage_snapshot = state["snapshot"]
         self.usage_refreshing = refreshing
-        self.usage_refreshing_providers = {"claude", "codex"} if self.usage_refreshing else set()
+        self.usage_refreshing_providers = set(self.agents) if self.usage_refreshing else set()
         self.render_usage_limits()
         if refreshing:
             self.start_usage_animation()
@@ -1104,8 +1122,8 @@ class StatusWidget(Gtk.Window):
         if self.usage_refreshing:
             return False
         if provider_key is None:
-            provider_keys = ("claude", "codex")
-        elif provider_key in ("claude", "codex"):
+            provider_keys = self.agents
+        elif provider_key in self.agents:
             provider_keys = (provider_key,)
         else:
             return False
@@ -1283,6 +1301,8 @@ class StatusWidget(Gtk.Window):
         else:
             update_item = Gtk.MenuItem(label="Check for updates")
         quit_item = Gtk.MenuItem(label="Quit")
+        agents_item = Gtk.MenuItem(label="Show agents")
+        agents_item.set_submenu(self.build_agents_menu())
         reload_item.connect("activate", lambda _item: self.refresh_status())
         logs_item.connect("activate", lambda _item: self.open_logs_folder())
         if self.update_available:
@@ -1290,10 +1310,43 @@ class StatusWidget(Gtk.Window):
         else:
             update_item.connect("activate", lambda _item: self.start_update_check())
         quit_item.connect("activate", self.quit)
-        for item in (reload_item, logs_item, update_item, quit_item):
+        for item in (agents_item, reload_item, logs_item, update_item, quit_item):
             menu.append(item)
         menu.show_all()
         menu.popup_at_pointer(event)
+
+    def build_agents_menu(self) -> Gtk.Menu:
+        submenu = Gtk.Menu()
+        group: Gtk.RadioMenuItem | None = None
+        for label, agents in AGENT_FILTER_CHOICES:
+            item = Gtk.RadioMenuItem.new_with_label_from_widget(group, label)
+            group = group or item
+            item.set_active(agents == self.agents)
+            item.connect("toggled", lambda menu_item, choice=agents: menu_item.get_active() and self.set_agents(choice))
+            submenu.append(item)
+        return submenu
+
+    def set_agents(self, agents: tuple[str, ...]) -> None:
+        if agents == self.agents:
+            return
+        newly_shown = set(agents) - set(self.agents)
+        self.agents = agents
+        log(f"showing agents: {format_agents(agents)}")
+        try:
+            write_env_value(SETTINGS.env_file, "AI_STATUS_AGENTS", format_agents(agents))
+        except OSError as error:
+            log(f"failed to save AI_STATUS_AGENTS to {SETTINGS.env_file}: {error}")
+        if "AI_STATUS_AGENTS" in os.environ:
+            log("AI_STATUS_AGENTS is set in the environment and will override the saved choice on restart")
+        self.signature = None
+        self.refresh_status()
+        self.render_usage_limits()
+        missing = [
+            agent for agent in newly_shown
+            if not self.usage_snapshot.get("providers", {}).get(agent)
+        ]
+        if missing and not self.demo:
+            self.start_usage_refresh(missing[0] if len(missing) == 1 else None)
 
     def start_update_check(self) -> bool:
         """Kick off a one-shot background version check against GitHub.

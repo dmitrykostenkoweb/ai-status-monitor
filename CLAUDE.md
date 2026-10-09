@@ -12,7 +12,7 @@ There is no build step or package manager. The scripts in `bin/` run directly.
 
 ```bash
 # Syntax-check the Python scripts (the only "build" gate)
-python3 -m py_compile bin/ai-agent-status-hook bin/ai-agent-status-widget bin/ai-agent-status-doctor bin/ai_agent_status_lib/env_config.py bin/ai_agent_status_lib/status_model.py bin/ai_agent_status_lib/updates.py
+python3 -m py_compile bin/ai-agent-status-hook bin/ai-agent-status-widget bin/ai-agent-status-doctor bin/ai_agent_status_lib/*.py
 bash -n install.sh bin/ai-agent-status-env bin/ai-agent-status-panel bin/ai-agent-status-update bin/ai-agent-status-widget-*
 
 # Install / refresh into ~/.local, ~/.config, ~/.cache (idempotent; merges hooks, backs up configs)
@@ -32,7 +32,7 @@ bin/ai-agent-status-hook --agent codex --test
 sudo apt install python3-gi gir1.2-gtk-3.0 wmctrl
 ```
 
-There is no test framework. Validation = `py_compile` + `--test` (pipeline) + `--demo` (UI).
+Unit tests use stdlib `unittest`: `python3 -m unittest discover -s tests` (GTK tests need `xvfb-run`, PyGObject for the running Python, and `AI_STATUS_DATA_DIR=$PWD/assets` when nothing is installed). Plus `--test` (pipeline) and `--demo` (UI).
 
 ## Architecture
 
@@ -49,7 +49,7 @@ There is no test framework. Validation = `py_compile` + `--test` (pipeline) + `-
    - Glowing status dots and the radar glyph are drawn with **cairo** (optional dependency — `CAIRO_OK` falls back to flat discs / a Unicode-free no-op if pycairo is missing).
    - Every row shows a right-aligned, vertically-centered, text-styled clickable `przełącz →` (neutral grey; on dim/done rows the opacity fade is applied to the logo+text only, so the switch stays crisp) that calls `switch_to_session()`: it lists windows (`list_windows` ← `wmctrl -lp`), narrows to those whose PID is in the session's `client_pids`, and raises it (`wmctrl -i -a`). When one emulator process owns several windows (gnome-terminal), it disambiguates the PID candidates by **window title** (project/cwd); with one process per window (alacritty/kitty/xterm) the PID match is already exact. Title-only match is the last fallback. Cannot target a specific *tab* within a window, and degrades quietly under tmux/ssh/Wayland or without `wmctrl`.
 
-3. **Configuration:** `bin/ai_agent_status_lib/env_config.py` parses runtime dotenv as data (never shell), validates typed values, and resolves process env → runtime `.env` → legacy `widget.json` → built-in defaults. `bin/ai-agent-status-env` provides the equivalent restricted loader for Bash helpers. `AI_STATUS_ENV_FILE` is the bootstrap override for the runtime file.
+3. **Configuration:** `bin/ai_agent_status_lib/env_config.py` parses runtime dotenv as data (never shell), validates typed values, and resolves process env → runtime `.env` → legacy `widget.json` → built-in defaults. `bin/ai-agent-status-env` provides the equivalent restricted loader for Bash helpers. `AI_STATUS_ENV_FILE` is the bootstrap override for the runtime file. `AI_STATUS_AGENTS` (`claude,codex` / `claude` / `codex`) filters which agents' rows and usage bars the widget shows; the right-click `Show agents` menu rewrites just that key in the runtime `.env` via `write_env_value()`.
 
 4. **Helpers (Bash):** `*-start` / `*-stop` manage the process via `widget.pid`; `ai-agent-status-panel` dumps `combined.txt` for debugging. All source `ai-agent-status-env` from the same installed `bin` directory.
 

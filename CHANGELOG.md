@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Display provider usage limits for Claude and Codex in the widget.
 - Read live Codex usage limits from local session data.
 - Show the weekly Claude Fable usage limit as a third Claude bar when the account reports one.
+- `AI_STATUS_AGENTS` setting and a right-click `Show agents` menu to show only Claude Code or only Codex.
 
 ### Fixed
 

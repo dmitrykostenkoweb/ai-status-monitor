@@ -36,6 +36,21 @@ ai_status_valid_value() {
         *) return 1 ;;
       esac
       ;;
+    AI_STATUS_AGENTS)
+      local token
+      local -a tokens
+      read -r -a tokens <<<"${value//,/ }"
+      [[ ${#tokens[@]} -gt 0 ]] || return 1
+      if [[ ${#tokens[@]} -eq 1 && "${tokens[0],,}" =~ ^(all|both)$ ]]; then
+        return 0
+      fi
+      for token in "${tokens[@]}"; do
+        case "${token,,}" in
+          claude|codex) ;;
+          *) return 1 ;;
+        esac
+      done
+      ;;
     *)
       [[ -n "$value" ]]
       ;;
@@ -66,7 +81,7 @@ ai_status_load_env() {
     AI_STATUS_TITLE AI_STATUS_CARD_WIDTH AI_STATUS_MAX_ROWS
     AI_STATUS_SOUND_ENABLED AI_STATUS_STALE_AFTER_SECONDS
     AI_STATUS_HIDE_DONE_AFTER_SECONDS AI_STATUS_IDLE_AFTER_SECONDS
-    AI_STATUS_HIDE_STALE_AFTER_SECONDS AI_STATUS_THEME
+    AI_STATUS_HIDE_STALE_AFTER_SECONDS AI_STATUS_THEME AI_STATUS_AGENTS
   )
   local -A defaults=(
     [AI_STATUS_CACHE_DIR]='$HOME/.cache/ai-cli-status-monitor'
@@ -81,6 +96,7 @@ ai_status_load_env() {
     [AI_STATUS_IDLE_AFTER_SECONDS]='600'
     [AI_STATUS_HIDE_STALE_AFTER_SECONDS]='900'
     [AI_STATUS_THEME]='dark'
+    [AI_STATUS_AGENTS]='claude,codex'
   )
   local -A file_values=()
 
