@@ -113,13 +113,24 @@ class StickerMappingTests(unittest.TestCase):
 
 
 class LocalPoolTests(unittest.TestCase):
-    def test_never_repeats_the_same_file_twice_in_a_row(self) -> None:
-        chooser = stickers.NoRepeatChooser(random.Random(1))
-        picks = [chooser.choose("coding", ["a", "b", "c"]) for _ in range(50)]
-        self.assertTrue(all(first != second for first, second in zip(picks, picks[1:])))
-        self.assertEqual(chooser.choose("solo", ["only"]), "only")
-        self.assertEqual(chooser.choose("solo", ["only"]), "only")
-        self.assertIsNone(chooser.choose("empty", []))
+    def test_shuffle_bag_deals_everything_before_repeating(self) -> None:
+        bag = stickers.ShuffleBag(random.Random(1))
+        items = ("a", "b", "c", "d", "e")
+        dealt = [bag.draw("coding", items) for _ in range(50)]
+        for start in range(0, 50, 5):
+            self.assertEqual(sorted(dealt[start:start + 5]), list(items))
+        self.assertTrue(all(first != second for first, second in zip(dealt, dealt[1:])))
+        self.assertEqual([bag.draw("solo", ["only"]) for _ in range(3)], ["only"] * 3)
+        self.assertIsNone(bag.draw("empty", []))
+        self.assertEqual(bag.draw("coding", ("new",)), "new", "a changed list starts a new bag")
+
+    def test_recent_memory_avoids_everything_shown_lately(self) -> None:
+        memory = stickers.RecentMemory(size=10, rng=random.Random(2))
+        items = [str(index) for index in range(10)]
+        first_round = [memory.pick(items) for _ in range(10)]
+        self.assertEqual(sorted(first_round), sorted(items), "all ten before any repeat")
+        self.assertEqual(memory.pick(items), first_round[0], "then the one shown longest ago")
+        self.assertIsNone(memory.pick([]))
 
     def test_local_pool_lists_images_and_tolerates_missing_folders(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -182,10 +193,29 @@ class KlipyTests(unittest.TestCase):
             self.assertIn("customer_id=customer-1", calls[0])
             self.assertIn("format_filter=gif", calls[0])
             self.assertIn("content_filter=high", calls[0])
+            self.assertIn("per_page=50", calls[0])
+            self.assertIn("page=1", calls[0])
+            client.search("thinking", page=2)
+            self.assertIn("page=2", calls[-1])
+            self.assertEqual(len(calls), 2)
+            calls.pop()
 
             now[0] += stickers.KLIPY_RESULTS_TTL_SECONDS + 1
             client.search("thinking")
             self.assertEqual(len(calls), 2)
+
+    def test_hourly_search_budget_falls_back_to_cached_results(self) -> None:
+        calls: list[str] = []
+        now = [5000.0]
+        with tempfile.TemporaryDirectory() as directory:
+            client = self.make_client(directory, {"/gifs/search": search_payload(klipy_item("a"), klipy_item("b"))},
+                                      calls, now)
+            for index in range(stickers.KLIPY_SEARCHES_PER_HOUR):
+                client.search(f"phrase {index}")
+            self.assertFalse(client.can_search())
+            self.assertEqual(sorted(r.id for r in client.cached_for(["phrase 0", "phrase 7"])), ["a", "b"])
+            now[0] += 3601
+            self.assertTrue(client.can_search(), "the budget is a sliding one-hour window")
 
     def test_search_failure_never_leaks_the_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -247,12 +277,45 @@ class KlipyTests(unittest.TestCase):
 
 
 class StickerSourceTests(unittest.TestCase):
+    def test_many_picks_spread_over_phrases_pages_and_gifs(self) -> None:
+        searches: list[tuple[str, int]] = []
+
+        class CountingKlipy:
+            def cached(self, query: str, page: int = 1) -> None:
+                return None
+
+            def can_search(self) -> bool:
+                return True
+
+            def search(self, query: str, page: int = 1) -> list[stickers.KlipyResult]:
+                searches.append((query, page))
+                return [stickers.KlipyResult(f"{query}-{page}-{n}", f"https://static.klipy.com/{n}.gif") for n in range(50)]
+
+            def load(self, result: stickers.KlipyResult) -> bytes:
+                return GIF_BYTES
+
+        source = stickers.StickerSource(Path("/nonexistent"), klipy=CountingKlipy(), rng=random.Random(4))  # type: ignore[arg-type]
+        picks = [source.pick("coding") for _ in range(45)]
+        queries = stickers.DEFAULT_QUERIES["coding"]
+        self.assertEqual(sorted({query for query, _page in searches[:len(queries)]}), sorted(queries),
+                         "every phrase is used once before any repeats")
+        self.assertGreater(len({page for _query, page in searches}), 1, "pages vary")
+        self.assertEqual(len({pick.title for pick in picks}), 45, "no GIF repeats")
+        bubbles = [pick.bubble for pick in picks[:len(stickers.DEFAULT_BUBBLES["coding"])]]
+        self.assertEqual(len(set(bubbles)), len(bubbles), "every bubble line once before repeats")
+
     def test_prefers_klipy_then_local_pool_then_placeholder(self) -> None:
         class FakeKlipy:
             def __init__(self, fail: bool) -> None:
                 self.fail = fail
 
-            def search(self, query: str) -> list[stickers.KlipyResult]:
+            def cached(self, query: str, page: int = 1) -> None:
+                return None
+
+            def can_search(self) -> bool:
+                return True
+
+            def search(self, query: str, page: int = 1) -> list[stickers.KlipyResult]:
                 if self.fail:
                     raise RuntimeError("KLIPY search failed")
                 return [stickers.KlipyResult("x", "https://static.klipy.com/x.gif")]

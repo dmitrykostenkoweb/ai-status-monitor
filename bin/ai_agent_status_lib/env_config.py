@@ -26,6 +26,7 @@ DEFAULT_VALUES = {
     "AI_STATUS_AGENTS": "claude,codex",
     "AI_STATUS_SERIOUS_MODE": "false",
     "AI_STATUS_SESSION_WINDOWS": "true",
+    "AI_STATUS_STICKER_ROTATE_SECONDS": "120",
     "AI_STATUS_KLIPY_API_KEY": "",
 }
 
@@ -69,6 +70,7 @@ class Settings:
     agents: tuple[str, ...] = SUPPORTED_AGENTS
     serious_mode: bool = False
     session_windows: bool = True
+    sticker_rotate_seconds: int = 120
     klipy_api_key: str = ""
 
     @property
@@ -99,6 +101,7 @@ class Settings:
             "AI_STATUS_AGENTS": format_agents(self.agents),
             "AI_STATUS_SERIOUS_MODE": "true" if self.serious_mode else "false",
             "AI_STATUS_SESSION_WINDOWS": "true" if self.session_windows else "false",
+            "AI_STATUS_STICKER_ROTATE_SECONDS": str(self.sticker_rotate_seconds),
             "AI_STATUS_KLIPY_API_KEY": self.klipy_api_key,
         }
 
@@ -349,5 +352,6 @@ def load_settings(
         agents=resolve_agents("AI_STATUS_AGENTS"),
         serious_mode=resolve_bool("AI_STATUS_SERIOUS_MODE"),
         session_windows=resolve_bool("AI_STATUS_SESSION_WINDOWS"),
+        sticker_rotate_seconds=resolve_int("AI_STATUS_STICKER_ROTATE_SECONDS", 0),
         klipy_api_key=resolve_optional_string("AI_STATUS_KLIPY_API_KEY"),
     )

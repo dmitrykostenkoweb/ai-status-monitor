@@ -729,6 +729,7 @@ class SessionCard(Gtk.Window):
         self.sticker_key: str | None = None
         self.sticker_request = 0
         self.sticker_debounce: int | None = None
+        self.rotate_source: int | None = None
         self.save_source: int | None = None
         self.overlay = StickerOverlay() if CAIRO_OK else None
         self.connect("configure-event", self.on_configure)
@@ -803,9 +804,32 @@ class SessionCard(Gtk.Window):
             + f" ({choice.label})")
         self.place_overlay()
         self.overlay.present_sticker(choice, sticky=True)
+        self.schedule_rotation()
         return False
 
+    def schedule_rotation(self) -> None:
+        """While the session keeps working, swap to a fresh GIF every N seconds."""
+        self.stop_rotation()
+        seconds = self.owner.sticker_rotate_seconds
+        if seconds > 0 and self.sticker_key is not None:
+            self.rotate_source = GLib.timeout_add_seconds(seconds, self.on_rotate)
+
+    def stop_rotation(self) -> None:
+        if self.rotate_source is not None:
+            GLib.source_remove(self.rotate_source)
+            self.rotate_source = None
+
+    def on_rotate(self) -> bool:
+        self.rotate_source = None
+        self.show_another_gif()
+        return False
+
+    def show_another_gif(self) -> None:
+        if not self.closed and self.sticker_key is not None and not self.owner.serious_mode:
+            self.request_sticker(self.sticker_key)
+
     def clear_sticker(self) -> None:
+        self.stop_rotation()
         self.sticker_key = None
         self.sticker_request += 1
         if self.sticker_debounce is not None:
@@ -857,6 +881,9 @@ class SessionCard(Gtk.Window):
             return True
         if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
             menu = Gtk.Menu()
+            another = Gtk.MenuItem(label="Show another GIF")
+            another.set_sensitive(self.sticker_key is not None and not self.owner.serious_mode)
+            another.connect("activate", lambda _item: self.show_another_gif())
             dock = Gtk.MenuItem(label="Dock under the widget")
             dock.set_sensitive(self.floating)
             dock.connect("activate", lambda _item: self.owner.dock_card(self.session_id))
@@ -864,7 +891,7 @@ class SessionCard(Gtk.Window):
             dock_all.connect("activate", lambda _item: self.owner.dock_all_cards())
             settings = Gtk.MenuItem(label="Settings…")
             settings.connect("activate", lambda _item: self.owner.open_settings())
-            for item in (dock, dock_all, settings):
+            for item in (another, dock, dock_all, settings):
                 menu.append(item)
             menu.show_all()
             menu.popup_at_pointer(event)
@@ -875,7 +902,7 @@ class SessionCard(Gtk.Window):
         if self.closed:
             return
         self.closed = True
-        for name in ("sticker_debounce", "save_source"):
+        for name in ("sticker_debounce", "save_source", "rotate_source"):
             source = getattr(self, name)
             if source is not None:
                 GLib.source_remove(source)
@@ -1004,10 +1031,16 @@ class SettingsWindow(Gtk.Window):
         self.klipy_save_source: int | None = None
         self.attach_row(grid, 1, "KLIPY API key", "random GIFs · Powered by KLIPY", self.klipy_entry)
 
+        self.rotate_spin = Gtk.SpinButton.new_with_range(0, 30, 0.5)
+        self.rotate_spin.set_digits(1)
+        self.rotate_spin.set_value(owner.sticker_rotate_seconds / 60)
+        self.rotate_spin.connect("value-changed", self.on_rotate_changed)
+        self.attach_row(grid, 2, "New GIF every (min)", "while an agent works · 0 = never", self.rotate_spin)
+
         test = Gtk.Button(label="Show test sticker")
         test.set_name("settingsClose")
         test.connect("clicked", lambda _button: owner.show_test_sticker())
-        self.attach_row(grid, 2, "Preview", "cycles through every status", test)
+        self.attach_row(grid, 3, "Preview", "cycles through every status", test)
         content.pack_start(grid, False, False, 0)
         gifs_hint = self.hint_label(f"Local GIFs: {display_path(GIFS_DIR)}/<status>/")
         gifs_hint.set_line_wrap(True)
@@ -1101,6 +1134,9 @@ class SettingsWindow(Gtk.Window):
         if switch.get_active() != self.owner.serious_mode:
             self.owner.set_serious_mode(switch.get_active())
 
+    def on_rotate_changed(self, spin: Gtk.SpinButton) -> None:
+        self.owner.update_setting("AI_STATUS_STICKER_ROTATE_SECONDS", str(round(spin.get_value() * 60)))
+
     def on_klipy_changed(self, _entry: Gtk.Entry) -> None:
         # Save once typing/pasting settles instead of on every keystroke.
         if self.klipy_save_source is not None:
@@ -1156,6 +1192,7 @@ class StatusWidget(Gtk.Window):
         self.limits_seen: set[tuple[str, str, str]] = set()
         self.test_sticker_index = 0
         self.session_windows = SETTINGS.session_windows
+        self.sticker_rotate_seconds = SETTINGS.sticker_rotate_seconds
         self.session_cards: dict[str, SessionCard] = {}
         self.card_order: list[str] = []
         self.card_positions = self.load_card_positions()
@@ -2647,6 +2684,11 @@ class StatusWidget(Gtk.Window):
                     card.clear_sticker()
                 else:
                     card.refresh_sticker()
+        elif key == "AI_STATUS_STICKER_ROTATE_SECONDS":
+            self.sticker_rotate_seconds = max(0, int(value))
+            for card in self.session_cards.values():
+                if card.sticker_key is not None:
+                    card.schedule_rotation()  # restarts (or stops, for 0) the timer
         elif key == "AI_STATUS_SESSION_WINDOWS":
             self.session_windows = value == "true"
             if not self.session_windows:

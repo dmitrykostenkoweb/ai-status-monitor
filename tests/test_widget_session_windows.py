@@ -72,6 +72,19 @@ class SessionWindowTests(unittest.TestCase):
             assert card_a.overlay.choice.key == "coding" and card_b.overlay.choice.key == "waiting"
             assert card_a.overlay.sticky and card_a.overlay.hold_source is None
 
+            # GIF rotation: on by default (every 120 s); 1 s here, then off again.
+            assert card_a.rotate_source is not None
+            before = card_a.sticker_request
+            widget.update_setting("AI_STATUS_STICKER_ROTATE_SECONDS", "1")
+            assert pump(lambda: card_a.sticker_request > before, 4), "a fresh GIF is requested"
+            widget.update_setting("AI_STATUS_STICKER_ROTATE_SECONDS", "0")
+            assert pump(lambda: card_a.sticker_debounce is None and card_a.overlay.phase == "shown", 4)
+            assert card_a.rotate_source is None
+            before = card_a.sticker_request
+            card_a.show_another_gif()
+            assert card_a.sticker_request == before + 1
+            assert pump(lambda: card_a.sticker_debounce is None and card_a.overlay.phase == "shown", 4)
+
             # docked cards stack under the widget in first-seen order
             for _ in range(30):
                 GLib.MainContext.default().iteration(False)

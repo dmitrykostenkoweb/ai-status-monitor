@@ -141,6 +141,7 @@ Available variables:
 - `AI_STATUS_THEME` — theme name
 - `AI_STATUS_AGENTS` — which agents the widget shows: `claude,codex` (default, also `all`), `claude` or `codex`. Hidden agents get no rows, no usage bars, no sounds and no usage requests. The right-click `Show agents` menu changes it live and saves the choice to the runtime `.env` (a value exported in the process still wins on the next start)
 - `AI_STATUS_SESSION_WINDOWS` — `true` (default): each session in its own draggable window; `false`: the classic list inside the widget
+- `AI_STATUS_STICKER_ROTATE_SECONDS` — how often a working session window swaps to a new GIF (default `120`, `0` = never)
 - `AI_STATUS_SERIOUS_MODE` — `true` turns GIF stickers off (see [GIF stickers](#7d-gif-stickers))
 - `AI_STATUS_KLIPY_API_KEY` — optional KLIPY API key for random sticker GIFs; empty = local GIFs only
 - `AI_STATUS_ENV_FILE` — path to a different runtime file; this variable must be exported in the process, it is not read from `.env`
@@ -223,7 +224,7 @@ Provider failures are independent. When a refresh fails, an unexpired last-known
 2. **Local pool** — any `.gif`, `.webp`, `.png` or `.jpg` in `~/.local/share/ai-cli-status-monitor/gifs/<sticker>/`, e.g. `gifs/waiting/skeleton.gif`. The installer seeds `gifs/analyzing/` and never overwrites your files.
 3. **Placeholder** — with neither, the sticker shows stripes in the status colour.
 
-The same GIF and the same bubble line are never picked twice in a row; every sticker has 9–14 built-in lines and 6–8 KLIPY search phrases. A ready-made **Polish** set lives in [`examples/stickers.pl.json`](examples/stickers.pl.json) — copy it to `~/.config/ai-cli-status-monitor/stickers.json` and restart the widget. Bubble texts and KLIPY search phrases can be overridden per sticker in that file:
+**Variety:** the widget remembers the last 200 GIFs shown (across all stickers and windows) and never re-picks them, deals search phrases and bubble lines like a shuffled deck (each one once before any repeats), and asks KLIPY for 50 results on a random page 1–3 — so each phrase can yield ~150 GIFs. Every sticker has 14–22 bubble lines and 12–15 search phrases. While an agent keeps working, its session window swaps to a new GIF every 2 minutes (**Settings → Stickers → New GIF every**, `0` = never), and right-click on a session window → `Show another GIF` swaps it right away. New searches are capped at 60 per hour (the free KLIPY test key allows 100/hour); past that the widget picks from results it already has. A ready-made **Polish** set lives in [`examples/stickers.pl.json`](examples/stickers.pl.json) — copy it to `~/.config/ai-cli-status-monitor/stickers.json` and restart the widget. Bubble texts and KLIPY search phrases can be overridden per sticker in that file:
 
 ```json
 {
