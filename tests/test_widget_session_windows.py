@@ -95,6 +95,31 @@ class SessionWindowTests(unittest.TestCase):
             assert "stickers.py" in card_a.overlay.choice.bubble, card_a.overlay.choice.bubble
             assert card_a.overlay.choice.label == gif_before
 
+            # After a few seconds the bubble goes back to a funny line (timer fired by hand).
+            card_a.on_activity_bubble_done()
+            assert card_a.overlay.choice.bubble in module["stickers"].DEFAULT_BUBBLES["coding"]
+
+            # coding <-> analyzing on the same task: no GIF reshuffle, just the colour.
+            post_edit = session("a", "analyzing")
+            post_edit["activity"] = {"type": "edit", "target": "stickers.py", "phase": "post"}
+            sync([post_edit, session("b", "waiting", "codex")])
+            assert card_a.sticker_request == before
+            assert card_a.overlay.color == module["stickers"].STICKER_COLORS["analyzing"]
+
+            # A new topic (tests) gets a new GIF, but not more often than every 15 s.
+            testing = session("a", "coding")
+            testing["activity"] = {"type": "command", "target": "Run the tests", "phase": "pre"}
+            sync([testing, session("b", "waiting", "codex")])
+            assert card_a.sticker_request == before, "too soon after the last GIF"
+            assert "Run the tests" in card_a.overlay.choice.bubble
+            card_a.last_pick_at = 0.0
+            sync([testing, session("b", "waiting", "codex")])
+            assert card_a.sticker_request == before + 1 and card_a.sticker_topic == "testing"
+            assert pump(lambda: card_a.sticker_debounce is None and card_a.overlay.phase == "shown", 4)
+            assert "Run the tests" in card_a.overlay.choice.bubble, "new GIF keeps the fresh task bubble"
+            back = session("a", "coding")
+            sync([back, session("b", "waiting", "codex")])
+
             # docked cards stack under the widget in first-seen order
             for _ in range(30):
                 GLib.MainContext.default().iteration(False)

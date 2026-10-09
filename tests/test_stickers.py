@@ -79,6 +79,32 @@ class StickerMappingTests(unittest.TestCase):
         self.assertEqual(queries, stickers.DEFAULT_QUERIES)
         self.assertIn("Dima? Halo?", bubbles["waiting"])
 
+    def test_gif_topic_follows_the_actual_task(self) -> None:
+        def topic(key: str, kind: str | None = None, target: str = "") -> str:
+            activity = {"type": kind, "target": target, "phase": "pre"} if kind else None
+            return stickers.sticker_topic(key, activity)
+
+        self.assertEqual(topic("coding", "edit", "app.py"), "coding")
+        self.assertEqual(topic("analyzing", "edit", "app.py"), "coding", "post-edit analysis keeps the topic")
+        self.assertEqual(topic("analyzing", "read", "README.md"), "reading")
+        self.assertEqual(topic("analyzing", "search", "TODO"), "searching")
+        self.assertEqual(topic("coding", "command", "Run the sticker tests"), "testing")
+        self.assertEqual(topic("coding", "command", "pytest"), "testing")
+        self.assertEqual(topic("coding", "command", "git push"), "shipping")
+        self.assertEqual(topic("coding", "command", "npm install"), "installing")
+        self.assertEqual(topic("coding", "command", "ls"), "running")
+        self.assertEqual(topic("analyzing", "web", "docs.klipy.com"), "googling")
+        self.assertEqual(topic("analyzing", "agent", "Find docs"), "teamwork")
+        self.assertEqual(topic("analyzing", "plan"), "planning")
+        self.assertEqual(topic("waiting", "permission", "Bash"), "waiting")
+        self.assertEqual(topic("analyzing"), "analyzing")
+        for key in ("waiting", "error", "done", "idle", "limit"):
+            self.assertEqual(topic(key, "edit", "x.py"), key, "attention/finished states keep their topic")
+        for name, queries in stickers.TOPIC_QUERIES.items():
+            with self.subTest(topic=name):
+                self.assertGreaterEqual(len(queries), 5)
+                self.assertEqual(len(set(queries)), len(queries))
+
     def test_sticker_for_kind(self) -> None:
         self.assertEqual(stickers.sticker_for_kind("thinking"), "analyzing")
         self.assertEqual(stickers.sticker_for_kind("command"), "coding")
@@ -327,6 +353,26 @@ class StickerSourceTests(unittest.TestCase):
         self.assertIsNone(source.activity_bubble({"type": "unknown", "target": "x"}))
         picked = source.pick("coding", edit)
         self.assertIn("stickers.py", picked.bubble)
+
+        searched: list[str] = []
+
+        class TopicKlipy:
+            def cached(self, query: str, page: int = 1) -> None:
+                return None
+
+            def can_search(self) -> bool:
+                return True
+
+            def search(self, query: str, page: int = 1) -> list[stickers.KlipyResult]:
+                searched.append(query)
+                return [stickers.KlipyResult(query, "https://static.klipy.com/x.gif")]
+
+            def load(self, result: stickers.KlipyResult) -> bytes:
+                return GIF_BYTES
+
+        topical = stickers.StickerSource(Path("/nonexistent"), klipy=TopicKlipy())  # type: ignore[arg-type]
+        topical.pick("coding", topic="testing")
+        self.assertIn(searched[-1], stickers.TOPIC_QUERIES["testing"])
         self.assertIn(source.pick("coding").bubble, stickers.DEFAULT_BUBBLES["coding"])
 
     def test_activity_templates_load_and_validate_overrides(self) -> None:

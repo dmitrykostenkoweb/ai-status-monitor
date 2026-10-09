@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Sticker bubbles mix both: a new task from Claude/Codex is shown for 5 seconds, then a funny line until the next task.
+- GIFs now match the task: editing, reading, searching, tests, `git push`, installs/builds, web, sub-agents, to-do updates and permission requests each have their own meme topic. A session window changes GIF only on a new topic (at most every 15 s; waiting/error at once), so the coding ↔ analyzing flip after every tool call no longer reshuffles GIFs.
+
 ## [0.3.6] - 2026-10-09
 
 ### Added
