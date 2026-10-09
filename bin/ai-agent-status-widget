@@ -1024,12 +1024,18 @@ class SettingsWindow(Gtk.Window):
         self.klipy_entry = Gtk.Entry()
         self.klipy_entry.set_name("settingsEntry")
         self.klipy_entry.set_visibility(False)
-        self.klipy_entry.set_width_chars(16)
+        self.klipy_entry.set_width_chars(10)
         self.klipy_entry.set_placeholder_text("optional")
         self.klipy_entry.set_text(owner.klipy_api_key)
         self.klipy_entry.connect("changed", self.on_klipy_changed)
         self.klipy_save_source: int | None = None
-        self.attach_row(grid, 1, "KLIPY API key", "random GIFs · Powered by KLIPY", self.klipy_entry)
+        key_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        key_box.pack_start(self.klipy_entry, True, True, 0)
+        guide_button = Gtk.Button(label="Get a free key…")
+        guide_button.set_name("settingsClose")
+        guide_button.connect("clicked", lambda _button: owner.open_klipy_guide(self))
+        key_box.pack_start(guide_button, False, False, 0)
+        self.attach_row(grid, 1, "KLIPY API key", "random GIFs · Powered by KLIPY", key_box)
 
         self.rotate_spin = Gtk.SpinButton.new_with_range(0, 30, 0.5)
         self.rotate_spin.set_digits(1)
@@ -1160,6 +1166,199 @@ class SettingsWindow(Gtk.Window):
         self.owner.update_setting(env_key, str(round(spin.get_value() * 60)))
 
 
+class KlipyKeyGuide(Gtk.Window):
+    """Step-by-step "get a free KLIPY key" guide with copy buttons and a key test."""
+
+    def __init__(self, owner: "StatusWidget", parent: Gtk.Window | None = None) -> None:
+        super().__init__(title="Get a free KLIPY key")
+        self.owner = owner
+        self.set_name("settingsWindow")
+        if parent is not None:
+            self.set_transient_for(parent)
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
+        self.set_keep_above(True)
+        self.set_resizable(False)
+        self.connect("key-press-event", self.on_key_press)
+        self.checking = False
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        outer.set_name("settingsBody")
+        self.add(outer)
+
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        header.set_name("settingsHeader")
+        mark = LogoMark(17, variant="mono", mono_color="#E6EDF3")
+        mark.set_valign(Gtk.Align.CENTER)
+        header.pack_start(mark, False, False, 0)
+        heading = Gtk.Label(label="Get a free KLIPY key")
+        heading.set_name("settingsHeading")
+        heading.set_xalign(0)
+        header.pack_start(heading, True, True, 0)
+        outer.pack_start(header, False, False, 0)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        content.set_name("settingsContent")
+        outer.pack_start(content, True, True, 0)
+        intro = SettingsWindow.hint_label(
+            "Stickers can show random GIFs from KLIPY. It takes about two minutes and is free; "
+            "without a key the widget uses local GIFs only."
+        )
+        intro.set_line_wrap(True)
+        intro.set_max_width_chars(52)
+        content.pack_start(intro, False, False, 4)
+
+        # 1. account
+        content.pack_start(SettingsWindow.section_label("1 · Sign up"), False, False, 0)
+        open_button = Gtk.Button(label="Open the KLIPY Partner Panel ↗")
+        open_button.set_name("settingsClose")
+        open_button.set_halign(Gtk.Align.START)
+        open_button.connect("clicked", lambda _button: self.open_partner_panel())
+        content.pack_start(open_button, False, False, 0)
+        content.pack_start(self.hint(f"{stickers.KLIPY_PARTNER_URL} — sign up, it is free."), False, False, 0)
+
+        # 2. platform details
+        content.pack_start(SettingsWindow.section_label("2 · Add your platform"), False, False, 0)
+        grid = SettingsWindow.new_grid()
+        grid.set_row_spacing(6)
+        for row, (label, value) in enumerate((
+            ("Platform name", stickers.KLIPY_GUIDE_PLATFORM_NAME),
+            ("Platform website", stickers.KLIPY_GUIDE_WEBSITE),
+            ("About / integration", "a ready-made description"),
+        )):
+            text = stickers.KLIPY_GUIDE_DESCRIPTION if row == 2 else value
+            self.attach_copy_row(grid, row, label, value, text)
+        content.pack_start(grid, False, False, 0)
+        content.pack_start(self.hint("Then tick the KLIPY API Terms checkbox (read them first) and press Add Platform."),
+                           False, False, 0)
+
+        # 3. key
+        content.pack_start(SettingsWindow.section_label("3 · Create an API key"), False, False, 0)
+        grid = SettingsWindow.new_grid()
+        grid.set_row_spacing(6)
+        self.attach_copy_row(grid, 0, "Key name", stickers.KLIPY_GUIDE_KEY_NAME, stickers.KLIPY_GUIDE_KEY_NAME)
+        self.attach_copy_row(grid, 1, "URL", stickers.KLIPY_GUIDE_WEBSITE, stickers.KLIPY_GUIDE_WEBSITE)
+        content.pack_start(grid, False, False, 0)
+        content.pack_start(self.hint("Leave “Enable the Ads API” OFF, then press Create and copy the key."),
+                           False, False, 0)
+
+        # 4. paste + test
+        content.pack_start(SettingsWindow.section_label("4 · Paste and test"), False, False, 0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.key_entry = Gtk.Entry()
+        self.key_entry.set_name("settingsEntry")
+        self.key_entry.set_visibility(False)
+        self.key_entry.set_placeholder_text("paste your KLIPY key")
+        self.key_entry.set_text(owner.klipy_api_key)
+        self.key_entry.connect("activate", lambda _entry: self.test_and_save())
+        row.pack_start(self.key_entry, True, True, 0)
+        self.test_button = Gtk.Button(label="Test & save")
+        self.test_button.set_name("settingsClose")
+        self.test_button.connect("clicked", lambda _button: self.test_and_save())
+        row.pack_start(self.test_button, False, False, 0)
+        content.pack_start(row, False, False, 0)
+        self.status = self.hint("")
+        self.status.set_line_wrap(True)
+        self.status.set_max_width_chars(52)
+        content.pack_start(self.status, False, False, 0)
+
+        note = self.hint(
+            "Free test keys allow 100 requests per hour; the widget stays under 60. The key is saved "
+            f"in {display_path(SETTINGS.env_file)} (mode 0600) and never written to logs. Powered by KLIPY."
+        )
+        note.set_line_wrap(True)
+        note.set_max_width_chars(52)
+
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        footer.set_name("settingsFooter")
+        footer.pack_start(note, True, True, 0)
+        close = Gtk.Button(label="Close")
+        close.set_name("settingsClose")
+        close.set_valign(Gtk.Align.CENTER)
+        close.connect("clicked", lambda _button: self.destroy())
+        footer.pack_end(close, False, False, 0)
+        outer.pack_start(footer, False, False, 0)
+
+    @staticmethod
+    def hint(text: str) -> Gtk.Label:
+        label = SettingsWindow.hint_label(text)
+        label.set_line_wrap(True)
+        label.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        label.set_max_width_chars(52)
+        return label
+
+    def attach_copy_row(self, grid: Gtk.Grid, row: int, label: str, shown: str, copied: str) -> None:
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        name = Gtk.Label(label=label)
+        name.set_name("settingsLabel")
+        name.set_xalign(0)
+        texts.pack_start(name, False, False, 0)
+        value = SettingsWindow.hint_label(shown)
+        value.set_ellipsize(Pango.EllipsizeMode.END)
+        value.set_max_width_chars(38)
+        texts.pack_start(value, False, False, 0)
+        texts.set_hexpand(True)
+        grid.attach(texts, 0, row, 1, 1)
+        button = Gtk.Button(label="Copy")
+        button.set_name("settingsClose")
+        button.set_valign(Gtk.Align.CENTER)
+        button.connect("clicked", self.on_copy, copied)
+        grid.attach(button, 1, row, 1, 1)
+
+    def on_copy(self, button: Gtk.Button, text: str) -> None:
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
+        button.set_label("Copied ✓")
+        GLib.timeout_add(1500, lambda: button.set_label("Copy") or False)
+
+    def open_partner_panel(self) -> None:
+        try:
+            Gtk.show_uri_on_window(self, stickers.KLIPY_PARTNER_URL, Gdk.CURRENT_TIME)
+        except Exception:
+            opener = shutil.which("xdg-open")
+            if opener:
+                subprocess.Popen([opener, stickers.KLIPY_PARTNER_URL],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def test_and_save(self) -> None:
+        if self.checking:
+            return
+        key = self.key_entry.get_text().strip()
+        if not key:
+            self.show_status("Paste the key from the KLIPY Partner Panel first.", ok=False)
+            return
+        self.checking = True
+        self.test_button.set_sensitive(False)
+        self.show_status("Checking the key with KLIPY…", ok=None)
+
+        def worker() -> None:
+            result = stickers.verify_klipy_key(key, stickers.load_customer_id(KLIPY_CUSTOMER_ID_FILE))
+            GLib.idle_add(self.on_verified, key, result)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_verified(self, key: str, result: str) -> bool:
+        self.checking = False
+        self.test_button.set_sensitive(True)
+        if result in ("ok", "rate_limited"):
+            self.owner.update_setting("AI_STATUS_KLIPY_API_KEY", key)
+            window = self.owner.settings_window
+            if window is not None and window.klipy_entry.get_text().strip() != key:
+                window.klipy_entry.set_text(key)
+        log(f"KLIPY key check: {result}")
+        self.show_status(stickers.KLIPY_KEY_STATUS_MESSAGES.get(result, result), ok=result in ("ok", "rate_limited"))
+        return False
+
+    def show_status(self, text: str, ok: bool | None) -> None:
+        color = {True: "#4ADE80", False: "#FB7060", None: "#8A95A3"}[ok]
+        self.status.set_markup(f'<span foreground="{color}">{html.escape(text)}</span>')
+
+    def on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> bool:
+        if event.keyval == Gdk.KEY_Escape:
+            self.destroy()
+            return True
+        return False
+
+
 def display_path(path: Path) -> str:
     try:
         return "~/" + str(path.relative_to(Path.home()))
@@ -1177,6 +1376,7 @@ class StatusWidget(Gtk.Window):
         self.agents: tuple[str, ...] = SETTINGS.agents
         self.max_rows = MAX_ROWS
         self.settings_window: SettingsWindow | None = None
+        self.klipy_guide: KlipyKeyGuide | None = None
         self.serious_mode = SETTINGS.serious_mode
         self.klipy_api_key = SETTINGS.klipy_api_key
         self.sticker_overlay = StickerOverlay() if CAIRO_OK else None
@@ -2349,6 +2549,8 @@ class StatusWidget(Gtk.Window):
         dock_item = Gtk.MenuItem(label="Dock all session windows")
         dock_item.set_sensitive(any(card.floating for card in self.session_cards.values()))
         dock_item.connect("activate", lambda _item: self.dock_all_cards())
+        klipy_item = Gtk.MenuItem(label="Get GIFs from KLIPY (free key)…")
+        klipy_item.connect("activate", lambda _item: self.open_klipy_guide())
         serious_item = Gtk.CheckMenuItem(label="Serious mode (no stickers)")
         serious_item.set_active(self.serious_mode)
         serious_item.connect("toggled", lambda item: self.set_serious_mode(item.get_active()))
@@ -2359,7 +2561,10 @@ class StatusWidget(Gtk.Window):
         else:
             update_item.connect("activate", lambda _item: self.start_update_check())
         quit_item.connect("activate", self.quit)
-        for item in (settings_item, agents_item, serious_item, dock_item, reload_item, logs_item, update_item, quit_item):
+        menu_items = [settings_item, agents_item, serious_item, dock_item]
+        if not self.klipy_api_key:
+            menu_items.append(klipy_item)
+        for item in (*menu_items, reload_item, logs_item, update_item, quit_item):
             menu.append(item)
         menu.show_all()
         menu.popup_at_pointer(event)
@@ -2629,6 +2834,13 @@ class StatusWidget(Gtk.Window):
         window = self.settings_window
         if window is not None and window.serious_switch.get_active() != enabled:
             window.serious_switch.set_active(enabled)
+
+    def open_klipy_guide(self, parent: Gtk.Window | None = None) -> None:
+        if self.klipy_guide is None:
+            self.klipy_guide = KlipyKeyGuide(self, parent or self.settings_window)
+            self.klipy_guide.connect("destroy", lambda _window: setattr(self, "klipy_guide", None))
+            self.klipy_guide.show_all()
+        self.klipy_guide.present()
 
     def open_settings(self) -> None:
         if self.settings_window is None:

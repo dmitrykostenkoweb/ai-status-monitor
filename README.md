@@ -218,6 +218,15 @@ Provider failures are independent. When a refresh fails, an unexpired last-known
 | `limit` | a usage bar reaches 90% (once per limit window) |
 | `idle` | a silent session turns idle |
 
+**Getting a free KLIPY key (≈2 minutes):** open **⚙ Settings → Stickers → Get a free key…** (or right-click the widget → `Get GIFs from KLIPY (free key)…`, shown while no key is set). The guide walks you through it:
+
+1. **Open the KLIPY Partner Panel** (<https://partner.klipy.com>) and sign up.
+2. **Add your platform** — the guide has `Copy` buttons for the platform name (`AI Status Monitor`), website (this repository) and a ready-made description of the integration. Read and accept the KLIPY API Terms.
+3. **Create an API key** — key name `AI-Status-Monitor-Linux`, URL = this repository, leave **"Enable the Ads API" OFF**.
+4. **Paste the key and press `Test & save`** — the widget runs one test search and tells you whether the key works, was rejected, hit its hourly limit, or KLIPY could not be reached. Only a working key is saved.
+
+Free test keys allow 100 requests per hour; the widget stays under 60.
+
 **Where the GIFs come from:**
 
 1. **KLIPY (optional)** — paste a KLIPY API key (free test keys at <https://partner.klipy.com>) into **Settings → Stickers**. On each status change the widget searches KLIPY for a phrase that fits the status (e.g. `thinking`, `typing fast`, `victory dance`) and shows a random GIF. Following KLIPY's [integration requirements](https://docs.klipy.com/integration-requirements), each GIF is loaded directly from KLIPY's URL into memory and is **never stored on disk**; only the search result list (URLs) is reused for an hour to spare the API. Requests run in the background; offline or on any error the widget silently falls back to the local pool. Stickers showing a KLIPY GIF carry a small `KLIPY` mark ("Powered by KLIPY").

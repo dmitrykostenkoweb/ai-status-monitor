@@ -276,6 +276,43 @@ class KlipyTests(unittest.TestCase):
             self.assertEqual(stickers.load_customer_id(path), first)
 
 
+class KlipyKeyCheckTests(unittest.TestCase):
+    def check(self, outcome: object) -> str:
+        import urllib.error
+
+        def opener(request: object, *, timeout: float) -> FakeResponse:
+            if isinstance(outcome, Exception):
+                raise outcome
+            return FakeResponse(outcome)  # type: ignore[arg-type]
+
+        return stickers.verify_klipy_key("secret-key", opener=opener)
+
+    def test_reports_each_outcome_without_leaking_the_key(self) -> None:
+        import io
+        import urllib.error
+
+        def http_error(code: int) -> urllib.error.HTTPError:
+            return urllib.error.HTTPError("https://api.klipy.com/x", code, "x", {}, io.BytesIO(b"{}"))  # type: ignore[arg-type]
+
+        self.assertEqual(self.check(json.dumps({"result": True, "data": {"data": []}}).encode()), "ok")
+        self.assertEqual(self.check(json.dumps({"result": False}).encode()), "invalid")
+        self.assertEqual(self.check(http_error(404)), "invalid")
+        self.assertEqual(self.check(http_error(401)), "invalid")
+        self.assertEqual(self.check(http_error(429)), "rate_limited")
+        self.assertEqual(self.check(http_error(500)), "error")
+        self.assertEqual(self.check(urllib.error.URLError("no route")), "offline")
+        self.assertEqual(self.check(b"not json"), "error")
+        self.assertEqual(stickers.verify_klipy_key("   "), "invalid")
+        for status in ("ok", "invalid", "rate_limited", "offline", "error"):
+            self.assertNotIn("secret", stickers.KLIPY_KEY_STATUS_MESSAGES[status])
+
+    def test_guide_texts_are_ready_to_paste(self) -> None:
+        self.assertTrue(stickers.KLIPY_GUIDE_WEBSITE.startswith("https://github.com/"))
+        self.assertTrue(stickers.KLIPY_PARTNER_URL.startswith("https://partner.klipy.com"))
+        self.assertIn("KLIPY", stickers.KLIPY_GUIDE_DESCRIPTION)
+        self.assertLess(len(stickers.KLIPY_GUIDE_DESCRIPTION), 1000)
+
+
 class StickerSourceTests(unittest.TestCase):
     def test_many_picks_spread_over_phrases_pages_and_gifs(self) -> None:
         searches: list[tuple[str, int]] = []

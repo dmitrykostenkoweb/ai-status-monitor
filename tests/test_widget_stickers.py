@@ -79,6 +79,22 @@ class WidgetStickerTests(unittest.TestCase):
             widget.update_setting("AI_STATUS_KLIPY_API_KEY", "")
             assert widget.sticker_source.klipy is None
 
+            # In-app "get a free key" guide: a failed check saves nothing, a passing one saves.
+            widget.open_settings()
+            widget.open_klipy_guide(widget.settings_window)
+            guide = widget.klipy_guide
+            assert guide is not None
+            guide.on_verified("bad-key", "invalid")
+            assert widget.klipy_api_key == ""
+            guide.on_verified("good-key", "ok")
+            assert widget.klipy_api_key == "good-key" and widget.sticker_source.klipy is not None
+            assert widget.settings_window.klipy_entry.get_text() == "good-key"
+            assert "works" in guide.status.get_text()
+            guide.destroy()
+            assert widget.klipy_guide is None
+            widget.settings_window.destroy()
+            widget.update_setting("AI_STATUS_KLIPY_API_KEY", "")
+
             # KLIPY media arrives as in-memory bytes and still animates.
             import base64
             gif = base64.b64decode("R0lGODlhBAAEAPAAAP8AAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACH/C0ltYWdlTWFnaWNrDmdhbW1hPTAuNDU0NTQ1ACwAAAAABAAEAAACBISPCQUAIfkEAAoAAAAh/wtJbWFnZU1hZ2ljaw5nYW1tYT0wLjQ1NDU0NQAsAAAAAAQABACAAAD/AAAAAgSEjwkFADs=")

@@ -12,6 +12,7 @@ import random
 import threading
 import time
 from collections import deque
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -440,6 +441,60 @@ class KlipyClient:
         if not is_image_file(body[:16]):
             raise RuntimeError("KLIPY download is not an image")
         return body
+
+
+# ---- in-app "get a free KLIPY key" guide ----
+KLIPY_PARTNER_URL = "https://partner.klipy.com"
+KLIPY_GUIDE_PLATFORM_NAME = "AI Status Monitor"
+KLIPY_GUIDE_WEBSITE = "https://github.com/dmitrykostenkoweb/ai-status-monitor"
+KLIPY_GUIDE_KEY_NAME = "AI-Status-Monitor-Linux"
+KLIPY_GUIDE_DESCRIPTION = (
+    "AI Status Monitor is an open-source desktop widget for Linux (Python + GTK) that shows "
+    "the live status of AI coding agents (Claude Code, Codex CLI) running in the user's terminals. "
+    "When an agent's status changes (thinking, coding, waiting, done, error) the widget shows a small "
+    "sticker with a GIF next to that agent. The app calls the GIF Search API directly from the "
+    "user's machine with a status-related query, picks one result and loads it straight from the "
+    "KLIPY URL into memory - no server, no proxy, no media caching. Content filter: high. "
+    "Stickers with KLIPY content carry a KLIPY mark."
+)
+
+KLIPY_KEY_STATUS_MESSAGES = {
+    "ok": "✓ The key works. Stickers now use GIFs from KLIPY.",
+    "invalid": "✗ KLIPY rejected this key. Copy it again from the Partner Panel.",
+    "rate_limited": "The key is valid but has hit its hourly limit. GIFs come back within the hour.",
+    "offline": "Could not reach KLIPY. Check your internet connection and try again.",
+    "error": "KLIPY answered unexpectedly. Try again in a moment.",
+}
+
+
+def verify_klipy_key(
+    api_key: str,
+    customer_id: str = "key-check",
+    *,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+    timeout: float = KLIPY_TIMEOUT_SECONDS,
+) -> str:
+    """One test search; returns a KLIPY_KEY_STATUS_MESSAGES key. Never echoes the key."""
+    key = api_key.strip()
+    if not key:
+        return "invalid"
+    client = KlipyClient(key, customer_id, opener=opener, timeout=timeout)
+    try:
+        body = client._get(client.search_url("hello"), 2 * 1024 * 1024)
+        payload = json.loads(body.decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        if error.code == 429:
+            return "rate_limited"
+        if error.code in (401, 403, 404):
+            return "invalid"
+        return "error"
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return "offline"
+    except Exception:
+        return "error"
+    if isinstance(payload, dict) and payload.get("result") is True:
+        return "ok"
+    return "invalid"
 
 
 @dataclass(frozen=True)
