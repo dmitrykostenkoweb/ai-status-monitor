@@ -94,6 +94,9 @@ class ProcessTreeTests(unittest.TestCase):
 class CommandTests(unittest.TestCase):
     def test_sound_players_per_platform(self) -> None:
         self.assertEqual(platform_support.sound_commands("/a.mp3", "macos"), [("afplay", ["afplay", "/a.mp3"])])
+        flags = platform_support.detached_flags("windows")["creationflags"]
+        self.assertFalse(flags & 0x00000008, "DETACHED_PROCESS would cancel CREATE_NO_WINDOW")
+        self.assertTrue(flags & 0x08000000)
         windows = platform_support.sound_commands("C:/it's.mp3", "windows")
         self.assertEqual([binary for binary, _ in windows], ["powershell", "pwsh"])
         self.assertIn("[Uri]'C:/it''s.mp3'", windows[0][1][-1])
@@ -263,6 +266,20 @@ class InstallerTests(unittest.TestCase):
         plist = self.installer.launch_agent_plist(["/usr/bin/python3", "/Users/a&b/widget"], Path("/tmp/w.log"))
         self.assertIn("<string>/Users/a&amp;b/widget</string>", plist)
         self.assertIn("<key>RunAtLoad</key>", plist)
+        self.assertIn("<key>PATH</key>", plist)
+
+    def test_launch_agent_path_adds_homebrew_and_keeps_user_path(self) -> None:
+        path = self.installer.launch_agent_path(os.pathsep.join(["/Users/a/.npm/bin", "/usr/bin"]))
+        entries = path.split(os.pathsep)
+        self.assertEqual(entries[:3], ["/opt/homebrew/bin", "/usr/local/bin", "/Users/a/.npm/bin"])
+        self.assertEqual(entries.count("/usr/bin"), 1)
+
+    def test_pip_version_parses_and_tolerates_missing_pip(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, stdout="pip 22.0.2 from /usr/lib/python3/dist-packages/pip\n")
+        with mock.patch.object(self.installer.subprocess, "run", return_value=completed):
+            self.assertEqual(self.installer.pip_version("python3"), (22, 0, 2))
+        with mock.patch.object(self.installer.subprocess, "run", side_effect=FileNotFoundError):
+            self.assertEqual(self.installer.pip_version("python3"), ())
 
 
 if __name__ == "__main__":

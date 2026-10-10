@@ -241,17 +241,16 @@ def copy_scripts(bin_dir: Path) -> None:
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     # Remove the retired toggle script from earlier installs.
     (bin_dir / "ai-agent-status-widget-toggle").unlink(missing_ok=True)
-    if PLATFORM == platform_support.WINDOWS:
-        write_windows_shims(bin_dir)
 
 
-def write_windows_shims(bin_dir: Path) -> None:
+def write_windows_shims(bin_dir: Path, widget_python: str | None) -> None:
     """``ai-agent-status-<name>.cmd`` wrappers so the tools run by name from cmd/PowerShell."""
     python = sys.executable
     for name in SCRIPTS:
         if name == "ai-agent-status-hook":
             continue  # the agents call the hook with an explicit interpreter
-        interpreter = platform_support.gui_python(python) if name == "ai-agent-status-widget" else python
+        widget = platform_support.gui_python(widget_python or python)
+        interpreter = widget if name == "ai-agent-status-widget" else python
         (bin_dir / f"{name}.cmd").write_text(
             f'@echo off\r\n"{interpreter}" "%~dp0{name}" %*\r\n', encoding="utf-8"
         )
@@ -316,7 +315,18 @@ def install_linux_desktop(home: Path, bin_dir: Path, python: str) -> list[str]:
     return [f"Autostart installed:\n  {autostart}", f"Application launcher installed:\n  {launcher}"]
 
 
-def launch_agent_plist(argv: list[str], log_file: Path) -> str:
+def launch_agent_path(current: str) -> str:
+    """PATH for the LaunchAgent: launchd starts it with only /usr/bin:/bin:/usr/sbin:/sbin,
+    which hides Homebrew/npm installs of `codex` (needed for Codex usage limits)."""
+    entries: list[str] = []
+    for entry in ["/opt/homebrew/bin", "/usr/local/bin", *current.split(os.pathsep), "/usr/bin", "/bin",
+                  "/usr/sbin", "/sbin"]:
+        if entry and entry not in entries:
+            entries.append(entry)
+    return os.pathsep.join(entries)
+
+
+def launch_agent_plist(argv: list[str], log_file: Path, path: str = "") -> str:
     from xml.sax.saxutils import escape
 
     arguments = "\n".join(f"    <string>{escape(arg)}</string>" for arg in argv)
@@ -330,6 +340,11 @@ def launch_agent_plist(argv: list[str], log_file: Path) -> str:
   <array>
 {arguments}
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{escape(launch_agent_path(path))}</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>ProcessType</key>
@@ -349,7 +364,8 @@ def install_macos_launch_agent(home: Path, bin_dir: Path, cache_dir: Path, pytho
     agents_dir.mkdir(parents=True, exist_ok=True)
     plist = agents_dir / f"{LAUNCH_AGENT_LABEL}.plist"
     argv = process_control.widget_argv(bin_dir, python)
-    plist.write_text(launch_agent_plist(argv, cache_dir / "widget.log"), encoding="utf-8")
+    plist.write_text(launch_agent_plist(argv, cache_dir / "widget.log", os.environ.get("PATH", "")),
+                     encoding="utf-8")
     return [f"Login item (LaunchAgent) installed:\n  {plist}"]
 
 
@@ -393,6 +409,19 @@ def venv_python(venv: Path) -> Path:
     return venv / "bin" / "python"
 
 
+def pip_version(python: str) -> tuple[int, ...]:
+    """``(major, minor, …)`` of ``python -m pip``, or ``()`` when pip is missing."""
+    try:
+        result = subprocess.run([python, "-m", "pip", "--version"], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    parts = result.stdout.split()
+    if result.returncode != 0 or len(parts) < 2:
+        return ()
+    return tuple(int(part) for part in parts[1].split(".") if part.isdigit())
+
+
 def ensure_widget_python(data_dir: Path, environ: dict[str, str] | None = None) -> str | None:
     """An interpreter that can import PySide6, setting up ``<data>/venv`` when needed."""
     env = os.environ if environ is None else environ
@@ -425,6 +454,10 @@ def ensure_widget_python(data_dir: Path, environ: dict[str, str] | None = None) 
                 return None
     if subprocess.run([*pip, "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                       check=False).returncode != 0:
+        # pip >= 22.3 can install into another interpreter's environment (--python).
+        if pip_version(sys.executable) < (22, 3):
+            say("⚠️  The venv has no pip and this Python's pip is too old to fill it.")
+            return None
         pip = [sys.executable, "-m", "pip", "--python", str(python)]
     say(f"Installing {PYSIDE_REQUIREMENT} into it (one-time download, about 100 MB)…")
     result = subprocess.run(
@@ -494,6 +527,8 @@ def main() -> int:
     copy_data(data_dir)
     widget_python = ensure_widget_python(data_dir)
     process_control.save_interpreters(data_dir, sys.executable, widget_python)
+    if PLATFORM == platform_support.WINDOWS:
+        write_windows_shims(bin_dir, widget_python)
     notes = install_autostart(home, bin_dir, cache_dir, widget_python or sys.executable)
     install_environment_config(runtime_env, source_env, config_dir, home)
 

@@ -123,7 +123,8 @@ def reexec_with_widget_python() -> None:
     os.environ["AI_STATUS_WIDGET_REEXEC"] = "1"
     argv = [candidate, str(Path(__file__).resolve()), *sys.argv[1:]]
     if platform_support.PLATFORM == platform_support.WINDOWS:
-        raise SystemExit(subprocess.call(argv))
+        argv[0] = platform_support.gui_python(candidate)
+        raise SystemExit(subprocess.call(argv, **platform_support.hidden_window_flags()))
     os.execv(candidate, argv)
 
 
@@ -440,8 +441,10 @@ def window_id_of(window: QWidget) -> str | None:
         return None
 
 
+# Built outside the f-string: Python < 3.12 forbids backslashes inside f-string expressions.
+SANS_CSS = ", ".join('"' + family + '"' if " " in family else family for family in SANS_FAMILIES)
 STYLE_SHEET = f"""
-QWidget {{ font-family: {", ".join(f"\"{f}\"" if " " in f else f for f in SANS_FAMILIES)}; }}
+QWidget {{ font-family: {SANS_CSS}; }}
 QFrame#card {{
   background: rgba(13,19,26,245);
   border: 1px solid rgba(255,255,255,23);
@@ -1637,6 +1640,7 @@ class KlipyKeyGuide(DialogWindow):
         super().__init__("Get a free KLIPY key", "Get a free KLIPY key")
         self.owner = owner
         self.checking = False
+        self.closed = False
         content = self.content
         content.setSpacing(6)
         content.addWidget(self.hint(
@@ -1744,14 +1748,17 @@ class KlipyKeyGuide(DialogWindow):
         threading.Thread(target=worker, daemon=True).start()
 
     def on_verified(self, key: str, result: str) -> bool:
-        self.checking = False
-        self.test_button.setEnabled(True)
+        # Save first: the guide may have been closed (and deleted) while the check ran.
         if result in ("ok", "rate_limited"):
             self.owner.update_setting("AI_STATUS_KLIPY_API_KEY", key)
             window = self.owner.settings_window
             if window is not None and window.klipy_entry.text().strip() != key:
                 window.klipy_entry.setText(key)
         log(f"KLIPY key check: {result}")
+        if self.closed:
+            return False
+        self.checking = False
+        self.test_button.setEnabled(True)
         self.show_status(stickers.KLIPY_KEY_STATUS_MESSAGES.get(result, result), ok=result in ("ok", "rate_limited"))
         return False
 
@@ -1760,6 +1767,7 @@ class KlipyKeyGuide(DialogWindow):
         self.status.setText(markup(text, color))
 
     def closeEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        self.closed = True
         self.owner.on_klipy_guide_closed(self)
         super().closeEvent(event)
 
@@ -1814,6 +1822,7 @@ class StatusWidget(QWidget):
         self.spinning: list[LogoMark] = []
         self.intro = True
         self.closing = False
+        self.rebuilding = False
         self.timers: list[QTimer] = []
         self.update_available: str | None = None
         self.updating = False
@@ -2196,7 +2205,13 @@ class StatusWidget(QWidget):
 
     def reset_body(self) -> None:
         self.row_hover_boxes = {}
-        clear_layout(self.body_layout)
+        # Hiding the old rows sends them synthetic Leave events; let verify_hover() decide
+        # after the rebuild instead of tucking the hovered row's sticker right away.
+        self.rebuilding = True
+        try:
+            clear_layout(self.body_layout)
+        finally:
+            self.rebuilding = False
         self.anim_dot_labels = []
         self.waiting_dots = []
         self.spinning = []
@@ -2899,7 +2914,7 @@ class StatusWidget(QWidget):
         overlay.present_sticker(choice, sticky=False, hold_ms=None)
 
     def on_row_leave(self, box: QWidget, session_id: str) -> None:
-        if self.sticker_hovered != session_id:
+        if self.rebuilding or self.sticker_hovered != session_id:
             return
         if self.pointer_inside(box):
             return  # a spurious crossing (e.g. a window mapped above): still hovering

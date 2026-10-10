@@ -316,9 +316,11 @@ def hidden_window_flags(platform: str | None = None) -> dict[str, int]:
 def detached_flags(platform: str | None = None) -> dict[str, object]:
     """``Popen`` kwargs for a child that must outlive its parent (no console on Windows)."""
     if (platform or PLATFORM) == WINDOWS:
+        # Not DETACHED_PROCESS: Windows ignores CREATE_NO_WINDOW alongside it, and a
+        # console-less updater would then flash a new console for every git/pip child.
+        # A hidden console is inherited by the children; the process still outlives us.
         flags = (
-            getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
             | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         )
         return {"creationflags": flags, "close_fds": True}

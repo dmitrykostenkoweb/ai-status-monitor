@@ -102,6 +102,10 @@ class WidgetStickerTests(unittest.TestCase):
             assert "works" in guide.status.text()
             guide.close()
             assert widget.klipy_guide is None
+            # A check that finishes after the guide was closed still saves a good key.
+            process_events(0.1)
+            guide.on_verified("late-key", "ok")
+            assert widget.klipy_api_key == "late-key"
             widget.settings_window.close()
             widget.update_setting("AI_STATUS_KLIPY_API_KEY", "")
 
@@ -188,6 +192,13 @@ class WidgetStickerTests(unittest.TestCase):
             widget.pointer_inside = lambda _box: True
             widget.on_row_leave(widget, "claude:app")
             assert overlay.phase == "in" and widget.sticker_hovered == "claude:app"
+
+            # Leave events sent while the rows are being rebuilt are left to verify_hover().
+            widget.pointer_inside = lambda _box: False
+            widget.rebuilding = True
+            widget.on_row_leave(widget, "claude:app")
+            assert overlay.phase == "in" and widget.sticker_hovered == "claude:app"
+            widget.rebuilding = False
 
             # After a row rebuild the hover is re-checked; pointer gone → tuck.
             widget.row_hover_boxes = {}
