@@ -1,14 +1,23 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env python3
+"""Print the merged one-line-per-session status (combined.txt) for debugging or panels."""
+from __future__ import annotations
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$script_dir/ai-agent-status-env"
-ai_status_load_env
+import sys
+from pathlib import Path
 
-status_file="$AI_STATUS_CACHE_DIR/combined.txt"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-if [[ -s "$status_file" ]]; then
-  cat "$status_file"
-else
-  printf 'AI agents: idle\n'
-fi
+from ai_agent_status_lib.env_config import load_settings  # noqa: E402
+
+
+def main() -> int:
+    try:
+        combined = (load_settings().cache_dir / "combined.txt").read_text(encoding="utf-8")
+    except OSError:
+        combined = ""
+    sys.stdout.write(combined if combined.strip() else "AI agents: idle\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
+from ai_agent_status_lib import platform_support
+
 
 DEFAULT_VALUES = {
     "AI_STATUS_CACHE_DIR": "$HOME/.cache/ai-cli-status-monitor",
@@ -36,6 +38,17 @@ OPTIONAL_KEYS = frozenset({"AI_STATUS_KLIPY_API_KEY"})
 SUPPORTED_AGENTS = ("claude", "codex")
 
 KNOWN_KEYS = frozenset(DEFAULT_VALUES)
+
+
+def platform_default_values(platform: str | None = None) -> dict[str, str]:
+    """``DEFAULT_VALUES`` with the runtime directories of the given/current OS.
+
+    ``DEFAULT_VALUES`` (and ``.env.default``) carry the Linux/macOS layout; Windows
+    swaps in its ``AppData`` folders.
+    """
+    return {**DEFAULT_VALUES, **platform_support.default_dir_values(platform)}
+
+
 LEGACY_KEYS = {
     "AI_STATUS_SOUND_ENABLED": "sound_enabled",
     "AI_STATUS_STALE_AFTER_SECONDS": "stale_after_seconds",
@@ -268,11 +281,12 @@ def load_settings(
 ) -> Settings:
     env = dict(os.environ if environ is None else environ)
     warn = diagnostic or _noop_diagnostic
-    home = Path(env.get("HOME") or Path.home())
+    home = platform_support.home_dir(env)
+    defaults = platform_default_values()
     selected_env = env_path
     if selected_env is None:
         selected_raw = env.get("AI_STATUS_ENV_FILE", "").strip()
-        selected_env = _expand_path(selected_raw, home) if selected_raw else home / ".config" / "ai-cli-status-monitor" / ".env"
+        selected_env = _expand_path(selected_raw, home) if selected_raw else platform_support.default_env_file(home)
     file_values = dict(dotenv_values) if dotenv_values is not None else parse_dotenv(selected_env, warn)
 
     def candidates(key: str, legacy_values: Mapping[str, object]) -> list[tuple[str, object]]:
@@ -284,7 +298,7 @@ def load_settings(
         legacy_key = LEGACY_KEYS.get(key)
         if legacy_key and legacy_key in legacy_values:
             result.append(("widget.json", legacy_values[legacy_key]))
-        result.append(("built-in default", DEFAULT_VALUES[key]))
+        result.append(("built-in default", defaults[key]))
         return result
 
     def resolve_path(key: str) -> Path:

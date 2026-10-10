@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -13,6 +14,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, TypedDict
+
+from ai_agent_status_lib import platform_support
 
 
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -277,14 +280,17 @@ def collect_codex_live_usage(
     process: Any = None
     reader_thread: threading.Thread | None = None
     try:
+        # shutil.which resolves npm's codex.cmd shim on Windows, which Popen cannot run by bare name.
+        codex = shutil.which("codex") or "codex"
         process = process_factory(
-            ["codex", "app-server", "--stdio"],
+            [codex, "app-server", "--stdio"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             bufsize=1,
+            **platform_support.hidden_window_flags(),
         )
         if process.stdin is None or process.stdout is None:
             return []
@@ -368,10 +374,13 @@ def claude_credentials_path(environ: Mapping[str, str] | None = None) -> Path:
     return base / ".credentials.json"
 
 
-def _claude_access_token(path: Path) -> str | None:
+CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
+
+
+def _claude_token_from_json(raw: str) -> str | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -382,6 +391,31 @@ def _claude_access_token(path: Path) -> str | None:
     return token.strip() if isinstance(token, str) and token.strip() else None
 
 
+def _claude_access_token(path: Path) -> str | None:
+    try:
+        return _claude_token_from_json(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+
+
+def _claude_keychain_token(runner: Any = subprocess.run) -> str | None:
+    """macOS: Claude Code keeps its OAuth credentials in the login Keychain, not a file."""
+    try:
+        result = runner(
+            ["security", "find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return _claude_token_from_json(result.stdout.strip())
+
+
 def collect_claude_usage(
     credentials: Path | None = None,
     *,
@@ -390,6 +424,8 @@ def collect_claude_usage(
     opener: Any = urllib.request.urlopen,
 ) -> list[UsageLimit]:
     token = _claude_access_token(credentials or claude_credentials_path())
+    if token is None and credentials is None and platform_support.PLATFORM == platform_support.MACOS:
+        token = _claude_keychain_token()
     if token is None:
         raise UsageSourceError("Claude usage unavailable")
 

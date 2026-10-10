@@ -1,73 +1,88 @@
-#!/usr/bin/env bash
-# Self-update: pull the latest source from GitHub and re-run install.sh.
-#
-# The installer records where it ran from in "$DATA_DIR/install_source". We pull
-# that clone when it is a git repo; otherwise we fall back to a managed clone in
-# "$DATA_DIR/src" (cloning it fresh the first time). install.sh is idempotent and
-# restarts the widget at the end, so a single command fully refreshes the install.
-set -euo pipefail
+#!/usr/bin/env python3
+"""Self-update: pull the latest source from GitHub and re-run the installer.
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
-source "$script_dir/ai-agent-status-env"
-ai_status_load_env
+The installer records where it ran from in "<data dir>/install_source". We pull that
+clone when it is a git repo; otherwise we fall back to a managed clone in
+"<data dir>/src" (cloning it fresh the first time). install.py is idempotent and
+restarts the widget at the end, so a single command fully refreshes the install.
+"""
+from __future__ import annotations
 
-repo_slug="${AI_STATUS_UPDATE_REPO:-dmitrykostenkoweb/ai-status-monitor}"
-repo_branch="${AI_STATUS_UPDATE_BRANCH:-main}"
-repo_url="https://github.com/${repo_slug}.git"
+import argparse
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
-data_dir="$AI_STATUS_DATA_DIR"
-marker_file="$data_dir/install_source"
-managed_src="$data_dir/src"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-check_only=0
-if [[ "${1:-}" == "--check" ]]; then
-  check_only=1
-fi
+from ai_agent_status_lib import updates  # noqa: E402
+from ai_agent_status_lib.env_config import load_settings  # noqa: E402
 
-if [[ "$check_only" -eq 1 ]]; then
-  remote="$(PYTHONPATH="$script_dir" python3 -c \
-    'from ai_agent_status_lib import updates; print(updates.check_for_update() or "")' 2>/dev/null || true)"
-  local_v="$(PYTHONPATH="$script_dir" python3 -c \
-    'from ai_agent_status_lib import updates; print(updates.installed_version())' 2>/dev/null || echo "unknown")"
-  if [[ -n "$remote" ]]; then
-    echo "Update available: $local_v -> $remote"
-    exit 0
-  fi
-  echo "Up to date (version $local_v)."
-  exit 0
-fi
 
-is_git_repo() {
-  [[ -n "$1" && -d "$1/.git" ]] && git -C "$1" rev-parse --git-dir >/dev/null 2>&1
-}
+def is_git_repo(path: Path) -> bool:
+    if not (path / ".git").exists():
+        return False
+    result = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--git-dir"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    )
+    return result.returncode == 0
 
-src=""
-if [[ -r "$marker_file" ]]; then
-  candidate="$(cat "$marker_file")"
-  if is_git_repo "$candidate"; then
-    src="$candidate"
-  fi
-fi
-if [[ -z "$src" ]] && is_git_repo "$managed_src"; then
-  src="$managed_src"
-fi
 
-if [[ -z "$src" ]]; then
-  if ! command -v git >/dev/null 2>&1; then
-    echo "git is required to update. Install it with: sudo apt install git" >&2
-    exit 1
-  fi
-  echo "No local source clone found; cloning $repo_url ..."
-  rm -rf "$managed_src"
-  git clone --branch "$repo_branch" --depth 1 "$repo_url" "$managed_src"
-  src="$managed_src"
-else
-  echo "Updating source in $src ..."
-  git -C "$src" fetch --depth 1 origin "$repo_branch"
-  git -C "$src" checkout "$repo_branch"
-  git -C "$src" reset --hard "origin/$repo_branch"
-fi
+def git(*args: str) -> None:
+    subprocess.run(["git", *args], check=True)
 
-echo "Running installer from $src ..."
-exec "$src/install.sh"
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Update ai-cli-status-monitor from GitHub.")
+    parser.add_argument("--check", action="store_true", help="only report whether an update is available")
+    args = parser.parse_args()
+
+    if args.check:
+        local = updates.installed_version()
+        remote = updates.check_for_update()
+        print(f"Update available: {local} -> {remote}" if remote else f"Up to date (version {local}).")
+        return 0
+
+    if shutil.which("git") is None:
+        print("git is required to update. Install git and try again.", file=sys.stderr)
+        return 1
+
+    data_dir = load_settings().data_dir
+    managed_src = data_dir / "src"
+    branch = updates.repo_branch()
+    repo_url = f"https://github.com/{updates.repo_slug()}.git"
+
+    src: Path | None = None
+    try:
+        candidate = Path((data_dir / "install_source").read_text(encoding="utf-8").strip())
+        if candidate.parts and is_git_repo(candidate):
+            src = candidate
+    except OSError:
+        pass
+    if src is None and is_git_repo(managed_src):
+        src = managed_src
+
+    try:
+        if src is None:
+            print(f"No local source clone found; cloning {repo_url} ...")
+            shutil.rmtree(managed_src, ignore_errors=True)
+            managed_src.parent.mkdir(parents=True, exist_ok=True)
+            git("clone", "--branch", branch, "--depth", "1", repo_url, str(managed_src))
+            src = managed_src
+        else:
+            print(f"Updating source in {src} ...")
+            git("-C", str(src), "fetch", "--depth", "1", "origin", branch)
+            git("-C", str(src), "checkout", branch)
+            git("-C", str(src), "reset", "--hard", f"origin/{branch}")
+    except subprocess.CalledProcessError as error:
+        print(f"git failed: {error}", file=sys.stderr)
+        return 1
+
+    print(f"Running installer from {src} ...")
+    return subprocess.run([sys.executable, str(src / "install.py")], check=False).returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

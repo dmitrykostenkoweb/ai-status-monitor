@@ -5,10 +5,12 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ai_agent_status_lib import platform_support
 from ai_agent_status_lib.env_config import load_settings
 from ai_agent_status_lib.status_model import agent_semantic
 
@@ -68,16 +70,14 @@ def detected_tool_name(payload: dict[str, Any]) -> str:
 def fallback_session_key(agent: str, payload: dict[str, Any]) -> str:
     """No explicit session id in the payload (e.g. Codex sends only cwd + event).
 
-    Key on the POSIX session leader (`getsid`) — the terminal's shell. It is stable for the
-    whole session and unique per window/tab, and unlike `ppid` it survives the transient
-    per-event wrapper process that spawns the hook. Falls back to ppid+cwd only if getsid fails.
+    Key on the terminal: the POSIX session leader (`getsid`, the terminal's shell) or, on
+    Windows, the console window handle. Both are stable for the whole session and unique
+    per window/tab, and unlike `ppid` they survive the transient per-event wrapper process
+    that spawns the hook. Falls back to ppid+cwd only if neither is available.
     """
-    try:
-        sid = os.getsid(0)
-    except OSError:
-        sid = 0
-    if sid > 0:
-        return f"{agent}:sid{sid}"
+    terminal = platform_support.terminal_session_key()
+    if terminal:
+        return f"{agent}:{terminal}"
     cwd = first_string(payload, ("cwd",), os.getcwd())
     return f"{agent}:{os.getppid()}:{cwd}"
 
@@ -116,23 +116,19 @@ def parse_payload(raw: str, agent: str) -> tuple[dict[str, Any], Path]:
 
 def ancestor_pids() -> list[int]:
     """Walk the process tree up from this hook so the widget can match the terminal window by PID."""
-    pids: list[int] = []
-    pid = os.getpid()
-    for _ in range(12):
-        pids.append(pid)
-        ppid = 0
-        try:
-            with open(f"/proc/{pid}/status", "r", encoding="utf-8") as handle:
-                for line in handle:
-                    if line.startswith("PPid:"):
-                        ppid = int(line.split()[1])
-                        break
-        except (OSError, ValueError):
-            break
-        if ppid <= 1:
-            break
-        pid = ppid
-    return pids
+    return platform_support.ancestor_pids()
+
+
+def console_window() -> int:
+    """Windows only: the console window handle, for terminals not owned by an ancestor."""
+    if platform_support.PLATFORM != platform_support.WINDOWS:
+        return 0
+    try:
+        import ctypes
+
+        return int(ctypes.windll.kernel32.GetConsoleWindow() or 0)
+    except Exception:
+        return 0
 
 
 def build_status(agent: str, payload: dict[str, Any], raw_payload_path: Path) -> dict[str, Any]:
@@ -156,6 +152,7 @@ def build_status(agent: str, payload: dict[str, Any], raw_payload_path: Path) ->
         "timestamp_iso": now.isoformat(timespec="seconds"),
         "timestamp_hhmm": now.strftime("%H:%M"),
         "client_pids": ancestor_pids(),
+        "console_window": console_window(),
         "raw_payload_path": str(raw_payload_path),
     }
 
@@ -240,7 +237,7 @@ def main() -> int:
         run_test(args.agent)
         return 0
 
-    raw = os.sys.stdin.read()
+    raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
     handle_payload(args.agent, raw)
     return 0
 

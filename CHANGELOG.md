@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The widget now runs on Linux, macOS and Windows.** It was rewritten from GTK3/PyGObject to Qt (PySide6) and keeps the same look and features: rows and session windows, GIF stickers with speech bubbles, usage limits, Settings, the KLIPY key guide, the `→` window switch, sounds and self-update. KLIPY media is still decoded from memory only (`QBuffer` → `QMovie`) and never written to disk.
+- The installer sets PySide6 up automatically. When the installing Python cannot import it, `install.py` creates `<data dir>/venv` and installs `PySide6-Essentials` there (one-time download). It records the interpreters in `<data dir>/interpreters.json`, which autostart and the start/update helpers use. Running `ai-agent-status-widget` with a Python that lacks PySide6 re-runs it under that interpreter. `AI_STATUS_WIDGET_PYTHON` picks your own interpreter, and `AI_STATUS_SKIP_PIP=1` skips the download.
+- Linux needs `libxcb-cursor0` (Qt 6.5+ on X11) instead of `python3-gi`/`gir1.2-gtk-3.0`; `wmctrl` is still used. The installer and doctor print the `apt` command. On Wayland the widget runs through XWayland so it can place its own windows.
+- The doctor checks the PySide6 import of the widget's interpreter instead of GTK.
+- `ai-agent-status-widget-start`, `-stop`, `-panel` and `-update` are now Python scripts, so they also run on Windows and with macOS's Bash 3.2.
+- The hook reads stdin as UTF-8 on every platform, and on Windows it also records `console_window`.
+- The installer backs up `~/.claude/settings.json` / `~/.codex/hooks.json` only when it actually changes them.
+
+### Added
+
+- Cross-platform groundwork for macOS and Windows. The new `install.py` installer works on Linux, macOS and Windows. `install.sh` is now a thin `curl | bash` bootstrap around it, and the new `install.ps1` does the same on Windows. Autostart uses a `.desktop` file (Linux), a LaunchAgent (macOS) or the `HKCU` Run key (Windows).
+- `ai_agent_status_lib/platform_support.py` holds the OS-specific parts: default directories (`AppData` on Windows), the process-ancestor chain (`/proc`, `ps`, Toolhelp32), the per-terminal session key (`getsid` or the Windows console window), the sound player (`afplay`/PowerShell), opening files and URLs, and detached processes.
+- `ai_agent_status_lib/window_switch.py`: the `→` window switch now has a macOS path (System Events) and a Windows path (`EnumWindows` + `SetForegroundWindow`) next to `wmctrl`.
+- On macOS, Claude usage limits are read from the login Keychain when `~/.claude/.credentials.json` is absent.
+
 ## [0.3.8] - 2026-10-09
 
 ### Reverted
