@@ -51,6 +51,12 @@ ai_status_valid_value() {
         esac
       done
       ;;
+    AI_STATUS_THEME)
+      case "${value,,}" in
+        dark|light) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
     AI_STATUS_KLIPY_API_KEY)
       return 0
       ;;
@@ -91,8 +97,8 @@ ai_status_load_env() {
     [AI_STATUS_CACHE_DIR]='$HOME/.cache/ai-cli-status-monitor'
     [AI_STATUS_CONFIG_DIR]='$HOME/.config/ai-cli-status-monitor'
     [AI_STATUS_DATA_DIR]='$HOME/.local/share/ai-cli-status-monitor'
-    [AI_STATUS_TITLE]='AI Agents Status'
-    [AI_STATUS_CARD_WIDTH]='344'
+    [AI_STATUS_TITLE]='AI Agents Status!'
+    [AI_STATUS_CARD_WIDTH]='420'
     [AI_STATUS_MAX_ROWS]='5'
     [AI_STATUS_SOUND_ENABLED]='true'
     [AI_STATUS_STALE_AFTER_SECONDS]='180'

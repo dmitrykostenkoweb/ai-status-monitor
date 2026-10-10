@@ -39,7 +39,9 @@ from ai_agent_status_lib.env_config import LEGACY_KEYS  # noqa: E402
 from ai_agent_status_lib.env_config import load_settings  # noqa: E402
 from ai_agent_status_lib.env_config import parse_dotenv  # noqa: E402
 from ai_agent_status_lib.env_config import platform_default_values  # noqa: E402
+from ai_agent_status_lib.env_config import RETIRED_DEFAULTS  # noqa: E402
 from ai_agent_status_lib.env_config import serialize_env  # noqa: E402
+from ai_agent_status_lib.env_config import write_env_value  # noqa: E402
 
 PLATFORM = platform_support.PLATFORM
 APP_NAME = "AI CLI Status Widget"
@@ -88,6 +90,24 @@ def read_legacy_widget_config(config_dir: Path, report: Say = say) -> dict[str, 
     return loaded if isinstance(loaded, dict) else {}
 
 
+def upgrade_retired_defaults(runtime_env: Path, environ: dict[str, str], report: Say = say) -> list[str]:
+    """Move values that still equal an old built-in default to the new default.
+
+    Every install writes all defaults into the runtime ``.env``, so without this a
+    changed default (e.g. the 420 px comic card) would never reach existing users.
+    Values the user changed, or set in the environment, are left alone.
+    """
+    current = parse_dotenv(runtime_env)
+    upgraded = []
+    for key, (old, new) in RETIRED_DEFAULTS.items():
+        if key in environ or current.get(key) != old:
+            continue
+        write_env_value(runtime_env, key, new)
+        upgraded.append(key)
+        report(f"✅ Updated default {key}: {old} → {new}")
+    return upgraded
+
+
 def install_environment_config(
     runtime_env: Path,
     source_env: Path,
@@ -97,10 +117,11 @@ def install_environment_config(
     report: Say = say,
 ) -> bool:
     """Create the runtime ``.env`` (mode 0600) unless one exists. Returns whether it wrote."""
+    env = dict(os.environ if environ is None else environ)
     if runtime_env.exists():
+        upgrade_retired_defaults(runtime_env, env, report)
         report(f"✅ Environment config preserved: {runtime_env}")
         return False
-    env = dict(os.environ if environ is None else environ)
     legacy = read_legacy_widget_config(config_dir, report)
     source_values = parse_dotenv(source_env, lambda message: report(f"⚠️  {message}"))
     template_values = parse_dotenv(PROJECT_DIR / ".env.default")
@@ -260,6 +281,12 @@ def copy_data(data_dir: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     for name in DATA_FILES:
         shutil.copyfile(PROJECT_DIR / "assets" / name, data_dir / name)
+    # Bundled comic fonts (SIL OFL; licences ship next to them), loaded by the widget at start.
+    fonts = data_dir / "fonts"
+    fonts.mkdir(parents=True, exist_ok=True)
+    for source in (PROJECT_DIR / "assets" / "fonts").iterdir():
+        if source.is_file():
+            shutil.copyfile(source, fonts / source.name)
     # Seed the local GIF sticker pool (gifs/<status>/*). Never overwrite or delete the
     # user's own GIFs: only files that are not there yet are added.
     source_gifs = PROJECT_DIR / "assets" / "gifs"

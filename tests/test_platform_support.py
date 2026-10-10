@@ -330,6 +330,24 @@ class InstallerTests(unittest.TestCase):
             ["/py", str(Path("/b") / "ai-agent-status-widget"), "--demo"],
         )
 
+    def test_retired_defaults_are_upgraded_but_user_values_kept(self) -> None:
+        runtime = self.root / ".env"
+        runtime.write_text('AI_STATUS_CARD_WIDTH=344\nAI_STATUS_TITLE="AI Agents Status"\nAI_STATUS_MAX_ROWS=7\n')
+        upgraded = self.installer.upgrade_retired_defaults(runtime, {}, report=self.messages.append)
+        self.assertEqual(sorted(upgraded), ["AI_STATUS_CARD_WIDTH", "AI_STATUS_TITLE"])
+        text = runtime.read_text()
+        self.assertIn("AI_STATUS_CARD_WIDTH=420", text)
+        self.assertIn('AI_STATUS_TITLE="AI Agents Status!"', text)
+        self.assertIn("AI_STATUS_MAX_ROWS=7", text)
+
+        runtime.write_text("AI_STATUS_CARD_WIDTH=500\nAI_STATUS_TITLE=Mine\n")
+        self.assertEqual(self.installer.upgrade_retired_defaults(runtime, {}, report=self.messages.append), [])
+        runtime.write_text("AI_STATUS_CARD_WIDTH=344\n")
+        self.assertEqual(
+            self.installer.upgrade_retired_defaults(runtime, {"AI_STATUS_CARD_WIDTH": "344"},
+                                                    report=self.messages.append), [])
+        self.assertEqual(runtime.read_text(), "AI_STATUS_CARD_WIDTH=344\n")
+
     def test_launch_agent_plist_escapes_arguments(self) -> None:
         plist = self.installer.launch_agent_plist(["/usr/bin/python3", "/Users/a&b/widget"], Path("/tmp/w.log"))
         self.assertIn("<string>/Users/a&amp;b/widget</string>", plist)

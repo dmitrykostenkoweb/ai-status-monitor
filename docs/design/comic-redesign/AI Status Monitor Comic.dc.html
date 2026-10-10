@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#2B2D42;}
+a{color:#111;text-decoration:underline;}
+a:hover{color:#E63946;}
+@keyframes pop{0%{transform:scale(.6) rotate(var(--r));opacity:0}70%{transform:scale(1.08) rotate(var(--r))}100%{transform:scale(1) rotate(var(--r));opacity:1}}
+</style>
+</helmet>
+<div style="min-height:100vh;display:flex;justify-content:center;padding:48px 20px 80px;box-sizing:border-box;background-color:#3A86A8;background-image:radial-gradient(rgba(17,17,17,.28) 1.4px, transparent 1.6px);background-size:10px 10px;font-family:'Comic Neue',sans-serif;color:#111;">
+  <div style="width:100%;max-width:420px;display:flex;flex-direction:column;gap:22px;">
+
+    <!-- MAIN CARD -->
+    <div style="background:#FFF8E1;border:3px solid #111;border-radius:6px;box-shadow:7px 7px 0 #111;overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#FFD23F;border-bottom:3px solid #111;background-image:radial-gradient(rgba(230,57,70,.35) 1.3px, transparent 1.5px);background-size:7px 7px;">
+        <div style="width:30px;height:30px;flex:none;border:2.5px solid #111;border-radius:50%;background:#fff;position:relative;overflow:hidden;">
+          <div style="position:absolute;inset:6px;border:2px solid #111;border-radius:50%;"></div>
+          <div style="position:absolute;left:50%;top:50%;width:13px;height:2.5px;background:#E63946;transform-origin:0 50%;transform:rotate(-40deg);"></div>
+          <div style="position:absolute;left:calc(50% - 3px);top:calc(50% - 3px);width:6px;height:6px;border-radius:50%;background:#111;"></div>
+        </div>
+        <div style="font-family:Bangers,cursive;font-size:26px;letter-spacing:1.2px;line-height:1;flex:1;color:#fff;-webkit-text-stroke:1.5px #111;text-shadow:2px 2px 0 #111;white-space:nowrap;">AI Agents Status!</div>
+        <div style="font-family:Bangers,cursive;font-size:16px;letter-spacing:1px;padding:3px 9px 1px;border:2.5px solid #111;border-radius:4px;background:{{ badge.bg }};color:{{ badge.fg }};transform:rotate(-4deg);box-shadow:2px 2px 0 #111;white-space:nowrap;">{{ badge.label }}</div>
+        <div style="display:flex;gap:6px;">
+          <button style="width:28px;height:28px;border:2.5px solid #111;border-radius:4px;background:#fff;box-shadow:2px 2px 0 #111;font-size:15px;line-height:1;cursor:pointer;padding:0;" style-active="transform:translate(2px,2px);box-shadow:0 0 0 #111;" title="Settings">⚙</button>
+          <button style="width:28px;height:28px;border:2.5px solid #111;border-radius:4px;background:#E63946;color:#fff;box-shadow:2px 2px 0 #111;font-family:Bangers,cursive;font-size:18px;line-height:1;cursor:pointer;padding:0;" style-active="transform:translate(2px,2px);box-shadow:0 0 0 #111;" title="Close">X</button>
+        </div>
+      </div>
+
+      <div style="padding:12px 14px 14px;display:flex;flex-direction:column;gap:12px;">
+        <sc-for list="{{ providers }}" as="p" hint-placeholder-count="2">
+          <div style="display:grid;grid-template-columns:44px minmax(0,1fr);gap:12px;align-items:start;padding:10px 12px;background:#fff;border:2.5px solid #111;border-radius:4px;">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:4px;padding-top:2px;">
+              <div style="width:38px;height:38px;border:2.5px solid #111;border-radius:50%;background:{{ p.color }};display:flex;align-items:center;justify-content:center;font-family:Bangers,cursive;font-size:20px;box-shadow:2px 2px 0 #111;">{{ p.initial }}</div>
+              <div style="font-family:'Space Mono',monospace;font-size:8px;text-transform:uppercase;letter-spacing:.5px;">{{ p.name }}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <sc-for list="{{ p.bars }}" as="b" hint-placeholder-count="2">
+                <div style="display:flex;flex-direction:column;gap:3px;">
+                  <div style="display:flex;justify-content:space-between;align-items:baseline;">
+                    <span style="font-family:Bangers,cursive;font-size:16px;letter-spacing:.8px;">{{ b.label }}</span>
+                    <span style="font-family:Bangers,cursive;font-size:17px;letter-spacing:.5px;color:{{ b.ink }};">{{ b.pctText }}</span>
+                  </div>
+                  <div style="height:12px;border:2px solid #111;border-radius:3px;background:#F1EAD2;overflow:hidden;">
+                    <div style="height:100%;width:{{ b.width }};background-color:{{ b.color }};background-image:radial-gradient(rgba(17,17,17,.3) 1px, transparent 1.2px);background-size:5px 5px;border-right:{{ b.edge }};"></div>
+                  </div>
+                  <div style="font-family:'Space Mono',monospace;font-size:10px;text-align:right;color:#555;">resets {{ b.reset }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- SESSION CARDS -->
+    <sc-for list="{{ sessions }}" as="s" hint-placeholder-count="3">
+      <div style="position:relative;margin-top:{{ s.gap }};">
+        <sc-if value="{{ showStickers }}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;right:-14px;bottom:calc(100% - 22px);display:flex;align-items:flex-end;gap:10px;z-index:2;pointer-events:none;">
+            <div style="position:relative;margin-bottom:34px;max-width:170px;padding:8px 12px 7px;background:{{ s.bubble }};border:3px solid #111;border-radius:18px;box-shadow:3px 3px 0 #111;font-family:Bangers,cursive;font-size:18px;letter-spacing:.8px;line-height:1.05;transform:rotate(-5deg);">
+              {{ s.quip }}
+              <div style="position:absolute;right:-13px;bottom:10px;width:16px;height:16px;background:{{ s.bubble }};border-right:3px solid #111;border-bottom:3px solid #111;transform:rotate(-45deg) skew(12deg,12deg);"></div>
+            </div>
+            <div style="--r:{{ s.tilt }};animation:pop .5s cubic-bezier(.3,1.6,.5,1) both;transform:rotate({{ s.tilt }});background:#fff;border:3px solid #111;padding:7px 7px 22px;box-shadow:5px 5px 0 #111;">
+              <div style="width:124px;height:96px;border:2px solid #111;background:repeating-linear-gradient(45deg,#EEE7D0 0 6px,#E2D9BC 6px 12px);display:flex;align-items:center;justify-content:center;text-align:center;font-family:'Space Mono',monospace;font-size:9px;line-height:1.3;color:#444;">{{ s.gif }}</div>
+              <div style="position:absolute;left:0;right:0;bottom:4px;text-align:center;font-family:Bangers,cursive;font-size:13px;letter-spacing:1px;">{{ s.sfx }}</div>
+            </div>
+          </div>
+        </sc-if>
+        <div style="position:relative;display:flex;align-items:center;gap:11px;padding:11px 14px 11px 11px;background:#FFF8E1;border:3px solid #111;border-radius:6px;box-shadow:6px 6px 0 #111;cursor:grab;">
+          <button style="width:34px;height:34px;flex:none;border:2.5px solid #111;border-radius:4px;background:#FFD23F;box-shadow:2px 2px 0 #111;font-family:Bangers,cursive;font-size:20px;line-height:1;cursor:pointer;padding:0;" style-hover="background:#fff;" style-active="transform:translate(2px,2px);box-shadow:0 0 0 #111;" title="Jump to terminal">➜</button>
+          <div style="width:30px;height:30px;flex:none;border:2.5px solid #111;border-radius:50%;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-family:Bangers,cursive;font-size:17px;">{{ s.initial }}</div>
+          <div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:3px;">
+            <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+              <span style="font-family:Bangers,cursive;font-size:24px;letter-spacing:1.2px;line-height:1;color:{{ s.color }};-webkit-text-stroke:1.3px #111;text-shadow:2px 2px 0 #111;">{{ s.agent }}</span>
+              <span style="font-weight:700;font-size:14px;padding:1px 7px;border:2px solid #111;border-radius:3px;background:{{ s.statusBg }};color:{{ s.statusFg }};">{{ s.status }}</span>
+            </div>
+            <div style="font-family:'Space Mono',monospace;font-size:11px;color:#333;">{{ s.project }} · {{ s.time }}</div>
+          </div>
+        </div>
+      </div>
+    </sc-for>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;badgeState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;live&quot;,&quot;alert&quot;,&quot;idle&quot;],&quot;default&quot;:&quot;alert&quot;,&quot;tsType&quot;:&quot;'live'|'alert'|'idle'&quot;},&quot;showStickers&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const tone = (pct) => pct >= 90 ? ['#F43F5E', '#C1121F'] : pct >= 75 ? ['#FB923C', '#C2410C'] : ['#4ADE80', '#15803D'];
+    const bar = (label, pct, reset) => {
+      const [color, ink] = tone(pct);
+      return { label, pctText: pct + '%', width: Math.max(pct, 0) + '%', color, ink, reset, edge: pct > 0 && pct < 100 ? '2px solid #111' : 'none' };
+    };
+    const providers = [
+      { name: 'Anthropic', initial: 'A', color: '#FF9B7A', bars: [bar('5h', 2, '22:30'), bar('Weekly', 4, 'czw 07:00'), bar('Fable', 0, 'czw 07:00')] },
+      { name: 'OpenAI', initial: 'O', color: '#7DD3FC', bars: [bar('5h', 78, '19:40'), bar('Weekly', 57, 'sob 10:29')] },
+    ];
+    const st = {
+      analyzing: { bg: '#FFD23F', fg: '#111', bubble: '#FFD23F', quip: 'plotting a cunning plan…', gif: 'reaction gif\n"analyzing" brain', sfx: 'HMMM…' },
+      coding: { bg: '#4ADE80', fg: '#111', bubble: '#A7F3D0', quip: 'tap tap tap — KA-CHUNK!', gif: 'reaction gif\n"coding" typing', sfx: 'CLACK!' },
+      waiting: { bg: '#E63946', fg: '#fff', bubble: '#FFB4BC', quip: 'psst! need your OK!', gif: 'reaction gif\n"waiting" tapping foot', sfx: 'AHEM!' },
+    };
+    const mk = (agent, key, status, project, time, i) => {
+      const c = agent === 'Claude';
+      return { agent, status, project, time, initial: c ? 'C' : 'X', color: c ? '#FF9B7A' : '#7DD3FC', statusBg: st[key].bg, statusFg: st[key].fg, bubble: st[key].bubble, quip: st[key].quip, gif: st[key].gif, sfx: st[key].sfx, tilt: i % 2 ? '-5deg' : '5deg', gap: (this.props.showStickers ?? true) ? '118px' : '0px' };
+    };
+    const sessions = [
+      mk('Claude', 'analyzing', 'analyzing…', 'unitbox-front', '18:02', 0),
+      mk('Codex', 'coding', 'coding…', 'api-gateway', '17:48', 1),
+      mk('Claude', 'waiting', 'waiting for approval', 'infra-terraform', '17:31', 2),
+    ];
+    const badges = {
+      live: { label: '● LIVE', bg: '#4ADE80', fg: '#111' },
+      alert: { label: '▲ 1 ALERT!', bg: '#E63946', fg: '#fff' },
+      idle: { label: '● IDLE', bg: '#D6D3C4', fg: '#111' },
+    };
+    return { providers, sessions, badge: badges[this.props.badgeState ?? 'alert'], showStickers: this.props.showStickers ?? true };
+  }
+}
+</script>
+</body>
+</html>

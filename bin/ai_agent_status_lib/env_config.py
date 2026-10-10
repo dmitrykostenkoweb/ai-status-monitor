@@ -16,8 +16,8 @@ DEFAULT_VALUES = {
     "AI_STATUS_CACHE_DIR": "$HOME/.cache/ai-cli-status-monitor",
     "AI_STATUS_CONFIG_DIR": "$HOME/.config/ai-cli-status-monitor",
     "AI_STATUS_DATA_DIR": "$HOME/.local/share/ai-cli-status-monitor",
-    "AI_STATUS_TITLE": "AI Agents Status",
-    "AI_STATUS_CARD_WIDTH": "344",
+    "AI_STATUS_TITLE": "AI Agents Status!",
+    "AI_STATUS_CARD_WIDTH": "420",
     "AI_STATUS_MAX_ROWS": "5",
     "AI_STATUS_SOUND_ENABLED": "true",
     "AI_STATUS_STALE_AFTER_SECONDS": "180",
@@ -38,6 +38,16 @@ OPTIONAL_KEYS = frozenset({"AI_STATUS_KLIPY_API_KEY"})
 SUPPORTED_AGENTS = ("claude", "codex")
 
 KNOWN_KEYS = frozenset(DEFAULT_VALUES)
+
+THEMES = ("dark", "light")
+
+# Built-in defaults that changed. Installs write every default into the runtime .env,
+# so the installer upgrades a value that still equals the old default (never a
+# user's own choice): key → (old default, new default).
+RETIRED_DEFAULTS = {
+    "AI_STATUS_CARD_WIDTH": ("344", "420"),
+    "AI_STATUS_TITLE": ("AI Agents Status", "AI Agents Status!"),
+}
 
 
 def platform_default_values(platform: str | None = None) -> dict[str, str]:
@@ -341,6 +351,13 @@ def load_settings(
             warn(f"invalid {key} from {source}; using next configuration source")
         raise AssertionError(f"missing valid default for {key}")
 
+    def resolve_theme(key: str) -> str:
+        for source, value in candidates(key, legacy_values):
+            if isinstance(value, str) and value.strip().lower() in THEMES:
+                return value.strip().lower()
+            warn(f"invalid {key} from {source}; using next configuration source")
+        raise AssertionError(f"missing valid default for {key}")
+
     def resolve_agents(key: str) -> tuple[str, ...]:
         for source, value in candidates(key, legacy_values):
             parsed = parse_agents(value)
@@ -362,7 +379,7 @@ def load_settings(
         hide_done_after_seconds=resolve_int("AI_STATUS_HIDE_DONE_AFTER_SECONDS", 0),
         idle_after_seconds=resolve_int("AI_STATUS_IDLE_AFTER_SECONDS", 0),
         hide_stale_after_seconds=resolve_int("AI_STATUS_HIDE_STALE_AFTER_SECONDS", 0),
-        theme=resolve_string("AI_STATUS_THEME"),
+        theme=resolve_theme("AI_STATUS_THEME"),
         agents=resolve_agents("AI_STATUS_AGENTS"),
         serious_mode=resolve_bool("AI_STATUS_SERIOUS_MODE"),
         session_windows=resolve_bool("AI_STATUS_SESSION_WINDOWS"),

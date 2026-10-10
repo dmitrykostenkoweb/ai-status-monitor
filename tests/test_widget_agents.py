@@ -109,6 +109,15 @@ class WidgetAgentFilterTests(unittest.TestCase):
             widget.set_agents(("claude", "codex"))
             assert window.agent_checks["claude"].isChecked() is True
 
+            # Theme switches live: light (from the .env) → dark → light, saved each time.
+            assert window.light_switch.isChecked() is True
+            window.light_switch.setChecked(False)
+            assert module["T"]().name == "dark"
+            assert "#24263A" in module["QApplication"].instance().styleSheet()
+            assert "AI_STATUS_THEME=dark" in env_file.read_text().splitlines()
+            window.light_switch.setChecked(True)
+            assert module["T"]().name == "light"
+
             widget.update_setting("AI_STATUS_IDLE_AFTER_SECONDS", "90")
             assert widget.config["idle_after_seconds"] == 90
 

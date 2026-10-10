@@ -19,22 +19,21 @@ Codex: running command [ai-cli-status-monitor] 14:23
 
 ## 2. Appearance
 
-The widget looks like a small dark floating card / mini-player:
+The widget has a **comic-book** look: thick ink outlines, hard offset shadows, halftone dots and Bangers / Comic Neue / Space Mono type (bundled, SIL Open Font License). **Dark** is the default; a **light** theme is one switch away in Settings (`Light theme`, or `AI_STATUS_THEME=light`).
 
-- dark background with a subtle border and rounded corners
-- header: radar icon, `AI Agents Status`, a state badge (`● LIVE` / `▲ N ALERT` / `● IDLE`) and a `×` button
-- **session windows** (default) — every active session (run) gets its own small draggable window with its own GIF sticker; new windows dock in a column under the widget and follow it, a dragged window stays where you drop it (remembered per session, right-click → `Dock under the widget` to bring it back). Turn off in Settings (`Session windows`) for the classic list below
-- classic list: one row per active session (up to 5), each with: a glowing dot in the state color, an agent logo tile, the agent name, the status (monospace), and a `project · time` line
-- colors depend on the state (thinking, reading code, coding, running a command, analyzing output, waiting for approval, finished)
-- active states get an animated `...`; `done` sessions are dimmed, and any overflow is collapsed behind a `+N finished, hidden automatically` footer
-- each row has a clickable `→` on the right that activates the terminal window of that session; a `waiting for approval` row is additionally highlighted in red with a pulsing border
-- with session windows (default) the widget itself is just the header + usage limits: on startup and when nothing is running you see only the limits, and each agent run appears as its own window with a GIF
-- classic list only: when nothing is running an empty/idle state shows the "AI Status Monitor" lockup (radar logo + wordmark) with a rotating radar sweep and `no active agents`, and on startup the same lockup is shown for ~3 seconds as an intro splash
-- when a newer version is published on GitHub, a small `update ↑` pill appears in the header (see [Updates](#7b-updates))
-- a compact usage section groups Claude Code 5-hour/weekly and Codex weekly utilization beside centered, clickable provider logos
-- **Settings window** — click the `⚙` in the header (or right-click → `Settings…`): shown agents, notification sound, visible rows and timing; changes apply instantly and are saved to the runtime `.env`
-- **GIF stickers** — when an agent changes status, a tilted sticker with a GIF and a speech bubble pops out of the top-right corner for a few seconds (see [GIF stickers](#7d-gif-stickers))
-- right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Serious mode (no stickers)`, `Dock all session windows`, `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
+- **Main card**: a halftone header with a slowly sweeping radar mark, `AI Agents Status!`, a tilted state badge (`● LIVE` / `▲ N ALERT!` / `● IDLE`), a `⚙` settings button and a red `X`. Below it are the usage limits: one inked block per provider (Anthropic, OpenAI) with its logo on a coloured disc and halftone quota bars. Bars are green below 75 %, orange from 75 % and red from 90 %. Click a provider disc to refresh its usage.
+- **Session windows** (default): every active session (run) gets its own draggable card, docked in a column under the widget. A card shows:
+  - a yellow `➜` button that jumps to that terminal;
+  - the agent's logo disc and its stroked name;
+  - a status chip: yellow while analyzing/reading, green while coding, red when it waits for you or hit an error;
+  - the `project · time` line.
+
+  A card waiting for you pulses its outline red. A dragged card stays where you drop it (remembered per session; right-click → `Dock under the widget` brings it back). Turn session windows off in Settings for the classic list below.
+- **Classic list**: the same rows inside the main card (up to 5), with a `+N finished, hidden automatically` footer. When nothing runs, and for ~3 s at startup, the "AI Status Monitor!" lockup shows instead.
+- **GIF stickers**: a tilted polaroid with a reaction GIF, a sound-effect caption (`HMMM…`, `CLACK!`, `AHEM!`) and a speech bubble pops out of each card's top-right corner (see [GIF stickers](#7d-gif-stickers)).
+- When a newer version is published on GitHub, a yellow `UPDATE ↑` button appears in the header (see [Updates](#7b-updates)).
+- **Settings window** (`⚙`, or right-click → `Settings…`): shown agents, notification sound, visible rows, session windows, light theme, stickers and timing. Changes apply instantly and are saved to the runtime `.env`.
+- Right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Serious mode (no stickers)`, `Dock all session windows`, `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`.
 
 By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
 
@@ -157,10 +156,10 @@ Most of these can also be changed from the widget's **Settings** window (`⚙` i
 Available variables:
 
 - `AI_STATUS_CACHE_DIR`, `AI_STATUS_CONFIG_DIR`, `AI_STATUS_DATA_DIR` — data directories
-- `AI_STATUS_TITLE`, `AI_STATUS_CARD_WIDTH`, `AI_STATUS_MAX_ROWS` — widget appearance
+- `AI_STATUS_TITLE` (default `AI Agents Status!`), `AI_STATUS_CARD_WIDTH` (default `420`), `AI_STATUS_MAX_ROWS` — widget appearance. Re-installing upgrades the previous defaults (`344`, `AI Agents Status`) to the new ones; values you changed are kept.
 - `AI_STATUS_SOUND_ENABLED` — `true`/`false`, `yes`/`no`, `on`/`off` or `1`/`0`
 - `AI_STATUS_STALE_AFTER_SECONDS`, `AI_STATUS_HIDE_DONE_AFTER_SECONDS`, `AI_STATUS_IDLE_AFTER_SECONDS`, `AI_STATUS_HIDE_STALE_AFTER_SECONDS` — timeouts
-- `AI_STATUS_THEME` — theme name
+- `AI_STATUS_THEME` — `dark` (default) or `light` comic theme
 - `AI_STATUS_AGENTS` — which agents the widget shows: `claude,codex` (default, also `all`), `claude` or `codex`. Hidden agents get no rows, no usage bars, no sounds and no usage requests. The right-click `Show agents` menu changes it live and saves the choice to the runtime `.env` (a value exported in the process still wins on the next start)
 - `AI_STATUS_SESSION_WINDOWS` — `true` (default): each session in its own draggable window; `false`: the classic list inside the widget
 - `AI_STATUS_STICKER_ROTATE_SECONDS` — how often a working session window swaps to a new GIF (default `120`, `0` = never)
