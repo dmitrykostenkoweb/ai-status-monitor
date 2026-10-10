@@ -118,6 +118,15 @@ class WidgetAgentFilterTests(unittest.TestCase):
             window.light_switch.setChecked(True)
             assert module["T"]().name == "light"
 
+            # Usage limits fold away (the header button too) and are not fetched while hidden.
+            assert not widget.usage_panel.isHidden()
+            window.limits_switch.setChecked(False)
+            assert widget.show_limits is False and widget.usage_panel.isHidden()
+            assert widget.limits_button.text() == "▾"
+            assert widget.start_usage_refresh() is False
+            widget.limits_button.click()
+            assert widget.show_limits is True and window.limits_switch.isChecked() is True
+
             widget.update_setting("AI_STATUS_IDLE_AFTER_SECONDS", "90")
             assert widget.config["idle_after_seconds"] == 90
 

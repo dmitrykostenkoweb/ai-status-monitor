@@ -57,9 +57,19 @@ class ThemeSettingTests(unittest.TestCase):
         self.assertEqual(fallback.theme, "dark")
         self.assertTrue(any("AI_STATUS_THEME" in message for message in warnings))
 
+    def test_new_switches_default_on_and_parse(self) -> None:
+        settings = load_settings(environ={"HOME": "/h"}, dotenv_values={}, legacy={})
+        self.assertTrue(settings.show_limits)
+        self.assertTrue(settings.autostart)
+        off = load_settings(environ={"HOME": "/h"}, legacy={},
+                            dotenv_values={"AI_STATUS_SHOW_LIMITS": "no", "AI_STATUS_AUTOSTART": "false"})
+        self.assertFalse(off.show_limits)
+        self.assertFalse(off.autostart)
+        self.assertEqual(off.as_env()["AI_STATUS_AUTOSTART"], "false")
+
     def test_comic_defaults(self) -> None:
         settings = load_settings(environ={"HOME": "/h"}, dotenv_values={}, legacy={})
-        self.assertEqual(settings.card_width, 420)
+        self.assertEqual(settings.card_width, 294)
         self.assertEqual(settings.title, "AI Agents Status!")
 
 

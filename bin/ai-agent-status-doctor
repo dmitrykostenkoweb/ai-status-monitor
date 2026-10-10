@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from ai_agent_status_lib import autostart  # noqa: E402
 from ai_agent_status_lib import platform_support  # noqa: E402
 from ai_agent_status_lib import process_control  # noqa: E402
 from ai_agent_status_lib import updates  # noqa: E402
@@ -100,20 +101,11 @@ def test_mode_writes_status() -> bool:
 
 
 def autostart_installed() -> tuple[bool, str]:
-    if PLATFORM == platform_support.WINDOWS:
-        try:
-            import winreg
-
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
-                winreg.QueryValueEx(key, "ai-cli-status-monitor")
-            return True, "Autostart installed (HKCU Run key)"
-        except OSError:
-            return False, "Autostart Run key missing"
-    if PLATFORM == platform_support.MACOS:
-        plist = HOME / "Library" / "LaunchAgents" / "com.github.ai-cli-status-monitor.widget.plist"
-        return plist.exists(), "Autostart installed (LaunchAgent)" if plist.exists() else "Autostart LaunchAgent missing"
-    desktop = HOME / ".config" / "autostart" / "ai-cli-status-widget.desktop"
-    return desktop.exists(), "Autostart installed" if desktop.exists() else "Autostart desktop file missing"
+    if not SETTINGS.autostart:
+        return True, "Start at login is off (Settings → Start at login)"
+    if autostart.is_enabled(HOME):
+        return True, "Start at login enabled"
+    return False, "Start at login entry missing: re-run the installer or toggle it in Settings"
 
 
 def status_age(path: Path) -> timedelta | None:

@@ -19,9 +19,9 @@ Codex: running command [ai-cli-status-monitor] 14:23
 
 ## 2. Appearance
 
-The widget has a **comic-book** look: thick ink outlines, hard offset shadows, halftone dots and Bangers / Comic Neue / Space Mono type (bundled, SIL Open Font License). **Dark** is the default; a **light** theme is one switch away in Settings (`Light theme`, or `AI_STATUS_THEME=light`).
+The widget has a **comic-book** look: thick ink outlines, hard offset shadows, halftone dots and Bangers / Comic Neue / Space Mono type (bundled, SIL Open Font License). **Dark** is the default; a **light** theme is one switch away in Settings (`Light theme`, or `AI_STATUS_THEME=light`). The cards are drawn at 70 % of the design's size (294 px wide by default), while the GIF stickers keep their full size.
 
-- **Main card**: a halftone header with a slowly sweeping radar mark, `AI Agents Status!`, a tilted state badge (`● LIVE` / `▲ N ALERT!` / `● IDLE`), a `⚙` settings button and a red `X`. Below it are the usage limits: one inked block per provider (Anthropic, OpenAI) with its logo on a coloured disc and halftone quota bars. Bars are green below 75 %, orange from 75 % and red from 90 %. Click a provider disc to refresh its usage.
+- **Main card**: a halftone header with a slowly sweeping radar mark, `AI Agents Status!`, a tilted state badge (`● LIVE` / `▲ N ALERT!` / `● IDLE`), a `▴`/`▾` button that folds the usage limits away (the agents' cards and their GIFs stay), a `⚙` settings button and a red `X`. Below it are the usage limits: one inked block per provider (Anthropic, OpenAI) with its logo on a coloured disc and halftone quota bars. Bars are green below 75 %, orange from 75 % and red from 90 %. Click a provider disc to refresh its usage.
 - **Session windows** (default): every active session (run) gets its own draggable card, docked in a column under the widget. A card shows:
   - a yellow `➜` button that jumps to that terminal;
   - the agent's logo disc and its stroked name;
@@ -32,7 +32,7 @@ The widget has a **comic-book** look: thick ink outlines, hard offset shadows, h
 - **Classic list**: the same rows inside the main card (up to 5), with a `+N finished, hidden automatically` footer. When nothing runs, and for ~3 s at startup, the "AI Status Monitor!" lockup shows instead.
 - **GIF stickers**: a tilted polaroid with a reaction GIF, a sound-effect caption (`HMMM…`, `CLACK!`, `AHEM!`) and a speech bubble pops out of each card's top-right corner (see [GIF stickers](#7d-gif-stickers)).
 - When a newer version is published on GitHub, a yellow `UPDATE ↑` button appears in the header (see [Updates](#7b-updates)).
-- **Settings window** (`⚙`, or right-click → `Settings…`): shown agents, notification sound, visible rows, session windows, light theme, stickers and timing. Changes apply instantly and are saved to the runtime `.env`.
+- **Settings window** (`⚙`, or right-click → `Settings…`): shown agents, notification sound, visible rows, session windows, light theme, usage limits on/off, **Start at login** (adds or removes the login entry; the installer respects your choice), stickers and timing. Changes apply instantly and are saved to the runtime `.env`.
 - Right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Serious mode (no stickers)`, `Dock all session windows`, `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`.
 
 By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
@@ -156,10 +156,12 @@ Most of these can also be changed from the widget's **Settings** window (`⚙` i
 Available variables:
 
 - `AI_STATUS_CACHE_DIR`, `AI_STATUS_CONFIG_DIR`, `AI_STATUS_DATA_DIR` — data directories
-- `AI_STATUS_TITLE` (default `AI Agents Status!`), `AI_STATUS_CARD_WIDTH` (default `420`), `AI_STATUS_MAX_ROWS` — widget appearance. Re-installing upgrades the previous defaults (`344`, `AI Agents Status`) to the new ones; values you changed are kept.
+- `AI_STATUS_TITLE` (default `AI Agents Status!`), `AI_STATUS_CARD_WIDTH` (default `294`), `AI_STATUS_MAX_ROWS` — widget appearance. Re-installing upgrades the previous defaults (`344` / `420`, `AI Agents Status`) to the new ones; values you changed are kept.
 - `AI_STATUS_SOUND_ENABLED` — `true`/`false`, `yes`/`no`, `on`/`off` or `1`/`0`
 - `AI_STATUS_STALE_AFTER_SECONDS`, `AI_STATUS_HIDE_DONE_AFTER_SECONDS`, `AI_STATUS_IDLE_AFTER_SECONDS`, `AI_STATUS_HIDE_STALE_AFTER_SECONDS` — timeouts
 - `AI_STATUS_THEME` — `dark` (default) or `light` comic theme
+- `AI_STATUS_SHOW_LIMITS` — `true` (default) shows the usage-limit bars; `false` folds them away and skips usage requests
+- `AI_STATUS_AUTOSTART` — `true` (default) starts the widget at login; `false` removes the login entry, and re-installing keeps it off
 - `AI_STATUS_AGENTS` — which agents the widget shows: `claude,codex` (default, also `all`), `claude` or `codex`. Hidden agents get no rows, no usage bars, no sounds and no usage requests. The right-click `Show agents` menu changes it live and saves the choice to the runtime `.env` (a value exported in the process still wins on the next start)
 - `AI_STATUS_SESSION_WINDOWS` — `true` (default): each session in its own draggable window; `false`: the classic list inside the widget
 - `AI_STATUS_STICKER_ROTATE_SECONDS` — how often a working session window swaps to a new GIF (default `120`, `0` = never)

@@ -21,6 +21,7 @@ from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from ai_agent_status_lib import autostart  # noqa: E402
 from ai_agent_status_lib import platform_support  # noqa: E402
 from ai_agent_status_lib import process_control  # noqa: E402
 from ai_agent_status_lib import screen_geometry  # noqa: E402
@@ -503,6 +504,26 @@ def resolve_color(value: str) -> str:
     return str(getattr(T(), value))
 
 
+# The widget's cards are drawn at 70 % of the design handoff's sizes (dialogs stay at 100 %,
+# GIF stickers keep their full size). Small text never drops below a readable floor.
+UI_SCALE = 0.7
+MIN_TEXT_PX = 8.0
+
+
+def sc(value: float) -> float:
+    """A handoff size in px, scaled for the widget's cards."""
+    return value * UI_SCALE
+
+
+def sci(value: float) -> int:
+    return max(1, round(value * UI_SCALE))
+
+
+def sct(pixels: float) -> float:
+    """A scaled text size, but never below MIN_TEXT_PX."""
+    return max(MIN_TEXT_PX, pixels * UI_SCALE)
+
+
 def comic_label(text: str, font: QFont, role: str = "text", wrap: bool = False) -> QLabel:
     """A label whose colour follows the theme through the style sheet (objectName = role)."""
     label = QLabel(text)
@@ -618,11 +639,11 @@ class ComicFrame(QFrame):
 class HalftoneHeader(QFrame):
     """Header strip: the theme's header colour with halftone dots and a 3 px ink rule."""
 
-    RULE = 3
-
-    def __init__(self, corner: float = 3) -> None:
+    def __init__(self, corner: float = 3, scale: float = 1.0) -> None:
         super().__init__()
         self.corner = corner
+        self.scale = scale
+        self.rule = max(1, round(3 * scale))
 
     def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
         t = T()
@@ -633,8 +654,8 @@ class HalftoneHeader(QFrame):
         painter.setClipPath(path)
         painter.fillRect(rect, QColor(t.header))
         r, g, b, a = t.header_dots
-        draw_halftone(painter, rect, QColor(r, g, b, round(a * 255)), 1.6, 7)
-        painter.fillRect(QRectF(rect.left(), rect.bottom() - self.RULE + 1, rect.width(), self.RULE), QColor(t.ink))
+        draw_halftone(painter, rect, QColor(r, g, b, round(a * 255)), 1.6 * self.scale, 7 * self.scale)
+        painter.fillRect(QRectF(rect.left(), rect.bottom() - self.rule + 1, rect.width(), self.rule), QColor(t.ink))
 
 
 class ComicText(QWidget):
@@ -675,8 +696,8 @@ class ComicText(QWidget):
         text = self.text
         room = self.width() - self.stroke - self.shadow
         if self.elide:
-            # Shrink (down to 70 %) before eliding, so a busy header keeps the whole title.
-            minimum = round(self.font_.pixelSize() * 0.7)
+            # Shrink (down to 60 %) before eliding, so a busy header keeps the whole title.
+            minimum = round(self.font_.pixelSize() * 0.6)
             while metrics.horizontalAdvance(text) > room and font.pixelSize() > minimum:
                 font.setPixelSize(font.pixelSize() - 1)
                 metrics = QFontMetricsF(font)
@@ -709,12 +730,13 @@ class ComicBadge(QWidget):
 
     TILT = -4.0
 
-    def __init__(self) -> None:
+    def __init__(self, scale: float = 1.0) -> None:
         super().__init__()
         self.text = "● IDLE"
         self.bg = "#8E8BA6"
         self.fg = theme.INK_ON_COLOUR
-        self.font_ = display_font(16, 1.0)
+        self.k = scale
+        self.font_ = display_font(16 * scale, 1.0 * scale)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
@@ -727,38 +749,40 @@ class ComicBadge(QWidget):
 
     def box_size(self) -> tuple[float, float]:
         metrics = QFontMetricsF(self.font_)
-        return metrics.horizontalAdvance(self.text) + 18 + 5, metrics.height() + 4 + 5
+        k = self.k
+        return metrics.horizontalAdvance(self.text) + 23 * k, metrics.height() + 9 * k
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
         width, height = self.box_size()
-        return QSize(math.ceil(width + 6), math.ceil(height + 8))
+        return QSize(math.ceil(width + 6 * self.k), math.ceil(height + 8 * self.k))
 
     def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
         width, height = self.box_size()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.translate(self.width() / 2 - 1, self.height() / 2 - 1)
+        k = self.k
+        painter.translate(self.width() / 2 - k, self.height() / 2 - k)
         painter.rotate(self.TILT)
         box = QRectF(-width / 2, -height / 2, width, height)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(T().shadow))
-        painter.drawRoundedRect(box.translated(2, 2), 4, 4)
-        painter.setPen(ink_pen(T().ink, 2.5))
+        painter.drawRoundedRect(box.translated(2 * k, 2 * k), 4 * k, 4 * k)
+        painter.setPen(ink_pen(T().ink, 2.5 * k))
         painter.setBrush(QColor(self.bg))
-        painter.drawRoundedRect(box.adjusted(1.25, 1.25, -1.25, -1.25), 3, 3)
+        painter.drawRoundedRect(box.adjusted(1.25 * k, 1.25 * k, -1.25 * k, -1.25 * k), 3 * k, 3 * k)
         painter.setPen(QColor(self.fg))
         mark, _space, label = self.text.partition(" ")
         if mark in ("●", "▲") and label:
             # Bangers has no ● / ▲: draw the mark small and centred like the browser fallback.
             metrics = QFontMetricsF(self.font_)
-            mark_font = body_font(10)
-            mark_w = QFontMetricsF(mark_font).horizontalAdvance(mark) + 5
+            mark_font = body_font(10 * self.k)
+            mark_w = QFontMetricsF(mark_font).horizontalAdvance(mark) + 5 * self.k
             start = -(mark_w + metrics.horizontalAdvance(label)) / 2
             painter.setFont(mark_font)
             painter.drawText(QRectF(start, box.top(), mark_w, box.height()),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, mark)
             painter.setFont(self.font_)
-            painter.drawText(QRectF(start + mark_w, box.top() + 2, box.width(), box.height()),
+            painter.drawText(QRectF(start + mark_w, box.top() + 2 * self.k, box.width(), box.height()),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label)
             return
         painter.setFont(self.font_)
@@ -770,7 +794,7 @@ class ComicButton(QAbstractButton):
 
     def __init__(self, text: str, *, size: int | None = None, bg: str = "inner", fg: str = "text",
                  hover_bg: str | None = None, font: QFont | None = None, padding: tuple[int, int] = (4, 12),
-                 radius: float = 4, border: float = 2.5, shadow: int = 2) -> None:
+                 radius: float = 4, border: float = 2.5, shadow: int = 2, scale: float = 1.0) -> None:
         super().__init__()
         self.setText(text)
         self.square = size
@@ -778,10 +802,10 @@ class ComicButton(QAbstractButton):
         self.fg = fg
         self.hover_bg = hover_bg
         self.font_ = font or body_font(13)
-        self.padding = padding
-        self.radius = radius
-        self.border = border
-        self.shadow = shadow
+        self.padding = (padding[0] * scale, padding[1] * scale)
+        self.radius = radius * scale
+        self.border = border * scale
+        self.shadow = max(1, round(shadow * scale))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -877,8 +901,9 @@ class AgentCircle(QAbstractButton):
     """
 
     def __init__(self, diameter: int, color: str, logo: QPixmap | None, initial: str = "",
-                 shadow: int = 0, interactive: bool = False) -> None:
+                 shadow: int = 0, interactive: bool = False, border: float = 2.5) -> None:
         super().__init__()
+        self.border = border
         self.diameter = diameter
         self.color = color
         self.logo = tinted(logo, theme.INK_ON_COLOUR) if logo is not None else None
@@ -907,9 +932,9 @@ class AgentCircle(QAbstractButton):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(T().shadow))
             painter.drawEllipse(center + QPointF(self.shadow, self.shadow), radius, radius)
-        painter.setPen(ink_pen(T().ink, 2.5))
+        painter.setPen(ink_pen(T().ink, self.border))
         painter.setBrush(QColor(self.color))
-        painter.drawEllipse(center, radius - 1.25, radius - 1.25)
+        painter.drawEllipse(center, radius - self.border / 2, radius - self.border / 2)
         painter.save()
         painter.translate(center)
         painter.rotate(math.degrees(self.angle))
@@ -927,48 +952,53 @@ class AgentCircle(QAbstractButton):
 class ComicBar(QWidget):
     """Quota bar: ink outline, track, halftone fill and an ink edge where the fill ends."""
 
-    def __init__(self, fraction: float, color: str) -> None:
+    def __init__(self, fraction: float, color: str, scale: float = 1.0) -> None:
         super().__init__()
         self.fraction = max(0.0, min(1.0, fraction))
         self.color = color
-        self.setFixedHeight(12)
+        self.k = scale
+        self.setFixedHeight(max(6, round(12 * scale)))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
         t = T()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        outer = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        painter.setPen(ink_pen(t.ink, 2))
+        k = self.k
+        border = max(1.4, 2 * k)
+        outer = QRectF(self.rect()).adjusted(border / 2, border / 2, -border / 2, -border / 2)
+        painter.setPen(ink_pen(t.ink, border))
         painter.setBrush(QColor(t.track))
-        painter.drawRoundedRect(outer, 3, 3)
-        inner = outer.adjusted(1, 1, -1, -1)
+        painter.drawRoundedRect(outer, 3 * k, 3 * k)
+        inner = outer.adjusted(border / 2, border / 2, -border / 2, -border / 2)
         clip = QPainterPath()
-        clip.addRoundedRect(inner, 2, 2)
+        clip.addRoundedRect(inner, 2 * k, 2 * k)
         painter.setClipPath(clip)
         fill = QRectF(inner.left(), inner.top(), inner.width() * self.fraction, inner.height())
         if fill.width() > 0:
             painter.fillRect(fill, QColor(self.color))
-            draw_halftone(painter, fill, QColor(17, 17, 17, 77), 1.0, 5)
+            draw_halftone(painter, fill, QColor(17, 17, 17, 77), max(0.8, 1.0 * k), max(3.5, 5 * k))
             if self.fraction < 1.0:
-                painter.fillRect(QRectF(fill.right(), inner.top(), 2, inner.height()), QColor(t.ink))
+                painter.fillRect(QRectF(fill.right(), inner.top(), border, inner.height()), QColor(t.ink))
 
 
 class Chip(QWidget):
     """Status chip: Comic Neue on a colour fill with a 2 px ink outline; elides when narrow."""
 
-    def __init__(self, text: str, bg: str, fg: str) -> None:
+    def __init__(self, text: str, bg: str, fg: str, scale: float = 1.0) -> None:
         super().__init__()
         self.text = text
         self.bg = bg
         self.fg = fg
-        self.font_ = body_font(14)
+        self.k = scale
+        self.font_ = body_font(max(MIN_TEXT_PX + 1, 14 * scale))
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
         metrics = QFontMetricsF(self.font_)
-        return QSize(math.ceil(metrics.horizontalAdvance(self.text) + 18), math.ceil(metrics.height() + 6))
+        return QSize(math.ceil(metrics.horizontalAdvance(self.text) + 18 * self.k),
+                     math.ceil(metrics.height() + 6 * self.k))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
         return QSize(min(60, self.sizeHint().width()), self.sizeHint().height())
@@ -976,14 +1006,15 @@ class Chip(QWidget):
     def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        box = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        painter.setPen(ink_pen(T().ink, 2))
+        border = max(1.4, 2 * self.k)
+        box = QRectF(self.rect()).adjusted(border / 2, border / 2, -border / 2, -border / 2)
+        painter.setPen(ink_pen(T().ink, border))
         painter.setBrush(QColor(self.bg))
-        painter.drawRoundedRect(box, 3, 3)
+        painter.drawRoundedRect(box, 3 * self.k, 3 * self.k)
         painter.setPen(QColor(self.fg))
         painter.setFont(self.font_)
         metrics = QFontMetricsF(self.font_)
-        text = metrics.elidedText(self.text, Qt.TextElideMode.ElideRight, box.width() - 14)
+        text = metrics.elidedText(self.text, Qt.TextElideMode.ElideRight, box.width() - 14 * self.k)
         painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
 
 
@@ -1133,7 +1164,9 @@ BUBBLE_TILT_DEG = -5.0
 BUBBLE_LIFT = 34      # bubble bottom sits this far above the polaroid's bottom
 BUBBLE_GAP = 10
 STICKER_RIGHT_OVERHANG = 14
-STICKER_BOTTOM_BELOW_CARD_TOP = 22
+# The handoff tucks the polaroid 22 px into the card; the 70 % card would put its status chip
+# under the full-size polaroid, so it only overlaps the card's top edge.
+STICKER_BOTTOM_BELOW_CARD_TOP = 4
 OVERLAY_PAD = 26
 OVERLAY_SLIDE_ROOM = 40
 POP_IN_MS = 500
@@ -1487,12 +1520,12 @@ class StickerOverlay(QWidget):
 
 # Docked session windows stack under the widget: 22 px apart, plus room for the sticker
 # that sticks out above each card (the handoff's 118 px) while stickers are on.
-SESSION_CARD_SPACING = 22
-SESSION_CARD_STICKER_ROOM = 118
+SESSION_CARD_SPACING = sci(22)
+SESSION_CARD_STICKER_ROOM = 136  # the full-size sticker standing on the card's top edge
 SESSION_CARD_TITLE = "AI agent session"
-MAIN_CARD_SHADOW = 7
-SESSION_CARD_SHADOW = 6
-CARD_BORDER = 3
+MAIN_CARD_SHADOW = sci(7)
+SESSION_CARD_SHADOW = sci(6)
+CARD_BORDER = sc(3)
 
 
 def build_card_window(window: QWidget, shadow: int, padding: tuple[int, int, int, int] = (0, 0, 0, 0)
@@ -1502,13 +1535,14 @@ def build_card_window(window: QWidget, shadow: int, padding: tuple[int, int, int
     outer.setContentsMargins(WINDOW_MARGIN, WINDOW_MARGIN, WINDOW_MARGIN, WINDOW_MARGIN)
     outer.setSpacing(0)
     outer.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
-    card = ComicFrame("card", radius=6, border=CARD_BORDER, shadow=shadow)
+    card = ComicFrame("card", radius=sc(6), border=CARD_BORDER, shadow=shadow)
     card.setObjectName("card")
     card.setFixedWidth(CARD_WIDTH + shadow)
     outer.addWidget(card)
     inner = QVBoxLayout(card)
     left, top, right, bottom = padding
-    inner.setContentsMargins(CARD_BORDER + left, CARD_BORDER + top, CARD_BORDER + right, CARD_BORDER + bottom)
+    edge = math.ceil(CARD_BORDER)
+    inner.setContentsMargins(edge + left, edge + top, edge + right, edge + bottom)
     inner.setSpacing(0)
     return card, inner
 
@@ -1536,7 +1570,7 @@ class SessionCard(QWidget):
         prepare_floating_window(self)
         self.card, card_layout = build_card_window(self, SESSION_CARD_SHADOW)
         self.content = QVBoxLayout()
-        self.content.setContentsMargins(11, 11, 14, 11)
+        self.content.setContentsMargins(sci(11), sci(11), sci(14), sci(11))
         card_layout.addLayout(self.content)
 
         self.signature: str | None = None
@@ -1819,7 +1853,7 @@ class DialogWindow(QWidget):
 
         header = HalftoneHeader(corner=0)
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 12, 16, 12 + HalftoneHeader.RULE)
+        header_layout.setContentsMargins(16, 12, 16, 12 + header.rule)
         header_layout.setSpacing(10)
         header_layout.addWidget(RadarLogo(30), 0, Qt.AlignmentFlag.AlignVCenter)
         header_layout.addWidget(ComicText(heading, display_font(26, 1.2), fill=theme.WHITE, stroke=1.5,
@@ -1898,6 +1932,12 @@ class SettingsWindow(DialogWindow):
         self.light_switch = ComicSwitch(T().name == "light")
         self.light_switch.toggled.connect(self.on_theme_changed)
         self.attach_row(grid, 3, "Light theme", "comic dark is the default", self.light_switch)
+        self.limits_switch = ComicSwitch(owner.show_limits)
+        self.limits_switch.toggled.connect(owner.set_show_limits)
+        self.attach_row(grid, 4, "Usage limits", "bars in the main card · ▴/▾ in the header", self.limits_switch)
+        self.autostart_switch = ComicSwitch(autostart.is_enabled(platform_support.home_dir()))
+        self.autostart_switch.toggled.connect(self.on_autostart_changed)
+        self.attach_row(grid, 5, "Start at login", "open the widget when you sign in", self.autostart_switch)
         content.addLayout(grid)
 
         # ---- stickers ----
@@ -1991,6 +2031,9 @@ class SettingsWindow(DialogWindow):
         if value != self.owner.klipy_api_key:
             self.owner.update_setting("AI_STATUS_KLIPY_API_KEY", value)
         return False
+
+    def on_autostart_changed(self, checked: bool) -> None:
+        self.owner.update_setting("AI_STATUS_AUTOSTART", "true" if checked else "false")
 
     def on_theme_changed(self, checked: bool) -> None:
         self.owner.update_setting("AI_STATUS_THEME", "light" if checked else "dark")
@@ -2179,6 +2222,7 @@ class StatusWidget(QWidget):
         self.limits_seen: set[tuple[str, str, str]] = set()
         self.test_sticker_index = 0
         self.session_windows = SETTINGS.session_windows
+        self.show_limits = SETTINGS.show_limits
         self.sticker_rotate_seconds = SETTINGS.sticker_rotate_seconds
         self.session_cards: dict[str, SessionCard] = {}
         self.card_order: list[str] = []
@@ -2208,8 +2252,9 @@ class StatusWidget(QWidget):
         self.demo_usage_scenarios = usage_limits.demo_usage_states()
         if demo:
             self.usage_snapshot = self.demo_usage_scenarios[0]["snapshot"]
-        self.logo_pixmaps = self.load_logos()
-        self.usage_logo_pixmaps = self.load_logos(size=20)
+        self.logo_pixmaps = self.load_logos()  # Settings (full size)
+        self.row_logo_pixmaps = self.load_logos(size=sci(14))
+        self.usage_logo_pixmaps = self.load_logos(size=sci(20))
         self.demo_scenarios = [
             [("claude", "reading code", "unitbox-front", "22:16"),
              ("codex", "analyzing", "ai-cli-status-monitor", "22:16")],
@@ -2252,38 +2297,43 @@ class StatusWidget(QWidget):
         self.card, card_layout = build_card_window(self, MAIN_CARD_SHADOW)
 
         # ---- header: halftone strip with the radar mark, title, badge and buttons ----
-        header = HalftoneHeader()
+        header = HalftoneHeader(corner=sc(3), scale=UI_SCALE)
         header.setObjectName("header")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(12, 10, 12, 10 + HalftoneHeader.RULE)
-        header_layout.setSpacing(8)
+        header_layout.setContentsMargins(sci(12), sci(10), sci(12), sci(10) + header.rule)
+        header_layout.setSpacing(sci(8))
         card_layout.addWidget(header)
 
-        self.header_icon = RadarLogo(30)
+        self.header_icon = RadarLogo(sci(30))
         header_layout.addWidget(self.header_icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.title = ComicText(TITLE, display_font(26, 1.2), fill=theme.WHITE, stroke=1.5,
-                               stroke_color=theme.INK_ON_COLOUR, shadow=2, elide=True)
+        self.title = ComicText(TITLE, display_font(sc(26), sc(1.2)), fill=theme.WHITE, stroke=sc(1.5),
+                               stroke_color=theme.INK_ON_COLOUR, shadow=sci(2), elide=True)
         header_layout.addWidget(self.title, 1, Qt.AlignmentFlag.AlignVCenter)
 
         # Update pill: hidden until the startup check finds a newer version.
         self.update_button = ComicButton("UPDATE ↑", bg=theme.YELLOW, fg=theme.INK_ON_COLOUR,
-                                         hover_bg=theme.YELLOW_HOVER, font=display_font(14, 0.8), padding=(1, 7))
+                                         hover_bg=theme.YELLOW_HOVER, font=display_font(sct(14), sc(0.8)),
+                                         padding=(1, 7), scale=UI_SCALE)
         self.update_button.setToolTip("A newer version is available — click to update")
         self.update_button.clicked.connect(self.run_update)
         self.update_button.hide()
         header_layout.addWidget(self.update_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.badge = ComicBadge()
+        self.badge = ComicBadge(UI_SCALE)
         header_layout.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignVCenter)
 
         buttons = QHBoxLayout()
-        buttons.setSpacing(6)
-        settings_button = ComicButton("⚙", size=28, font=body_font(15))
+        buttons.setSpacing(sci(6))
+        self.limits_button = ComicButton("▴", size=sci(28), font=body_font(sc(15)), scale=UI_SCALE)
+        self.limits_button.clicked.connect(lambda: self.set_show_limits(not self.show_limits))
+        buttons.addWidget(self.limits_button)
+        settings_button = ComicButton("⚙", size=sci(28), font=body_font(sc(15)), scale=UI_SCALE)
         settings_button.setToolTip("Settings")
         settings_button.clicked.connect(self.open_settings)
         buttons.addWidget(settings_button)
-        close = ComicButton("X", size=28, bg=theme.RED, fg=theme.WHITE, font=display_font(18))
+        close = ComicButton("X", size=sci(28), bg=theme.RED, fg=theme.WHITE, font=display_font(sc(18)),
+                            scale=UI_SCALE)
         close.setToolTip("Quit")
         close.clicked.connect(self.quit)
         buttons.addWidget(close)
@@ -2292,18 +2342,19 @@ class StatusWidget(QWidget):
         # ---- body (classic list rows or the idle lockup) ----
         self.body = QWidget()
         self.body_layout = QVBoxLayout(self.body)
-        self.body_layout.setContentsMargins(14, 12, 14, 0)
-        self.body_layout.setSpacing(10)
+        self.body_layout.setContentsMargins(sci(14), sci(12), sci(14), 0)
+        self.body_layout.setSpacing(sci(10))
         card_layout.addWidget(self.body)
 
-        # ---- account usage limits: one inked block per provider ----
-        usage_panel = QWidget()
-        usage_panel.setObjectName("usagePanel")
-        self.usage_rows = QVBoxLayout(usage_panel)
-        self.usage_rows.setContentsMargins(14, 12, 14, 14)
-        self.usage_rows.setSpacing(12)
-        card_layout.addWidget(usage_panel)
+        # ---- account usage limits: one inked block per provider (collapsible) ----
+        self.usage_panel = QWidget()
+        self.usage_panel.setObjectName("usagePanel")
+        self.usage_rows = QVBoxLayout(self.usage_panel)
+        self.usage_rows.setContentsMargins(sci(14), sci(12), sci(14), sci(14))
+        self.usage_rows.setSpacing(sci(12))
+        card_layout.addWidget(self.usage_panel)
         self.render_usage_limits()
+        self.apply_limits_visibility()
 
     # ----------------------------- config -----------------------------
     def load_config(self) -> dict[str, object]:
@@ -2601,7 +2652,7 @@ class StatusWidget(QWidget):
                 self.body_layout.addWidget(hover)
                 self.row_hover_boxes[session_id] = hover
             if hidden_done > 0:
-                footer = comic_label(f"+{hidden_done} finished, hidden automatically", mono_font(10), "secondary")
+                footer = comic_label(f"+{hidden_done} finished, hidden automatically", mono_font(sct(10)), "secondary")
                 footer.setAlignment(Qt.AlignmentFlag.AlignHCenter)
                 self.body_layout.addWidget(footer)
 
@@ -2620,14 +2671,14 @@ class StatusWidget(QWidget):
         agent = str(session["agent"])
         dim = kind in INACTIVE
 
-        row = ComicFrame("inner", radius=4, border=2.5) if framed else QWidget()
+        row = ComicFrame("inner", radius=sc(4), border=sc(2.5)) if framed else QWidget()
         row.setObjectName("row")
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(*((10, 9, 12, 9) if framed else (0, 0, 0, 0)))
-        layout.setSpacing(11)
+        layout.setContentsMargins(*((sci(10), sci(9), sci(12), sci(9)) if framed else (0, 0, 0, 0)))
+        layout.setSpacing(sci(11))
 
-        jump = ComicButton("➜", size=34, bg=theme.YELLOW, fg=theme.INK_ON_COLOUR, hover_bg=theme.YELLOW_HOVER,
-                           font=display_font(20))
+        jump = ComicButton("➜", size=sci(34), bg=theme.YELLOW, fg=theme.INK_ON_COLOUR, hover_bg=theme.YELLOW_HOVER,
+                           font=display_font(sc(20)), scale=UI_SCALE)
         jump.setToolTip("Jump to this session's terminal")
         project_name = str(session["project"])
         cwd = str(session["cwd"])
@@ -2640,8 +2691,8 @@ class StatusWidget(QWidget):
         layout.addWidget(jump, 0, Qt.AlignmentFlag.AlignVCenter)
 
         agent_color = theme.AGENT_COLORS.get(agent, STATE_COLORS["neutral"])
-        circle = AgentCircle(30, agent_color, self.logo_pixmaps.get(agent),
-                             initial=str(session["name"])[:1].upper())
+        circle = AgentCircle(sci(30), agent_color, self.row_logo_pixmaps.get(agent),
+                             initial=str(session["name"])[:1].upper(), border=sc(2.5))
         if dim:
             self.dim_widget(circle)
         layout.addWidget(circle, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -2649,28 +2700,28 @@ class StatusWidget(QWidget):
         text_box = QWidget()
         text_layout = QVBoxLayout(text_box)
         text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(3)
+        text_layout.setSpacing(sci(3))
         if dim:
             self.dim_widget(text_box)
         layout.addWidget(text_box, 1)
 
         top = QHBoxLayout()
-        top.setSpacing(8)
+        top.setSpacing(sci(8))
         text_layout.addLayout(top)
-        name = ComicText(str(session["name"]), display_font(24, 1.2), fill=agent_color, stroke=1.3,
-                         stroke_color=theme.INK_ON_COLOUR, shadow=2)
+        name = ComicText(str(session["name"]), display_font(sc(24), sc(1.2)), fill=agent_color, stroke=sc(1.3),
+                         stroke_color=theme.INK_ON_COLOUR, shadow=sci(2))
         top.addWidget(name, 0, Qt.AlignmentFlag.AlignVCenter)
         status_text = str(session["status"])
         if kind in IN_PROGRESS and not status_text.endswith("…"):
             status_text += "…"
         bg, fg = theme.status_chip(kind, T())
-        top.addWidget(Chip(status_text, bg, fg), 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(Chip(status_text, bg, fg, UI_SCALE), 0, Qt.AlignmentFlag.AlignVCenter)
         top.addStretch(1)
 
         meta_text = " · ".join(part for part in (str(session["project"]), str(session["time"])) if part)
         if meta_text:
             meta = ElidedLabel(meta_text, color="text_tertiary")
-            meta.setFont(mono_font(11))
+            meta.setFont(mono_font(sct(11)))
             text_layout.addWidget(meta)
         return row
 
@@ -2686,17 +2737,17 @@ class StatusWidget(QWidget):
         Reused for the startup intro and the idle state (different subtitle each time)."""
         box = QWidget()
         layout = QHBoxLayout(box)
-        layout.setContentsMargins(8, 14, 8, 6)
-        layout.setSpacing(16)
+        layout.setContentsMargins(sci(8), sci(14), sci(8), sci(6))
+        layout.setSpacing(sci(16))
         layout.addStretch(1)
-        logo = RadarLogo(56)
+        logo = RadarLogo(sci(56))
         self.spinning.append(logo)
         layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
         text = QVBoxLayout()
-        text.setSpacing(4)
-        text.addWidget(ComicText("AI Status Monitor!", display_font(28, 1.2), fill=theme.YELLOW, stroke=1.5,
-                                 stroke_color=theme.INK_ON_COLOUR, shadow=2))
-        text.addWidget(comic_label(subtitle, mono_font(11), "secondary"))
+        text.setSpacing(sci(4))
+        text.addWidget(ComicText("AI Status Monitor!", display_font(sc(28), sc(1.2)), fill=theme.YELLOW,
+                                 stroke=sc(1.5), stroke_color=theme.INK_ON_COLOUR, shadow=sci(2)))
+        text.addWidget(comic_label(subtitle, mono_font(sct(11)), "secondary"))
         layout.addLayout(text)
         layout.addStretch(1)
         return box
@@ -2735,16 +2786,16 @@ class StatusWidget(QWidget):
             if provider_key not in self.agents:
                 continue
             provider_name = str(group["provider"])
-            block = ComicFrame("inner", radius=4, border=2.5)
+            block = ComicFrame("inner", radius=sc(4), border=sc(2.5))
             grid = QHBoxLayout(block)
-            grid.setContentsMargins(12, 10, 14, 10)
-            grid.setSpacing(12)
+            grid.setContentsMargins(sci(12), sci(10), sci(14), sci(10))
+            grid.setSpacing(sci(12))
 
             side = QVBoxLayout()
-            side.setSpacing(4)
-            circle = AgentCircle(38, theme.AGENT_COLORS.get(provider_key, STATE_COLORS["neutral"]),
+            side.setSpacing(sci(4))
+            circle = AgentCircle(sci(38), theme.AGENT_COLORS.get(provider_key, STATE_COLORS["neutral"]),
                                  self.usage_logo_pixmaps.get(provider_key), initial=provider_name[:1],
-                                 shadow=2, interactive=True)
+                                 shadow=sci(2), interactive=True, border=sc(2.5))
             circle.setEnabled(not self.usage_refreshing)
             circle.setToolTip(f"Refresh {provider_name} usage")
             circle.setAccessibleName(f"Refresh {provider_name} usage")
@@ -2752,52 +2803,67 @@ class StatusWidget(QWidget):
             self.usage_logo_widgets[provider_key] = circle
             self.usage_logo_buttons[provider_key] = circle
             side.addWidget(circle, 0, Qt.AlignmentFlag.AlignHCenter)
-            label = comic_label(PROVIDER_LABELS.get(provider_key, provider_name).upper(), mono_font(8), "text")
+            label = comic_label(PROVIDER_LABELS.get(provider_key, provider_name).upper(), mono_font(7), "text")
             label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
             side.addWidget(label, 0, Qt.AlignmentFlag.AlignHCenter)
             side.addStretch(1)
             side_box = QWidget()
             side_box.setLayout(side)
-            side_box.setFixedWidth(46)
-            side.setContentsMargins(0, 2, 0, 0)
+            side_box.setFixedWidth(max(sci(46), label.sizeHint().width()))
+            side.setContentsMargins(0, sci(2), 0, 0)
             grid.addWidget(side_box, 0, Qt.AlignmentFlag.AlignTop)
 
             bars = QVBoxLayout()
-            bars.setSpacing(9)
+            bars.setSpacing(sci(9))
             grid.addLayout(bars, 1)
             for data in group["rows"]:
                 state = str(data["state"])
                 limit = QVBoxLayout()
-                limit.setSpacing(3)
+                limit.setSpacing(sci(3))
                 line = QHBoxLayout()
-                line.setSpacing(5)
+                line.setSpacing(sci(5))
                 window = str(data["window"])
                 if window:
-                    line.addWidget(comic_label(window.upper(), display_font(16, 0.8), "text"))
+                    line.addWidget(comic_label(window.upper(), display_font(sct(16), sc(0.8)), "text"))
                 line.addStretch(1)
                 used = float(data.get("used_percent") or 0.0)
                 tone = theme.bar_tone(used)
                 percent = QLabel(str(data["percent_text"]))
                 if state == "unavailable":
                     percent.setObjectName("secondary")
-                    percent.setFont(body_font(13))
+                    percent.setFont(body_font(sct(13)))
                 else:
-                    percent.setFont(display_font(17, 0.5))
+                    percent.setFont(display_font(sct(17), sc(0.5)))
                     percent.setStyleSheet(f"color: {T().text_secondary if state == 'stale' else T().bar_inks[tone]};")
                 line.addWidget(percent)
                 limit.addLayout(line)
 
                 if state != "unavailable":
-                    limit.addWidget(ComicBar(float(data["fraction"]), theme.BAR_FILLS[tone]))
+                    limit.addWidget(ComicBar(float(data["fraction"]), theme.BAR_FILLS[tone], UI_SCALE))
                     reset_text = str(data["reset_text"])
                     if state == "stale":
                         reset_text = f"{reset_text} · stale"
                     if reset_text:
-                        reset = comic_label(reset_text, mono_font(10), "secondary")
+                        reset = comic_label(reset_text, mono_font(sct(10)), "secondary")
                         reset.setAlignment(Qt.AlignmentFlag.AlignRight)
                         limit.addWidget(reset)
                 bars.addLayout(limit)
             self.usage_rows.addWidget(block)
+        self.resize_to_content()
+
+    # ----------------------------- collapsible limits -----------------------------
+    def set_show_limits(self, shown: bool) -> None:
+        """Header ▴/▾, Settings or the menu: hide the usage bars, keep the agents' cards."""
+        if shown != self.show_limits:
+            self.update_setting("AI_STATUS_SHOW_LIMITS", "true" if shown else "false")
+        window = self.settings_window
+        if window is not None and window.limits_switch.isChecked() != shown:
+            window.limits_switch.setChecked(shown)
+
+    def apply_limits_visibility(self) -> None:
+        self.usage_panel.setVisible(self.show_limits)
+        self.limits_button.setText("▴" if self.show_limits else "▾")
+        self.limits_button.setToolTip("Hide usage limits" if self.show_limits else "Show usage limits")
         self.resize_to_content()
 
     def apply_demo_usage_state(self, index: int) -> None:
@@ -2813,8 +2879,8 @@ class StatusWidget(QWidget):
             self.start_usage_animation()
 
     def start_usage_refresh(self, provider_key: str | None = None, *_args: object) -> bool:
-        if self.usage_refreshing:
-            return False
+        if self.usage_refreshing or not self.show_limits:
+            return False  # hidden limits are not fetched
         if provider_key is None:
             provider_keys = self.agents
         elif provider_key in self.agents:
@@ -2960,6 +3026,10 @@ class StatusWidget(QWidget):
         serious.setCheckable(True)
         serious.setChecked(self.serious_mode)
         serious.toggled.connect(self.set_serious_mode)
+        limits = menu.addAction("Show usage limits")
+        limits.setCheckable(True)
+        limits.setChecked(self.show_limits)
+        limits.toggled.connect(self.set_show_limits)
         dock = menu.addAction("Dock all session windows")
         dock.setEnabled(any(card.floating for card in self.session_cards.values()))
         dock.triggered.connect(self.dock_all_cards)
@@ -3312,6 +3382,13 @@ class StatusWidget(QWidget):
                 self.close_session_cards()
         elif key == "AI_STATUS_THEME":
             self.apply_theme(value)
+        elif key == "AI_STATUS_SHOW_LIMITS":
+            self.show_limits = value == "true"
+            self.apply_limits_visibility()
+            if self.show_limits and not self.demo:
+                self.start_usage_refresh()
+        elif key == "AI_STATUS_AUTOSTART":
+            self.apply_autostart(value == "true")
         elif key == "AI_STATUS_KLIPY_API_KEY":
             self.klipy_api_key = value
             self.sticker_source = self.build_sticker_source()
@@ -3332,6 +3409,14 @@ class StatusWidget(QWidget):
         self.signature = None
         if not self.intro:
             self.refresh_status()
+
+    def apply_autostart(self, enabled: bool) -> None:
+        """Write or remove the login entry (same entry the installer writes)."""
+        try:
+            autostart.set_enabled(enabled, platform_support.home_dir(), WIDGET_DIR, CACHE_DIR,
+                                  process_control.widget_interpreter(DATA_DIR))
+        except OSError as error:
+            log(f"autostart: cannot {'enable' if enabled else 'disable'}: {error}")
 
     def apply_theme(self, name: str) -> None:
         """Switch dark/light live: new style sheet, rebuilt rows and usage, repaint the rest."""

@@ -32,6 +32,7 @@ from typing import Callable
 PROJECT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_DIR / "bin"))
 
+from ai_agent_status_lib import autostart  # noqa: E402
 from ai_agent_status_lib import platform_support  # noqa: E402
 from ai_agent_status_lib import process_control  # noqa: E402
 from ai_agent_status_lib.env_config import DEFAULT_VALUES  # noqa: E402
@@ -44,11 +45,8 @@ from ai_agent_status_lib.env_config import serialize_env  # noqa: E402
 from ai_agent_status_lib.env_config import write_env_value  # noqa: E402
 
 PLATFORM = platform_support.PLATFORM
-APP_NAME = "AI CLI Status Widget"
-APP_ID = "ai-cli-status-widget"
-LAUNCH_AGENT_LABEL = "com.github.ai-cli-status-monitor.widget"
-WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-WINDOWS_RUN_VALUE = "ai-cli-status-monitor"
+APP_NAME = autostart.APP_NAME
+APP_ID = autostart.APP_ID
 
 SCRIPTS = (
     "ai-agent-status-hook",
@@ -99,8 +97,9 @@ def upgrade_retired_defaults(runtime_env: Path, environ: dict[str, str], report:
     """
     current = parse_dotenv(runtime_env)
     upgraded = []
-    for key, (old, new) in RETIRED_DEFAULTS.items():
-        if key in environ or current.get(key) != old:
+    for key, (olds, new) in RETIRED_DEFAULTS.items():
+        old = current.get(key)
+        if key in environ or old not in olds:
             continue
         write_env_value(runtime_env, key, new)
         upgraded.append(key)
@@ -304,26 +303,16 @@ def copy_data(data_dir: Path) -> None:
 
 # ----------------------------- autostart -----------------------------
 
-def install_linux_desktop(home: Path, bin_dir: Path, python: str) -> list[str]:
-    autostart_dir = home / ".config" / "autostart"
+def install_linux_launcher(home: Path, bin_dir: Path) -> list[str]:
+    """Menu launcher and icons (the login entry itself is handled by ``autostart``)."""
     applications_dir = home / ".local" / "share" / "applications"
     icons_dir = home / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps"
-    pixmaps_dir = home / ".local" / "share" / "pixmaps"
-    for directory in (autostart_dir, applications_dir, icons_dir, pixmaps_dir):
+    icon = autostart.linux_icon(home)
+    for directory in (applications_dir, icons_dir, icon.parent):
         directory.mkdir(parents=True, exist_ok=True)
-    icon = pixmaps_dir / f"{APP_ID}.png"
     shutil.copyfile(PROJECT_DIR / "assets" / f"{APP_ID}.png", icons_dir / f"{APP_ID}.png")
     shutil.copyfile(PROJECT_DIR / "assets" / f"{APP_ID}.png", icon)
-
-    autostart = autostart_dir / f"{APP_ID}.desktop"
     launcher = applications_dir / f"{APP_ID}.desktop"
-    autostart.write_text(
-        "[Desktop Entry]\nType=Application\n"
-        f"Name={APP_NAME}\nComment=Floating status widget for Claude Code and Codex CLI\n"
-        f'Exec="{python}" "{bin_dir}/ai-agent-status-widget"\nIcon={icon}\nTerminal=false\n'
-        "X-GNOME-Autostart-enabled=true\n",
-        encoding="utf-8",
-    )
     launcher.write_text(
         "[Desktop Entry]\nType=Application\n"
         f"Name={APP_NAME}\nComment=Open floating status widget for Claude Code and Codex CLI\n"
@@ -331,7 +320,6 @@ def install_linux_desktop(home: Path, bin_dir: Path, python: str) -> list[str]:
         "Categories=Utility;\nStartupNotify=false\n",
         encoding="utf-8",
     )
-    autostart.chmod(0o755)
     launcher.chmod(0o755)
     # Remove the retired toggle launcher from earlier installs.
     (applications_dir / f"{APP_ID}-toggle.desktop").unlink(missing_ok=True)
@@ -339,84 +327,23 @@ def install_linux_desktop(home: Path, bin_dir: Path, python: str) -> list[str]:
                        ("gtk-update-icon-cache", ["-q", str(home / ".local" / "share" / "icons" / "hicolor")])):
         if shutil.which(tool):
             subprocess.run([tool, *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    return [f"Autostart installed:\n  {autostart}", f"Application launcher installed:\n  {launcher}"]
+    return [f"Application launcher installed:\n  {launcher}"]
 
 
-def launch_agent_path(current: str) -> str:
-    """PATH for the LaunchAgent: launchd starts it with only /usr/bin:/bin:/usr/sbin:/sbin,
-    which hides Homebrew/npm installs of `codex` (needed for Codex usage limits)."""
-    entries: list[str] = []
-    for entry in ["/opt/homebrew/bin", "/usr/local/bin", *current.split(os.pathsep), "/usr/bin", "/bin",
-                  "/usr/sbin", "/sbin"]:
-        if entry and entry not in entries:
-            entries.append(entry)
-    return os.pathsep.join(entries)
-
-
-def launch_agent_plist(argv: list[str], log_file: Path, path: str = "") -> str:
-    from xml.sax.saxutils import escape
-
-    arguments = "\n".join(f"    <string>{escape(arg)}</string>" for arg in argv)
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>{LAUNCH_AGENT_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-{arguments}
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>{escape(launch_agent_path(path))}</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>ProcessType</key>
-  <string>Interactive</string>
-  <key>StandardOutPath</key>
-  <string>{escape(str(log_file))}</string>
-  <key>StandardErrorPath</key>
-  <string>{escape(str(log_file))}</string>
-</dict>
-</plist>
-"""
-
-
-def install_macos_launch_agent(home: Path, bin_dir: Path, cache_dir: Path, python: str) -> list[str]:
-    """Start the widget at login. RunAtLoad only (no KeepAlive): quitting it stays quit."""
-    agents_dir = home / "Library" / "LaunchAgents"
-    agents_dir.mkdir(parents=True, exist_ok=True)
-    plist = agents_dir / f"{LAUNCH_AGENT_LABEL}.plist"
-    argv = process_control.widget_argv(bin_dir, python)
-    plist.write_text(launch_agent_plist(argv, cache_dir / "widget.log", os.environ.get("PATH", "")),
-                     encoding="utf-8")
-    return [f"Login item (LaunchAgent) installed:\n  {plist}"]
-
-
-def install_windows_run_key(bin_dir: Path, python: str) -> list[str]:
-    """Start the widget at sign-in via HKCU\\...\\Run (pythonw, so no console window)."""
-    import winreg  # type: ignore[import-not-found]
-
-    command = platform_support.quote_command(
-        process_control.widget_argv(bin_dir, platform_support.gui_python(python)), platform_support.WINDOWS
-    )
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-        winreg.SetValueEx(key, WINDOWS_RUN_VALUE, 0, winreg.REG_SZ, command)
-    return [f"Sign-in autostart installed:\n  HKCU\\{WINDOWS_RUN_KEY}\\{WINDOWS_RUN_VALUE}"]
-
-
-def install_autostart(home: Path, bin_dir: Path, cache_dir: Path, python: str) -> list[str]:
+def install_autostart(home: Path, bin_dir: Path, cache_dir: Path, python: str, enabled: bool = True) -> list[str]:
+    """Write (or, when the user turned it off, remove) the login entry, plus the Linux launcher."""
+    notes: list[str] = []
     try:
-        if PLATFORM == platform_support.WINDOWS:
-            return install_windows_run_key(bin_dir, python)
-        if PLATFORM == platform_support.MACOS:
-            return install_macos_launch_agent(home, bin_dir, cache_dir, python)
-        return install_linux_desktop(home, bin_dir, python)
+        if PLATFORM == platform_support.LINUX:
+            notes.extend(install_linux_launcher(home, bin_dir))
+        if enabled:
+            notes.append(f"Start at login enabled:\n  {autostart.enable(home, bin_dir, cache_dir, python)}")
+        else:
+            autostart.disable(home)
+            notes.append("Start at login is off (AI_STATUS_AUTOSTART=false); turn it on in Settings.")
     except OSError as error:
-        return [f"⚠️  Autostart not installed: {error}"]
+        notes.append(f"⚠️  Autostart not installed: {error}")
+    return notes
 
 
 # ----------------------------- widget runtime -----------------------------
@@ -556,7 +483,7 @@ def main() -> int:
     process_control.save_interpreters(data_dir, sys.executable, widget_python)
     if PLATFORM == platform_support.WINDOWS:
         write_windows_shims(bin_dir, widget_python)
-    notes = install_autostart(home, bin_dir, cache_dir, widget_python or sys.executable)
+    notes = install_autostart(home, bin_dir, cache_dir, widget_python or sys.executable, settings.autostart)
     install_environment_config(runtime_env, source_env, config_dir, home)
 
     add_hooks(home / ".claude" / "settings.json", process_control.hook_command(bin_dir, "claude"), CLAUDE_EVENTS)

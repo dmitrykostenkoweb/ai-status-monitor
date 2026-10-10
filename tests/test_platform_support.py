@@ -14,6 +14,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
 
+from ai_agent_status_lib import autostart  # noqa: E402
 from ai_agent_status_lib import platform_support  # noqa: E402
 from ai_agent_status_lib import process_control  # noqa: E402
 from ai_agent_status_lib import window_switch  # noqa: E402
@@ -336,7 +337,7 @@ class InstallerTests(unittest.TestCase):
         upgraded = self.installer.upgrade_retired_defaults(runtime, {}, report=self.messages.append)
         self.assertEqual(sorted(upgraded), ["AI_STATUS_CARD_WIDTH", "AI_STATUS_TITLE"])
         text = runtime.read_text()
-        self.assertIn("AI_STATUS_CARD_WIDTH=420", text)
+        self.assertIn("AI_STATUS_CARD_WIDTH=294", text)
         self.assertIn('AI_STATUS_TITLE="AI Agents Status!"', text)
         self.assertIn("AI_STATUS_MAX_ROWS=7", text)
 
@@ -348,14 +349,49 @@ class InstallerTests(unittest.TestCase):
                                                     report=self.messages.append), [])
         self.assertEqual(runtime.read_text(), "AI_STATUS_CARD_WIDTH=344\n")
 
+    def test_card_width_from_the_first_comic_build_is_also_upgraded(self) -> None:
+        runtime = self.root / ".env"
+        runtime.write_text("AI_STATUS_CARD_WIDTH=420\n")
+        self.assertEqual(self.installer.upgrade_retired_defaults(runtime, {}, report=self.messages.append),
+                         ["AI_STATUS_CARD_WIDTH"])
+        self.assertIn("AI_STATUS_CARD_WIDTH=294", runtime.read_text())
+
+    def test_autostart_entries_can_be_turned_off_and_on(self) -> None:
+        home = self.root / "home"
+        bin_dir = home / ".local" / "bin"
+        for system, entry in (("linux", autostart.linux_entry(home)), ("macos", autostart.macos_entry(home))):
+            with self.subTest(system=system):
+                autostart.set_enabled(True, home, bin_dir, self.root, "/py/python", platform=system)
+                self.assertTrue(autostart.is_enabled(home, platform=system))
+                text = entry.read_text()
+                self.assertIn("ai-agent-status-widget", text)
+                self.assertIn("/py/python", text)
+                autostart.set_enabled(False, home, bin_dir, self.root, "/py/python", platform=system)
+                self.assertFalse(entry.exists())
+                self.assertFalse(autostart.is_enabled(home, platform=system))
+                autostart.disable(home, platform=system)  # already off: no error
+
+    def test_installer_honours_autostart_off(self) -> None:
+        home = self.root / "home"
+        autostart.enable(home, home / "bin", self.root, "/py/python", platform="linux")
+        with mock.patch.object(self.installer, "PLATFORM", "macos"):
+            notes = self.installer.install_autostart(home, home / "bin", self.root, "/py/python", enabled=False)
+        self.assertTrue(any("Start at login is off" in note for note in notes))
+        self.assertFalse(autostart.macos_entry(home).exists())
+
+    def test_windows_autostart_command_uses_pythonw_quoted(self) -> None:
+        command = autostart.windows_command(Path("C:/Users/me/bin"), "C:/Py/python.exe")
+        self.assertTrue(command.startswith('"C:/Py/'))
+        self.assertIn('/ai-agent-status-widget"', command)
+
     def test_launch_agent_plist_escapes_arguments(self) -> None:
-        plist = self.installer.launch_agent_plist(["/usr/bin/python3", "/Users/a&b/widget"], Path("/tmp/w.log"))
+        plist = autostart.launch_agent_plist(["/usr/bin/python3", "/Users/a&b/widget"], Path("/tmp/w.log"))
         self.assertIn("<string>/Users/a&amp;b/widget</string>", plist)
         self.assertIn("<key>RunAtLoad</key>", plist)
         self.assertIn("<key>PATH</key>", plist)
 
     def test_launch_agent_path_adds_homebrew_and_keeps_user_path(self) -> None:
-        path = self.installer.launch_agent_path(os.pathsep.join(["/Users/a/.npm/bin", "/usr/bin"]))
+        path = autostart.launch_agent_path(os.pathsep.join(["/Users/a/.npm/bin", "/usr/bin"]))
         entries = path.split(os.pathsep)
         self.assertEqual(entries[:3], ["/opt/homebrew/bin", "/usr/local/bin", "/Users/a/.npm/bin"])
         self.assertEqual(entries.count("/usr/bin"), 1)
