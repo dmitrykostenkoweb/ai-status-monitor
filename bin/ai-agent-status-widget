@@ -150,13 +150,16 @@ def classify(status: str) -> str:
 
 
 class StatusDot(Gtk.DrawingArea):
-    """A glowing status dot. Falls back to a flat disc when cairo is missing."""
+    """A glowing status dot, or (`arrow=True`) a glowing `→` in the same state colour that
+    serves as the row's window-switch button. Draws nothing when cairo is missing."""
 
-    def __init__(self) -> None:
+    def __init__(self, arrow: bool = False) -> None:
         super().__init__()
         self.set_size_request(14, 20)
         self.rgb = hex_to_rgb(STATE_COLORS["neutral"])
         self.waiting = False
+        self.arrow = arrow
+        self.hover = False
         self.phase = 0.0
         if CAIRO_OK:
             self.connect("draw", self.on_draw)
@@ -184,10 +187,26 @@ class StatusDot(Gtk.DrawingArea):
             cr.set_source(glow)
             cr.arc(cx, cy, 8.5, 0, 2 * math.pi)
             cr.fill()
+        if self.arrow:
+            cr.set_source_rgba(r, g, b, 1.0 if self.hover else 0.92)
+            cr.set_line_width(2.2 if self.hover else 1.9)
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+            cr.move_to(cx - 4.5, cy)
+            cr.line_to(cx + 4.5, cy)
+            cr.move_to(cx + 1.0, cy - 3.5)
+            cr.line_to(cx + 4.5, cy)
+            cr.line_to(cx + 1.0, cy + 3.5)
+            cr.stroke()
+            return False
         cr.set_source_rgb(r, g, b)
         cr.arc(cx, cy, 3.4, 0, 2 * math.pi)
         cr.fill()
         return False
+
+    def set_hover(self, hover: bool) -> None:
+        self.hover = hover
+        self.queue_draw()
 
 
 class LogoMark(Gtk.DrawingArea):
@@ -1607,14 +1626,14 @@ class StatusWidget(Gtk.Window):
         #statusText { font-size: 11px; }
         #meta { font-size: 10px; color: #566173; }
         #footer { font-size: 9.5px; color: #4a5462; padding: 5px 0 2px; }
-        #altText {
+        #dotSwitch {
           font-family: 'IBM Plex Mono', monospace;
-          font-size: 10px; font-weight: 600; color: #79828f;
+          font-size: 11px; font-weight: 600; color: #79828f;
           background: transparent; background-image: none;
           border: none; box-shadow: none; outline: none;
-          min-height: 0; padding: 2px 4px;
+          min-height: 0; min-width: 0; padding: 0;
         }
-        #altText:hover { color: #ffffff; }
+        #dotSwitch:hover { color: #ffffff; }
         #usagePanel {
           border-top: 1px solid rgba(255,255,255,0.055);
           padding: 7px 10px 9px;
@@ -2076,15 +2095,26 @@ class StatusWidget(Gtk.Window):
             row.get_style_context().add_class("alertRow")
         dim = kind in INACTIVE
 
-        # `→` is shown on every row (not just alerts) and wired to this session. It sits on the
-        # left edge: the right side is covered by the sticker overlay off the card's corner.
-        switch = Gtk.Button(label="→")
-        switch.set_name("altText")
+        # The status dot itself is the `→` window-switch button: drawn as an arrow in the state
+        # colour (glow / waiting ring kept), on the left edge where the sticker overlay never
+        # reaches. Without cairo it falls back to a plain text `→`.
+        dot = StatusDot(arrow=CAIRO_OK)
+        dot.configure_dot(color, waiting)
+        if waiting:
+            waiting_dots.append(dot)
+        switch = Gtk.Button()
+        switch.set_name("dotSwitch")
+        if CAIRO_OK:
+            switch.add(dot)
+            switch.connect("enter-notify-event", lambda _w, _e, d=dot: d.set_hover(True) or False)
+            switch.connect("leave-notify-event", lambda _w, _e, d=dot: d.set_hover(False) or False)
+        else:
+            switch.set_label("→")
         switch.set_relief(Gtk.ReliefStyle.NONE)
         switch.set_can_focus(False)
         switch.set_focus_on_click(False)
-        switch.set_valign(Gtk.Align.CENTER)
-        switch.set_margin_start(2)
+        switch.set_valign(Gtk.Align.START)
+        switch.set_margin_top(4)
         switch.set_tooltip_text("Switch to this session's window")
         project_name = str(session["project"])
         cwd = str(session["cwd"])
@@ -2094,14 +2124,6 @@ class StatusWidget(Gtk.Window):
             lambda _b, p=project_name, c=cwd, ids=pids: self.switch_to_session(p, c, ids),
         )
         row.pack_start(switch, False, False, 0)
-
-        dot = StatusDot()
-        dot.configure_dot(color, waiting)
-        if waiting:
-            waiting_dots.append(dot)
-        dot.set_valign(Gtk.Align.START)
-        dot.set_margin_top(4)
-        row.pack_start(dot, False, False, 0)
 
         logo_box = Gtk.Box()
         logo_box.set_name("logoBox")
