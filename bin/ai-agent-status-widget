@@ -2076,6 +2076,25 @@ class StatusWidget(Gtk.Window):
             row.get_style_context().add_class("alertRow")
         dim = kind in INACTIVE
 
+        # `→` is shown on every row (not just alerts) and wired to this session. It sits on the
+        # left edge: the right side is covered by the sticker overlay off the card's corner.
+        switch = Gtk.Button(label="→")
+        switch.set_name("altText")
+        switch.set_relief(Gtk.ReliefStyle.NONE)
+        switch.set_can_focus(False)
+        switch.set_focus_on_click(False)
+        switch.set_valign(Gtk.Align.CENTER)
+        switch.set_margin_start(2)
+        switch.set_tooltip_text("Switch to this session's window")
+        project_name = str(session["project"])
+        cwd = str(session["cwd"])
+        pids = list(session["client_pids"]) if isinstance(session["client_pids"], list) else []
+        switch.connect(
+            "clicked",
+            lambda _b, p=project_name, c=cwd, ids=pids: self.switch_to_session(p, c, ids),
+        )
+        row.pack_start(switch, False, False, 0)
+
         dot = StatusDot()
         dot.configure_dot(color, waiting)
         if waiting:
@@ -2138,24 +2157,6 @@ class StatusWidget(Gtk.Window):
             meta.set_xalign(0)
             meta.set_ellipsize(Pango.EllipsizeMode.END)
             text_box.pack_start(meta, False, False, 0)
-
-        # `→` is shown on every row (not just alerts) and wired to this session.
-        switch = Gtk.Button(label="→")
-        switch.set_name("altText")
-        switch.set_relief(Gtk.ReliefStyle.NONE)
-        switch.set_can_focus(False)
-        switch.set_focus_on_click(False)
-        switch.set_valign(Gtk.Align.CENTER)
-        switch.set_margin_end(2)
-        switch.set_tooltip_text("Switch to this session's window")
-        project_name = str(session["project"])
-        cwd = str(session["cwd"])
-        pids = list(session["client_pids"]) if isinstance(session["client_pids"], list) else []
-        switch.connect(
-            "clicked",
-            lambda _b, p=project_name, c=cwd, ids=pids: self.switch_to_session(p, c, ids),
-        )
-        row.pack_end(switch, False, False, 0)
 
         return row
 
