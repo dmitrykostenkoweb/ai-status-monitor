@@ -27,6 +27,7 @@ from ai_agent_status_lib import stickers  # noqa: E402
 from ai_agent_status_lib import updates  # noqa: E402
 from ai_agent_status_lib import usage_limits  # noqa: E402
 from ai_agent_status_lib import window_switch  # noqa: E402
+from ai_agent_status_lib import x11_hints  # noqa: E402
 from ai_agent_status_lib.env_config import format_agents  # noqa: E402
 from ai_agent_status_lib.env_config import load_settings  # noqa: E402
 from ai_agent_status_lib.env_config import SUPPORTED_AGENTS  # noqa: E402
@@ -1346,6 +1347,8 @@ class SessionCard(QWidget):
         if self.overlay is not None:
             self.overlay.hide_now()
             self.overlay.deleteLater()
+        if self.owner.x11 is not None:
+            self.owner.x11.forget(int(self.winId()))  # X may reuse the id for a new window
         self.hide()
         self.deleteLater()
 
@@ -1868,7 +1871,11 @@ class StatusWidget(QWidget):
             self.timers.append(timeout_add_seconds(3, self.end_intro))
         self.timers.append(timeout_add_seconds(1, self.refresh_status))
         self.timers.append(timeout_add(200, self.tick_animation))
-        self.timers.append(timeout_add_seconds(4, self.apply_wmctrl_hints))
+        self.x11: x11_hints.X11Hints | None = None
+        self.x11_checked = False
+        # Every second, like the GTK widget re-asserted keep-above on each poll: Muffin and
+        # Mutter drop "above" now and then (show desktop, workspace switch, focus changes).
+        self.timers.append(timeout_add_seconds(1, self.apply_window_hints))
         if not demo:
             # Check GitHub for a newer release once, a few seconds after startup so
             # it never competes with the intro or first paint.
@@ -2755,6 +2762,7 @@ class StatusWidget(QWidget):
                     card.floating = True
                     card.move(*self.clamp_to_visible(int(saved["x"]), int(saved["y"])))
                 card.show()
+                QTimer.singleShot(0, self.apply_window_hints)
             else:
                 card.update_session(session)
         self.layout_cards()
@@ -3198,6 +3206,9 @@ class StatusWidget(QWidget):
             if window is not None:
                 window.close()
         self.hide()
+        if self.x11 is not None:
+            self.x11.close()
+            self.x11 = None
         # Run the pending deleteLater()s now: once the event loop has ended, objects still
         # waiting for deferred deletion are torn down during interpreter exit, which crashes.
         QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
@@ -3218,12 +3229,36 @@ class StatusWidget(QWidget):
         """This widget's X11 window id as wmctrl expects it (hex), or None off X11."""
         return window_id_of(self)
 
-    def apply_wmctrl_hints(self) -> bool:
-        """X11 only: keep the widget and cards on every workspace, above, off the taskbar.
+    def x11_windows(self) -> list[QWidget]:
+        return [self, *(card for card in self.session_cards.values() if not card.closed)]
 
-        Qt has no "sticky" window flag, and Mutter/Muffin drop "above" now and then, so this
-        re-asserts the EWMH state with wmctrl every few seconds.
+    def apply_window_hints(self) -> bool:
+        """X11 only: keep the widget and cards above, on every workspace, off the taskbar.
+
+        Talks EWMH directly through libX11 (see ai_agent_status_lib.x11_hints); falls back to
+        wmctrl when libX11 cannot be loaded. Returns False (stopping the timer) off X11.
         """
+        if self.closing or QGuiApplication.platformName() != "xcb":
+            return False
+        if not self.x11_checked:
+            self.x11_checked = True
+            self.x11 = x11_hints.X11Hints.open(log)
+            if self.x11 is None:
+                log("libX11 not available: keeping windows on top with wmctrl")
+        if self.x11 is None:
+            return self.apply_wmctrl_hints()
+        for window in self.x11_windows():
+            if not window.isVisible():
+                continue
+            try:
+                self.x11.apply(int(window.winId()))
+            except Exception as error:  # never let a window-manager hint take the widget down
+                log(f"X11 hints failed: {error}")
+                return False
+        return True
+
+    def apply_wmctrl_hints(self) -> bool:
+        """Fallback for apply_window_hints(): the same EWMH state requests through wmctrl."""
         if self.closing or QGuiApplication.platformName() != "xcb":
             return False
         wmctrl = shutil.which("wmctrl")

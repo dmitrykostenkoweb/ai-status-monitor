@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "bin"))
 from ai_agent_status_lib import platform_support  # noqa: E402
 from ai_agent_status_lib import process_control  # noqa: E402
 from ai_agent_status_lib import window_switch  # noqa: E402
+from ai_agent_status_lib import x11_hints  # noqa: E402
 from ai_agent_status_lib.env_config import DEFAULT_VALUES  # noqa: E402
 from ai_agent_status_lib.env_config import load_settings  # noqa: E402
 from ai_agent_status_lib.env_config import platform_default_values  # noqa: E402
@@ -171,6 +172,73 @@ class WindowSwitchTests(unittest.TestCase):
                                return_value=subprocess.CompletedProcess([], 0, stdout="none\n", stderr="")):
             self.assertFalse(window_switch.switch_to_session("p", "", [1], platform="macos", log=logs.append))
         self.assertTrue(logs)
+
+
+class FakeX11:
+    """Records the libX11 calls X11Hints makes."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.names: dict[int, str] = {}
+
+    def XDefaultRootWindow(self, _display):  # noqa: N802 - libX11 name
+        return 1
+
+    def XInternAtom(self, _display, name, _only_if_exists):  # noqa: N802
+        atom = 100 + len(self.names)
+        self.names[atom] = name.decode()
+        return atom
+
+    def XSendEvent(self, _display, root, _propagate, mask, event):  # noqa: N802
+        message = event._obj.xclient
+        self.calls.append(("send", root, mask, message.window, self.names[message.message_type],
+                           [self.names.get(value, value) for value in message.data]))
+
+    def XDeleteProperty(self, _display, window, prop):  # noqa: N802
+        self.calls.append(("delete", window, prop))
+
+    def XChangeProperty(self, _display, window, prop, kind, fmt, mode, data, count):  # noqa: N802
+        self.calls.append(("change", window, self.names[prop], [self.names[data[i]] for i in range(count)]))
+
+    def XFlush(self, _display):  # noqa: N802
+        self.calls.append(("flush",))
+
+    def XCloseDisplay(self, _display):  # noqa: N802
+        self.calls.append(("close",))
+
+
+class X11HintsTests(unittest.TestCase):
+    def test_apply_matches_gtk_window_shape_and_requests_states(self) -> None:
+        fake = FakeX11()
+        hints = x11_hints.X11Hints(fake, 7, lambda _m: None)
+        hints.apply(0x400007)
+        self.assertEqual(fake.calls[0], ("delete", 0x400007, x11_hints.XA_WM_TRANSIENT_FOR))
+        self.assertEqual(fake.calls[1], ("change", 0x400007, "_NET_WM_WINDOW_TYPE", ["_NET_WM_WINDOW_TYPE_UTILITY"]))
+        sends = [call for call in fake.calls if call[0] == "send"]
+        requested = {name for call in sends if call[4] == "_NET_WM_STATE" for name in call[5][1:3]}
+        self.assertEqual(requested, set(x11_hints.STATES))
+        self.assertTrue(all(call[1] == 1 and call[3] == 0x400007 for call in sends))
+        self.assertTrue(all(call[2] == x11_hints.SUBSTRUCTURE_REDIRECT_MASK | x11_hints.SUBSTRUCTURE_NOTIFY_MASK
+                            for call in sends))
+        desktop = [call for call in sends if call[4] == "_NET_WM_DESKTOP"]
+        self.assertEqual(desktop[0][5][0], ctypes_long(x11_hints.ALL_DESKTOPS))
+        self.assertEqual(fake.calls[-1], ("flush",))
+
+        # The window type is set once; the state requests repeat on every call.
+        fake.calls.clear()
+        hints.apply(0x400007)
+        self.assertNotIn("delete", [call[0] for call in fake.calls])
+        hints.forget(0x400007)
+        hints.apply(0x400007)
+        self.assertIn("delete", [call[0] for call in fake.calls])
+        hints.close()
+        self.assertEqual(fake.calls[-1], ("close",))
+
+
+def ctypes_long(value: int) -> int:
+    import ctypes
+
+    return ctypes.c_long(value).value
 
 
 class KeychainTests(unittest.TestCase):

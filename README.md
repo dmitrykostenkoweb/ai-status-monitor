@@ -62,7 +62,7 @@ The installer itself is `install.py` (Python 3.9+, cross-platform); `install.sh`
 
 - Python 3.9+ (the hook and helpers use only the standard library).
 - The widget UI uses **PySide6** (Qt). If the Python running the installer cannot import it, the installer creates a private venv in the data directory (`<data dir>/venv`) and installs `PySide6-Essentials` there. This is a one-time download of about 100 MB. Set `AI_STATUS_WIDGET_PYTHON=/path/to/python` to use your own interpreter, or `AI_STATUS_SKIP_PIP=1` to skip the download (hooks and status files work without Qt).
-- Linux: `wmctrl` (always-on-top on every workspace, `→` window switch) and `libxcb-cursor0` (needed by Qt 6.5+ on X11). On Debian/Ubuntu/Mint, `python3-venv` lets the installer create the venv: `sudo apt install python3-venv libxcb-cursor0 wmctrl`.
+- Linux: `wmctrl` (the `→` window switch, and a fallback for always-on-top) and `libxcb-cursor0` (needed by Qt 6.5+ on X11). On Debian/Ubuntu/Mint, `python3-venv` lets the installer create the venv: `sudo apt install python3-venv libxcb-cursor0 wmctrl`.
 
 ### macOS and Windows
 
@@ -371,10 +371,10 @@ The `claude.json` and `codex.json` files still point to the latest status of eac
 
 The widget plays `notification.mp3` only when entering a state that requires your interaction, e.g. waiting for approval or waiting for a reply. If you hear no sound, check `~/.cache/ai-cli-status-monitor/widget.log`; the widget uses whatever player is available: `afplay` on macOS, PowerShell (Windows Media Player engine) on Windows, and on Linux `mpv`, `ffplay`, `mpg123`, `gst-play-1.0` or `paplay`.
 
-If the widget is not above all windows on Linux, check:
+If the widget is not above all windows on Linux, check that it runs on X11 (`(xcb)` in the log). Full-screen windows (videos, presentations) still cover it, by design of the window manager.
 
 ```bash
-command -v wmctrl
+grep "widget started" ~/.cache/ai-cli-status-monitor/widget.log | tail -1
 ```
 
 If the widget does not start on Linux with `Could not load the Qt platform plugin "xcb"` (or the doctor reports it), install `libxcb-cursor0`.
@@ -386,7 +386,7 @@ If the widget does not start on Linux with `Could not load the Qt platform plugi
 - The `waiting for you` status depends on the available notification, stop and permission events.
 - Usage-limit integrations are best-effort and may temporarily show `Unavailable` if Claude or Codex changes its private local/API data shape.
 - Claude usage requires an active Claude Code OAuth login; API-key spend and billing limits are outside this widget's scope.
-- Always-on-top works on every OS. Staying visible on *every* workspace/desktop is enforced only on Linux/X11 (via `wmctrl`). On macOS and Windows the widget stays on the desktop/Space where it was opened.
+- Always-on-top works on every OS. Staying visible on *every* workspace/desktop is enforced only on Linux/X11, where the widget re-asserts "above" and "all workspaces" every second (Cinnamon/Muffin and GNOME/Mutter drop "above" now and then). On macOS and Windows the widget stays on the desktop/Space where it was opened.
 - On Wayland the widget runs through XWayland when `libxcb-cursor0` is installed, because Wayland does not let apps place their own windows (docked session windows, sticker overlay).
 - Each AI session has its own row. Session identity comes from `session_id` (Claude). When it is missing (Codex), it comes from the terminal: the POSIX session leader (the terminal's shell) on Linux/macOS, or the console window on Windows. So one session = one stable row, even without `session_id`.
 - The `→` switch matches a window by the terminal process PID:

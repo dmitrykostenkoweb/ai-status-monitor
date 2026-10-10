@@ -175,12 +175,24 @@ class WidgetStickerTests(unittest.TestCase):
             # wmctrl must address this widget by window id, never by a title substring
             # that a terminal ("... AI Agents Status ...") could also match.
             calls = []
+            real_run = module["subprocess"].run
+            real_which = module["shutil"].which
             module["shutil"].which = lambda name: "/usr/bin/" + name
             module["subprocess"].run = lambda args, **kwargs: calls.append(args)
             assert widget.apply_wmctrl_hints() is True
             window_id = widget.own_window_id()
             assert window_id and window_id.startswith("0x"), window_id
             assert calls[-1][1:4] == ["-i", "-r", window_id], calls[-1]
+            module["subprocess"].run = real_run
+
+            # Without wmctrl, libX11 gives the window GTK's shape: UTILITY, not transient.
+            assert widget.apply_window_hints() is True
+            assert widget.x11 is not None
+            if real_which("xprop"):
+                props = real_run(["xprop", "-id", window_id, "WM_TRANSIENT_FOR", "_NET_WM_WINDOW_TYPE"],
+                                 capture_output=True, text=True).stdout
+                assert "WM_TRANSIENT_FOR:  not found" in props, props
+                assert "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_UTILITY" in props, props
 
             # Hover: a leave event while the pointer is still on the row must not tuck.
             overlay = widget.sticker_overlay

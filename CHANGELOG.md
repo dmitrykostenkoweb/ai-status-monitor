@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux: the Qt widget and session windows stay on top again (and on every workspace, off the taskbar). The widget now gives its X11 windows the same shape as the old GTK widget did, through libX11 directly instead of `wmctrl`: UTILITY window type, not transient for the application's group. It re-asserts "above" every second, because Muffin/Mutter drop it now and then. Before, the state was only re-asserted every 4 s through `wmctrl`, and never when `wmctrl` was missing.
+
 ### Changed
 
 - **The widget now runs on Linux, macOS and Windows.** It was rewritten from GTK3/PyGObject to Qt (PySide6) and keeps the same look and features: rows and session windows, GIF stickers with speech bubbles, usage limits, Settings, the KLIPY key guide, the `→` window switch, sounds and self-update. KLIPY media is still decoded from memory only (`QBuffer` → `QMovie`) and never written to disk.
