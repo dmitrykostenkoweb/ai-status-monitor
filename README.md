@@ -56,14 +56,32 @@ cp .env.default .env
 ./install.sh
 ```
 
+The installer itself is `install.py` (Python 3.9+, cross-platform); `install.sh` only adds the `curl | bash` bootstrap on Linux and macOS.
+
+### macOS and Windows
+
+> **Status:** the hooks, status files, panel, doctor, updater and autostart work on Linux, macOS and Windows. The floating widget UI is GTK-based and is currently supported on Linux only; a cross-platform Qt (PySide6) widget is in progress.
+
+macOS uses the same commands and directories as Linux (`~/.local/bin`, `~/.cache`, `~/.config`, `~/.local/share`). Autostart is a LaunchAgent (`~/Library/LaunchAgents/com.github.ai-cli-status-monitor.widget.plist`), and Claude usage limits are read from the login Keychain (`Claude Code-credentials`).
+
+Windows (PowerShell; needs [Python 3.9+](https://www.python.org/downloads/) and, without a checkout, Git):
+
+```powershell
+irm https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/install.ps1 | iex
+# or, from a clone:
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+On Windows the scripts go to `%LOCALAPPDATA%\ai-cli-status-monitor\bin` (with `.cmd` wrappers such as `ai-agent-status-doctor.cmd`). The cache and data directories are under `%LOCALAPPDATA%\ai-cli-status-monitor`, and the runtime `.env` is in `%APPDATA%\ai-cli-status-monitor`. Autostart uses the `HKCU\…\Run` registry key. The hooks are written as `"<python.exe>" "<bin>/ai-agent-status-hook" --agent claude|codex`.
+
 The installer is idempotent, so re-running it (or `ai-agent-status-update`) safely refreshes an existing install and restarts the widget.
 
 The installer tries to configure the hooks automatically:
 
 - Claude Code: `~/.claude/settings.json`
 - Codex CLI: `~/.codex/hooks.json`
-- autostart: `~/.config/autostart/ai-cli-status-widget.desktop`
-- launcher in the Cinnamon menu: `AI CLI Status Widget`
+- autostart: `~/.config/autostart/ai-cli-status-widget.desktop` (Linux), a LaunchAgent (macOS), the `HKCU` Run key (Windows)
+- launcher in the Cinnamon menu (Linux): `AI CLI Status Widget`
 - launcher icon: `~/.local/share/pixmaps/ai-cli-status-widget.png`
 - notification sound: `~/.local/share/ai-cli-status-monitor/notification.mp3`
 - OpenAI/Codex logo: `~/.local/share/ai-cli-status-monitor/openai-logo.svg`
@@ -184,7 +202,7 @@ The widget knows its own version (see `VERSION`) and can update itself from GitH
 
 A few seconds after startup the widget makes a single, best-effort request to GitHub for the latest published `VERSION`. If it is newer, an `update ↑` pill appears in the header and an `Update to …` entry is added to the right-click menu — clicking either runs `ai-agent-status-update` for you. If you are offline the check silently does nothing.
 
-`ai-agent-status-update` pulls the source clone recorded at install time (`~/.local/share/ai-cli-status-monitor/install_source`), or clones a fresh copy into `~/.local/share/ai-cli-status-monitor/src` if none is found, then re-runs `install.sh` (which restarts the widget).
+`ai-agent-status-update` pulls the source clone recorded at install time (`~/.local/share/ai-cli-status-monitor/install_source`), or clones a fresh copy into `~/.local/share/ai-cli-status-monitor/src` if none is found, then re-runs `install.py` (which restarts the widget).
 
 The repository is configurable for forks/mirrors via `AI_STATUS_UPDATE_REPO` (`owner/repo`) and `AI_STATUS_UPDATE_BRANCH`.
 

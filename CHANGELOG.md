@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Cross-platform groundwork for macOS and Windows (stage 1 of the port). The new `install.py` installer works on Linux, macOS and Windows. `install.sh` is now a thin `curl | bash` bootstrap around it, and the new `install.ps1` does the same on Windows. Autostart uses a `.desktop` file (Linux), a LaunchAgent (macOS) or the `HKCU` Run key (Windows).
+- `ai_agent_status_lib/platform_support.py` holds the OS-specific parts: default directories (`AppData` on Windows), the process-ancestor chain (`/proc`, `ps`, Toolhelp32), the per-terminal session key (`getsid` or the Windows console window), the sound player (`afplay`/PowerShell), opening files and URLs, and detached processes.
+- `ai_agent_status_lib/window_switch.py`: the `→` window switch now has a macOS path (System Events) and a Windows path (`EnumWindows` + `SetForegroundWindow`) next to `wmctrl`.
+- On macOS, Claude usage limits are read from the login Keychain when `~/.claude/.credentials.json` is absent.
+
+### Changed
+
+- `ai-agent-status-widget-start`, `-stop`, `-panel` and `-update` are now Python scripts, so they also run on Windows and with macOS's Bash 3.2.
+- The hook reads stdin as UTF-8 on every platform, and on Windows it also records `console_window`.
+- The installer backs up `~/.claude/settings.json` / `~/.codex/hooks.json` only when it actually changes them.
+
 ## [0.3.8] - 2026-10-09
 
 ### Reverted

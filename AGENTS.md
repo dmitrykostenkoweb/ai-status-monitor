@@ -2,16 +2,16 @@
 
 ## Project Structure & Module Organization
 
-This repository is a Linux desktop status monitor for Claude Code and Codex CLI. Executable entry points live in `bin/`: the hook records agent events, the GTK3 widget displays them, the panel prints terminal output, and the doctor validates an installation. Start/stop helpers manage the widget process; `ai-agent-status-update` handles GitHub-based updates; `ai-agent-status-env` reads runtime settings.
+This repository is a desktop status monitor for Claude Code and Codex CLI (Linux; macOS/Windows port in progress — OS-specific code lives in `bin/ai_agent_status_lib/platform_support.py` and `window_switch.py`). Executable entry points live in `bin/`: the hook records agent events, the GTK3 widget displays them, the panel prints terminal output, and the doctor validates an installation. Start/stop helpers manage the widget process; `ai-agent-status-update` handles GitHub-based updates; `ai-agent-status-env` reads runtime settings.
 
-Shared Python code belongs in `bin/ai_agent_status_lib/`, including environment loading, status models, update checks, and provider usage-limit collection. Standard-library tests live in `tests/`. Static images and sounds live in `assets/`, hook examples in `examples/`, and specifications in `openspec/specs/`. `install.sh` installs files, `.env.default` documents configuration, and `VERSION` identifies releases.
+Shared Python code belongs in `bin/ai_agent_status_lib/`, including environment loading, status models, update checks, and provider usage-limit collection. Standard-library tests live in `tests/`. Static images and sounds live in `assets/`, hook examples in `examples/`, and specifications in `openspec/specs/`. `install.py` installs files on every OS (`install.sh` / `install.ps1` are bootstrap wrappers), `.env.default` documents configuration, and `VERSION` identifies releases.
 
 ## Build, Test, and Development Commands
 
 There is no package-manager build. Run these checks from the repository root:
 
 ```bash
-python3 -m py_compile bin/ai-agent-status-hook bin/ai-agent-status-widget \
+python3 -m py_compile install.py bin/ai-agent-status-hook bin/ai-agent-status-widget \
   bin/ai-agent-status-doctor bin/ai_agent_status_lib/*.py
 python3 -m unittest discover -s tests -v
 AI_STATUS_CACHE_DIR="$(mktemp -d)" bin/ai-agent-status-hook --agent codex --test

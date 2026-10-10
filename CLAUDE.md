@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A lightweight local status monitor for **Claude Code CLI** and **Codex CLI** on Linux Mint / Cinnamon. CLI hooks emit JSON events; a small GTK3 floating widget shows the latest known status of each agent. Pure Python 3 + GTK3/PyGObject + Bash — no Electron, no web server, no daemon. User-facing strings and docs are in **English**. Network access is limited to the best-effort GitHub update check (see "Distribution & updates" below) and the opt-in KLIPY GIF search for stickers; everything else is local.
+A lightweight local status monitor for **Claude Code CLI** and **Codex CLI**, originally for Linux Mint / Cinnamon and being ported to **macOS and Windows** (stage 1 done: hooks, helpers, installer and OS plumbing are cross-platform; the GTK widget UI is still Linux-only until the PySide6 rewrite). CLI hooks emit JSON events; a small GTK3 floating widget shows the latest known status of each agent. Pure Python 3 + GTK3/PyGObject + Bash — no Electron, no web server, no daemon. User-facing strings and docs are in **English**. Network access is limited to the best-effort GitHub update check (see "Distribution & updates" below) and the opt-in KLIPY GIF search for stickers; everything else is local.
 
 ## Commands
 
@@ -12,11 +12,15 @@ There is no build step or package manager. The scripts in `bin/` run directly.
 
 ```bash
 # Syntax-check the Python scripts (the only "build" gate)
-python3 -m py_compile bin/ai-agent-status-hook bin/ai-agent-status-widget bin/ai-agent-status-doctor bin/ai_agent_status_lib/*.py
-bash -n install.sh bin/ai-agent-status-env bin/ai-agent-status-panel bin/ai-agent-status-update bin/ai-agent-status-widget-*
+python3 -m py_compile install.py bin/ai-agent-status-hook bin/ai-agent-status-widget bin/ai-agent-status-doctor \
+  bin/ai-agent-status-panel bin/ai-agent-status-update bin/ai-agent-status-widget-start bin/ai-agent-status-widget-stop \
+  bin/ai_agent_status_lib/*.py
+bash -n install.sh bin/ai-agent-status-env
 
-# Install / refresh into ~/.local, ~/.config, ~/.cache (idempotent; merges hooks, backs up configs)
-./install.sh
+# Install / refresh (idempotent; merges hooks, backs up configs). install.py is the
+# real installer on every OS; install.sh / install.ps1 are bootstrap wrappers.
+./install.sh        # Linux/macOS
+python install.py   # any OS
 
 # Run the widget UI directly from the repo (requires GTK deps installed)
 bin/ai-agent-status-widget --demo        # rotating fake statuses, no hooks needed
@@ -55,7 +59,9 @@ Unit tests use stdlib `unittest`: `python3 -m unittest discover -s tests` (GTK t
 
 5. **Session windows** (`AI_STATUS_SESSION_WINDOWS`, default on): `sync_session_cards()` keeps one `SessionCard` (undecorated, sticky, keep-above toplevel titled `AI agent session` — deliberately not containing the widget title) per visible session, built from the same `build_row()` (animated parts register in the card's own lists, which `tick_animation` also drives). Each card owns a `StickerOverlay` that stays up while the session works/waits, re-picks on a sticker-key change, every `AI_STATUS_STICKER_ROTATE_SECONDS` (default 120, 0 = off) and on the card's `Show another GIF` menu item, and tucks on done/idle. Docked cards stack under the widget in first-seen order (`layout_cards`, re-run on widget move/resize); dragging makes a card floating and saves its position to `<config>/session_windows.json` (14-day TTL). The main card then shows only header + usage — the body is always collapsed, and there is no intro splash or idle lockup in this mode (both exist only in the classic list). `apply_wmctrl_hints` re-asserts sticky/above for every card by window id.
 
-6. **Helpers (Bash):** `*-start` / `*-stop` manage the process via `widget.pid`; `ai-agent-status-panel` dumps `combined.txt` for debugging. All source `ai-agent-status-env` from the same installed `bin` directory.
+6. **Helpers (Python):** `*-start` / `*-stop` manage the process via `widget.pid` (`ai_agent_status_lib/process_control.py`); `ai-agent-status-panel` dumps `combined.txt` for debugging; `ai-agent-status-update` pulls the source clone and re-runs `install.py`. They add their own directory to `sys.path`. The Bash `ai-agent-status-env` loader is still installed on Linux/macOS for user scripts but no shipped helper uses it.
+
+7. **Platform layer:** everything OS-specific lives in `ai_agent_status_lib/platform_support.py` (default dirs — XDG layout on Linux *and* macOS, `AppData` on Windows; process ancestry via `/proc`, `ps` or Toolhelp32; `terminal_session_key()` = `getsid` or the Windows console HWND; sound player; `open_path`; detached/hidden-window `Popen` flags; PID liveness) and `window_switch.py` (`wmctrl` / AppleScript System Events / Win32 `EnumWindows`). `process_control.hook_command()` builds the hook command string: on POSIX it keeps the historical bare `<bin>/ai-agent-status-hook --agent X` shape so re-installs stay idempotent; on Windows it is `"<python.exe>" "<bin>/ai-agent-status-hook" --agent X`. Keep new OS-dependent code there, GUI-toolkit free and unit-testable with injected runners.
 
 ### The cross-file contract: the structured `kind`, not the display string
 
@@ -64,6 +70,8 @@ The data contract between the two halves is the structured **`kind`** field, not
 `classify_status_text()` in `status_model.py` is only a **fallback** for legacy cache records written before `kind` existed; it recognizes both the current English strings (`thinking`, `coding`, `waiting`, `done`, `no new events`, …) and the old Polish stems (`myśl`, `koduje`, `czeka`/`zgod`, `kończył`, `brak nowych`, `błąd`, …), so old `~/.cache` files still classify. If you add a **new** `StatusKind`, update `STATUS_KINDS`, the `IN_PROGRESS_KINDS`/`INACTIVE_KINDS` sets, and `STATE_COLORS` together.
 
 ### Filesystem layout (runtime)
+
+Paths below are the Linux/macOS defaults; Windows uses `%LOCALAPPDATA%\ai-cli-status-monitor\{cache,data,bin}` and `%APPDATA%\ai-cli-status-monitor` for config.
 
 - `~/.cache/ai-cli-status-monitor/` — `statuses/`, `last_payloads/`, `debug_payloads/`, `combined.txt`, `<agent>.json`, `widget.log`, `widget.pid` (path configurable).
 - `~/.config/ai-cli-status-monitor/.env` — installed runtime configuration, created with mode `0600` and preserved on reinstall.
@@ -74,12 +82,13 @@ The data contract between the two halves is the structured **`kind`** field, not
 
 ### Distribution & updates
 
-Shipped via **public GitHub**, versioned by the repo-root `VERSION` file (semver). `install.sh` copies `VERSION` and records where it ran from (`install_source`); when piped through `curl … | bash` it self-bootstraps by cloning into `~/.local/share/.../src` and re-execing. `ai-agent-status-update` pulls that clone (or reclones) and re-runs the idempotent `install.sh`, which now **restarts** the widget so updates take effect. The widget's startup check and the updater both read `AI_STATUS_UPDATE_REPO` (`owner/repo`, default `dmitrykostenkoweb/ai-status-monitor`) and `AI_STATUS_UPDATE_BRANCH` (default `main`), comparing versions via `updates.parse_version` (tuple compare; garbage → `()` sorts lowest). **Bump `VERSION` when publishing** or clients won't see the update.
+Shipped via **public GitHub**, versioned by the repo-root `VERSION` file (semver). `install.py` copies `VERSION` and records where it ran from (`install_source`); `install.sh` (and `install.ps1` on Windows), when run without a checkout, self-bootstraps by cloning into `<data>/src` and running its `install.py`. `ai-agent-status-update` pulls that clone (or reclones) and re-runs the idempotent `install.py`, which **restarts** the widget so updates take effect. Autostart: `.desktop` (Linux), LaunchAgent `com.github.ai-cli-status-monitor.widget` (macOS), `HKCU\…\Run\ai-cli-status-monitor` (Windows). The widget's startup check and the updater both read `AI_STATUS_UPDATE_REPO` (`owner/repo`, default `dmitrykostenkoweb/ai-status-monitor`) and `AI_STATUS_UPDATE_BRANCH` (default `main`), comparing versions via `updates.parse_version` (tuple compare; garbage → `()` sorts lowest). **Bump `VERSION` when publishing** or clients won't see the update.
 
 ## Conventions & constraints
 
 - **Keep it lightweight — no background services or new runtime dependencies.** The value proposition is "lightweight local, no daemon". The **one** sanctioned network call is the best-effort GitHub update check (`ai_agent_status_lib/updates.py`, `ai-agent-status-update`): a single request on a short-lived daemon thread at startup, fully failure-tolerant (offline = silent no-op). The **only other** sanctioned network access is the opt-in KLIPY GIF search for stickers (`ai_agent_status_lib/stickers.py`): it runs only when the user has set `AI_STATUS_KLIPY_API_KEY` and Serious mode is off, only on a sticker-status change, on a short-lived worker thread, with search results (URL lists) reused for 1 h. Per KLIPY's integration requirements, media is loaded directly from the returned `*.klipy.com` URL into memory (`GdkPixbuf.PixbufLoader`) and **must never be written to disk, mirrored or re-hosted** — do not reintroduce a media cache (the widget deletes the legacy `<cache>/stickers/` dir at startup). Results must not be reordered/filtered beyond picking one; any failure falls back to the local GIF pool. Never log the KLIPY key (it is part of the request URL). The in-app `KlipyKeyGuide` (Settings → `Get a free key…`, or the right-click menu while no key is set) shows copy-ready platform details (`KLIPY_GUIDE_*`) and saves a pasted key only after `verify_klipy_key()` — one user-initiated test search: HTTP 404/`result:false` → invalid, 429 → rate limited, URLError → offline. Do not add other network calls or a polling loop. (cairo is used only when present and degrades gracefully; `wmctrl` is already required for always-on-top and is reused for the `→` window switch.)
-- **`install.sh` must preserve user config**: merge or back up (`*.bak.<timestamp>`) files under `~/.claude`, `~/.codex`, `~/.config/ai-cli-status-monitor`; never overwrite silently. Hook merging is idempotent (skips an already-present command).
+- **`install.py` must preserve user config**: merge or back up (`*.bak.<timestamp>`) files under `~/.claude`, `~/.codex`, `~/.config/ai-cli-status-monitor`; never overwrite silently. Hook merging is idempotent (skips an already-present command).
 - The hook is defensive by design — keep it from raising on bad input.
+- Python 3.9+ on every OS (no POSIX-only calls outside `platform_support.py`; read/write text as UTF-8 explicitly).
 - Python: 4-space indent, `snake_case`, uppercase path/default constants, type hints where useful, scripts self-contained and executable. Bash: `set -euo pipefail`, quote path vars.
-- `.env.default`, `DEFAULT_VALUES` in `env_config.py`, and defaults in `ai-agent-status-env` must stay in sync.
+- `.env.default`, `DEFAULT_VALUES` in `env_config.py`, and defaults in `ai-agent-status-env` must stay in sync (Windows directory defaults come from `platform_support.default_dir_values()` via `platform_default_values()`).

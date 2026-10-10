@@ -4,25 +4,30 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ai_agent_status_lib import updates
-from ai_agent_status_lib.env_config import format_agents
-from ai_agent_status_lib.env_config import load_settings
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from ai_agent_status_lib import platform_support  # noqa: E402
+from ai_agent_status_lib import process_control  # noqa: E402
+from ai_agent_status_lib import updates  # noqa: E402
+from ai_agent_status_lib.env_config import format_agents  # noqa: E402
+from ai_agent_status_lib.env_config import load_settings  # noqa: E402
 
 CONFIG_WARNINGS: list[str] = []
 SETTINGS = load_settings(diagnostic=CONFIG_WARNINGS.append)
-HOME = Path.home()
-BIN = HOME / ".local" / "bin"
+PLATFORM = platform_support.PLATFORM
+HOME = platform_support.home_dir()
+BIN = platform_support.default_bin_dir(HOME)
 CACHE_DIR = SETTINGS.cache_dir
-AUTOSTART = HOME / ".config" / "autostart" / "ai-cli-status-widget.desktop"
 CLAUDE_SETTINGS = HOME / ".claude" / "settings.json"
 CODEX_HOOKS = HOME / ".codex" / "hooks.json"
 CODEX_STATUS = CACHE_DIR / "codex.json"
 STATUS_DIR = CACHE_DIR / "statuses"
-HOOK_CLAUDE = f"{BIN}/ai-agent-status-hook --agent claude"
-HOOK_CODEX = f"{BIN}/ai-agent-status-hook --agent codex"
+HOOK_CLAUDE = process_control.hook_command(BIN, "claude")
+HOOK_CODEX = process_control.hook_command(BIN, "codex")
 STALE_AFTER = timedelta(seconds=SETTINGS.stale_after_seconds)
 
 
@@ -76,8 +81,30 @@ def test_mode_writes_status() -> bool:
     hook = BIN / "ai-agent-status-hook"
     if not hook.exists():
         return False
-    result = subprocess.run([str(hook), "--agent", "codex", "--test"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = subprocess.run(
+        process_control.script_argv(hook, "--agent", "codex", "--test"),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **platform_support.hidden_window_flags(),
+    )
     return result.returncode == 0 and (CACHE_DIR / "combined.txt").exists()
+
+
+def autostart_installed() -> tuple[bool, str]:
+    if PLATFORM == platform_support.WINDOWS:
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
+                winreg.QueryValueEx(key, "ai-cli-status-monitor")
+            return True, "Autostart installed (HKCU Run key)"
+        except OSError:
+            return False, "Autostart Run key missing"
+    if PLATFORM == platform_support.MACOS:
+        plist = HOME / "Library" / "LaunchAgents" / "com.github.ai-cli-status-monitor.widget.plist"
+        return plist.exists(), "Autostart installed (LaunchAgent)" if plist.exists() else "Autostart LaunchAgent missing"
+    desktop = HOME / ".config" / "autostart" / "ai-cli-status-widget.desktop"
+    return desktop.exists(), "Autostart installed" if desktop.exists() else "Autostart desktop file missing"
 
 
 def status_age(path: Path) -> timedelta | None:
@@ -120,7 +147,9 @@ def main() -> int:
     else:
         warn("Widget script missing")
 
-    if (BIN / "ai-agent-status-widget").is_file() and (BIN / "ai-agent-status-widget").stat().st_mode & 0o111:
+    if PLATFORM == platform_support.WINDOWS:
+        pass  # no executable bit; the .cmd shims and hooks call the interpreter explicitly
+    elif (BIN / "ai-agent-status-widget").is_file() and (BIN / "ai-agent-status-widget").stat().st_mode & 0o111:
         ok("Widget executable")
     else:
         warn("Widget is not executable")
@@ -141,10 +170,8 @@ def main() -> int:
     else:
         warn("Cache dir missing")
 
-    if AUTOSTART.exists():
-        ok("Autostart installed")
-    else:
-        warn("Autostart desktop file missing")
+    installed, label = autostart_installed()
+    (ok if installed else warn)(label)
 
     claude_events = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure")
     if CLAUDE_SETTINGS.exists() and has_hook(CLAUDE_SETTINGS, HOOK_CLAUDE, claude_events):
@@ -162,15 +189,18 @@ def main() -> int:
     else:
         warn("Codex hooks file not found")
 
-    if shutil.which("wmctrl"):
-        ok("wmctrl available")
-    else:
-        warn("wmctrl missing")
+    if PLATFORM == platform_support.LINUX:
+        if shutil.which("wmctrl"):
+            ok("wmctrl available")
+        else:
+            warn("wmctrl missing")
 
     if gtk_available():
         ok("GTK available")
-    else:
+    elif PLATFORM == platform_support.LINUX:
         warn("GTK missing: sudo apt install python3-gi gir1.2-gtk-3.0 wmctrl")
+    else:
+        warn("Widget UI is not available on this OS yet")
 
     age = latest_status_age("codex")
     if age is None:
