@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -11,8 +13,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _pyside6_importable() -> bool:
+    try:
+        import PySide6.QtWidgets  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+GUI_TESTS_AVAILABLE = bool(shutil.which("xvfb-run")) and _pyside6_importable()
+
+
 class WidgetAnimationTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("xvfb-run"), "xvfb-run is required")
+    @unittest.skipUnless(GUI_TESTS_AVAILABLE, "xvfb-run and PySide6 are required")
     def test_provider_refresh_uses_dedicated_30_fps_timer_and_resets(self) -> None:
         probe = textwrap.dedent(
             """
@@ -43,15 +56,24 @@ class WidgetAnimationTests(unittest.TestCase):
             assert widget.usage_animation_source_id == demo_source_id
             widget.apply_demo_usage_state(0)
             assert widget.usage_animation_source_id is None
-            widget.destroy()
+            widget.shutdown()
             """
         )
-        completed = subprocess.run(
-            ["xvfb-run", "-a", sys.executable, "-c", probe],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("AI_STATUS_")}
+            environment.update({
+                "AI_STATUS_ENV_FILE": str(Path(directory) / ".env"),
+                "AI_STATUS_CACHE_DIR": str(Path(directory) / "cache"),
+                "AI_STATUS_CONFIG_DIR": str(Path(directory) / "config"),
+                "AI_STATUS_DATA_DIR": str(ROOT / "assets"),
+            })
+            completed = subprocess.run(
+                ["xvfb-run", "-a", sys.executable, "-c", probe],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)

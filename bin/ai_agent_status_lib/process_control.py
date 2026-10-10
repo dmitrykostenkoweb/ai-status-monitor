@@ -2,13 +2,18 @@
 
 Used by ``ai-agent-status-widget-start`` / ``-stop``, the installer (which restarts
 the widget after an install or update) and the widget's own self-update button.
-POSIX runs the scripts through their ``#!/usr/bin/env python3`` shebang; Windows has
-no shebangs, so each script runs as ``python.exe <script>`` (``pythonw.exe`` for
-the GUI, so no console window appears).
+POSIX runs the helper scripts through their ``#!/usr/bin/env python3`` shebang;
+Windows has no shebangs, so each script runs as ``python.exe <script>``.
+
+The widget needs PySide6, which the installer may have put into a private venv
+(``<data>/venv``). The installer records both interpreters in
+``<data>/interpreters.json`` — ``base`` (runs the hook and helpers) and ``widget``
+(can import PySide6) — and everything that launches the widget reads it from there.
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +22,37 @@ from ai_agent_status_lib import platform_support
 
 WIDGET_SCRIPT = "ai-agent-status-widget"
 HOOK_SCRIPT = "ai-agent-status-hook"
+
+
+INTERPRETERS_FILE = "interpreters.json"
+
+
+def load_interpreters(data_dir: Path) -> dict[str, str]:
+    try:
+        loaded = json.loads((data_dir / INTERPRETERS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {key: value for key, value in loaded.items() if isinstance(value, str) and Path(value).exists()}
+
+
+def save_interpreters(data_dir: Path, base: str, widget: str | None) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    values = {"base": base}
+    if widget:
+        values["widget"] = widget
+    (data_dir / INTERPRETERS_FILE).write_text(json.dumps(values, indent=2) + "\n", encoding="utf-8")
+
+
+def base_interpreter(data_dir: Path) -> str:
+    """The interpreter for the hook and helper scripts (no GUI toolkit needed)."""
+    return load_interpreters(data_dir).get("base") or sys.executable
+
+
+def widget_interpreter(data_dir: Path) -> str:
+    """The interpreter that can run the Qt widget (``pythonw.exe`` on Windows)."""
+    return platform_support.gui_python(load_interpreters(data_dir).get("widget") or sys.executable)
 
 
 def script_argv(script: Path, *args: str, gui: bool = False, platform: str | None = None,
@@ -62,12 +98,17 @@ def running_widget_pid(cache_dir: Path) -> int | None:
     return pid
 
 
-def start_widget(bin_dir: Path, cache_dir: Path, *extra_args: str) -> tuple[bool, str]:
+def widget_argv(bin_dir: Path, python: str, *extra_args: str) -> list[str]:
+    """argv that starts the widget with an explicit (possibly venv) interpreter."""
+    return [python, str(bin_dir / WIDGET_SCRIPT), *extra_args]
+
+
+def start_widget(bin_dir: Path, cache_dir: Path, *extra_args: str, python: str | None = None) -> tuple[bool, str]:
     """Start the widget detached, unless it already runs. Returns ``(started, message)``."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     if running_widget_pid(cache_dir) is not None:
         return False, "ai-agent-status-widget is already running"
-    argv = script_argv(bin_dir / WIDGET_SCRIPT, *extra_args, gui=True)
+    argv = widget_argv(bin_dir, python or platform_support.gui_python(), *extra_args)
     with open(cache_dir / "widget.log", "a", encoding="utf-8") as log:
         process = subprocess.Popen(
             argv,

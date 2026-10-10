@@ -14,8 +14,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _pyside6_importable() -> bool:
+    try:
+        import PySide6.QtWidgets  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+GUI_TESTS_AVAILABLE = bool(shutil.which("xvfb-run")) and _pyside6_importable()
+
+
 class SessionWindowTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("xvfb-run"), "xvfb-run is required")
+    @unittest.skipUnless(GUI_TESTS_AVAILABLE, "xvfb-run and PySide6 are required")
     def test_each_session_gets_a_window_with_its_own_sticker(self) -> None:
         probe = textwrap.dedent(
             """
@@ -27,18 +38,17 @@ class SessionWindowTests(unittest.TestCase):
 
             sys.path.insert(0, "bin")
             module = runpy.run_path("bin/ai-agent-status-widget", run_name="session_windows_smoke")
-            GLib = module["GLib"]
+            process_events = module["process_events"]
             widget = module["StatusWidget"](demo=True)
-            widget.show_all()
+            widget.show()
             config_dir = Path(sys.argv[1])
 
             def pump(condition, seconds=3.0):
                 deadline = time.monotonic() + seconds
-                context = GLib.MainContext.default()
                 while time.monotonic() < deadline:
                     if condition():
                         return True
-                    context.iteration(False)
+                    process_events()
                     time.sleep(0.01)
                 return condition()
 
@@ -50,11 +60,11 @@ class SessionWindowTests(unittest.TestCase):
             assert widget.session_windows is True
             # Startup: only the usage panel; no intro splash and no idle lockup animation.
             assert widget.intro is False
-            assert not widget.body.get_visible() and widget.spinning == []
+            assert widget.body.isHidden() and widget.spinning == []
             current_sessions = []
             widget.collect_sessions = lambda: list(current_sessions)
             widget.refresh_status()
-            assert not widget.body.get_visible() and widget.spinning == []
+            assert widget.body.isHidden() and widget.spinning == []
 
             def sync(sessions):
                 # Keep the widget's own refreshes (e.g. after a settings change) in step.
@@ -63,8 +73,8 @@ class SessionWindowTests(unittest.TestCase):
             sync([session("a", "coding"), session("b", "waiting", "codex")])
             assert list(widget.session_cards) == ["a", "b"]
             card_a, card_b = widget.session_cards["a"], widget.session_cards["b"]
-            assert card_a.get_title() == "AI agent session"
-            assert "waiting" in card_b.card.get_style_context().list_classes()
+            assert card_a.windowTitle() == "AI agent session"
+            assert card_b.card.property("waiting") == "true"
 
             # every card picks its own sticker and keeps it up (no 4 s timeout)
             assert pump(lambda: card_a.overlay.visible and card_b.overlay.visible)
@@ -86,8 +96,7 @@ class SessionWindowTests(unittest.TestCase):
             assert pump(lambda: card_a.sticker_debounce is None and card_a.overlay.phase == "shown", 4)
 
             # docked cards stack under the widget in first-seen order
-            for _ in range(30):
-                GLib.MainContext.default().iteration(False)
+            process_events(0.3)
             widget.layout_cards()
             assert card_a.floating is False and card_b.floating is False
 
@@ -120,7 +129,7 @@ class SessionWindowTests(unittest.TestCase):
             # the classic list layout closes all session windows
             widget.update_setting("AI_STATUS_SESSION_WINDOWS", "false")
             assert widget.session_cards == {} and card_b.closed
-            widget.destroy()
+            widget.shutdown()
             """
         )
         with tempfile.TemporaryDirectory() as directory:

@@ -13,8 +13,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _pyside6_importable() -> bool:
+    try:
+        import PySide6.QtWidgets  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+GUI_TESTS_AVAILABLE = bool(shutil.which("xvfb-run")) and _pyside6_importable()
+
+
 class WidgetAgentFilterTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("xvfb-run"), "xvfb-run is required")
+    @unittest.skipUnless(GUI_TESTS_AVAILABLE, "xvfb-run and PySide6 are required")
     def test_agent_filter_hides_rows_usage_and_persists_menu_choice(self) -> None:
         probe = textwrap.dedent(
             """
@@ -43,7 +54,7 @@ class WidgetAgentFilterTests(unittest.TestCase):
             widget.set_agents(("claude", "codex"))
             assert {s["agent"] for s in widget.collect_sessions()} == {"claude", "codex"}
             assert set(widget.usage_logo_buttons) == {"claude", "codex"}
-            widget.destroy()
+            widget.shutdown()
             """
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -65,7 +76,7 @@ class WidgetAgentFilterTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
 
 
-    @unittest.skipUnless(shutil.which("xvfb-run"), "xvfb-run is required")
+    @unittest.skipUnless(GUI_TESTS_AVAILABLE, "xvfb-run and PySide6 are required")
     def test_settings_window_applies_and_saves_changes(self) -> None:
         probe = textwrap.dedent(
             """
@@ -84,19 +95,19 @@ class WidgetAgentFilterTests(unittest.TestCase):
             widget.open_settings()
             assert widget.settings_window is window
 
-            window.sound_switch.set_active(False)
+            window.sound_switch.setChecked(False)
             assert widget.config["sound_enabled"] is False
-            window.rows_spin.set_value(3)
+            window.rows_spin.setValue(3)
             assert widget.max_rows == 3
 
-            window.agent_checks["claude"].set_active(False)
+            window.agent_checks["claude"].setChecked(False)
             assert widget.agents == ("codex",)
-            window.agent_checks["codex"].set_active(False)
+            window.agent_checks["codex"].setChecked(False)
             assert widget.agents == ("codex",)
-            assert window.agent_checks["codex"].get_active() is True
+            assert window.agent_checks["codex"].isChecked() is True
 
             widget.set_agents(("claude", "codex"))
-            assert window.agent_checks["claude"].get_active() is True
+            assert window.agent_checks["claude"].isChecked() is True
 
             widget.update_setting("AI_STATUS_IDLE_AFTER_SECONDS", "90")
             assert widget.config["idle_after_seconds"] == 90
@@ -111,9 +122,9 @@ class WidgetAgentFilterTests(unittest.TestCase):
             ):
                 assert expected in lines, (expected, lines)
 
-            window.destroy()
+            window.close()
             assert widget.settings_window is None
-            widget.destroy()
+            widget.shutdown()
             """
         )
         with tempfile.TemporaryDirectory() as directory:

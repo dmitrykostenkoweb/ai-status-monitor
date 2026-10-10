@@ -2,13 +2,13 @@
 
 <img src="assets/lockup.gif" alt="AI Status Monitor lockup" width="100%" />
 
-A mini floating widget for Linux Mint / Cinnamon that shows the last known status of the Claude Code CLI and the Codex CLI.
+A mini floating widget for **Linux, macOS and Windows** that shows the last known status of the Claude Code CLI and the Codex CLI.
 
-It is a lightweight local tool: Python 3, GTK3/PyGObject and Bash. No Electron, no web server and no Docker. Network access is limited to the documented update check and Claude Code usage lookup.
+It is a lightweight local tool: Python 3 and Qt (PySide6). No Electron, no web server and no Docker. Network access is limited to the documented update check and Claude Code usage lookup.
 
 ## 1. What it is
 
-`ai-cli-status-monitor` hooks into the Claude Code and Codex CLIs, writes statuses to `~/.cache/ai-cli-status-monitor/`, and a small GTK widget reads the freshest entries and shows one or two lines of status.
+`ai-cli-status-monitor` hooks into the Claude Code and Codex CLIs, writes statuses to `~/.cache/ai-cli-status-monitor/`, and a small Qt widget reads the freshest entries and shows one or two lines of status.
 
 Example:
 
@@ -58,9 +58,13 @@ cp .env.default .env
 
 The installer itself is `install.py` (Python 3.9+, cross-platform); `install.sh` only adds the `curl | bash` bootstrap on Linux and macOS.
 
-### macOS and Windows
+### Requirements
 
-> **Status:** the hooks, status files, panel, doctor, updater and autostart work on Linux, macOS and Windows. The floating widget UI is GTK-based and is currently supported on Linux only; a cross-platform Qt (PySide6) widget is in progress.
+- Python 3.9+ (the hook and helpers use only the standard library).
+- The widget UI uses **PySide6** (Qt). If the Python running the installer cannot import it, the installer creates a private venv in the data directory (`<data dir>/venv`) and installs `PySide6-Essentials` there. This is a one-time download of about 100 MB. Set `AI_STATUS_WIDGET_PYTHON=/path/to/python` to use your own interpreter, or `AI_STATUS_SKIP_PIP=1` to skip the download (hooks and status files work without Qt).
+- Linux: `wmctrl` (always-on-top on every workspace, `→` window switch) and `libxcb-cursor0` (needed by Qt 6.5+ on X11). On Debian/Ubuntu/Mint, `python3-venv` lets the installer create the venv: `sudo apt install python3-venv libxcb-cursor0 wmctrl`.
+
+### macOS and Windows
 
 macOS uses the same commands and directories as Linux (`~/.local/bin`, `~/.cache`, `~/.config`, `~/.local/share`). Autostart is a LaunchAgent (`~/Library/LaunchAgents/com.github.ai-cli-status-monitor.widget.plist`), and Claude usage limits are read from the login Keychain (`Claude Code-credentials`).
 
@@ -89,10 +93,10 @@ The installer tries to configure the hooks automatically:
 - runtime configuration: `~/.config/ai-cli-status-monitor/.env`
 - window position and legacy-config compatibility: `~/.config/ai-cli-status-monitor/widget.json`
 
-If GTK or `wmctrl` are not available, the installer does not run `sudo`. It prints the command:
+The installer never runs `sudo`. If something is missing on Linux, it prints the command:
 
 ```bash
-sudo apt install python3-gi gir1.2-gtk-3.0 wmctrl
+sudo apt install python3-venv libxcb-cursor0 wmctrl
 ```
 
 ## 4. Running the widget
@@ -129,8 +133,8 @@ It checks:
 - the autostart desktop file
 - Claude hooks
 - Codex hooks
-- `wmctrl`
-- the GTK import
+- `wmctrl` and `libxcb-cursor0` (Linux)
+- that the widget's interpreter can import PySide6
 - the hook's test mode
 - the installed version and whether an update is available
 
@@ -142,7 +146,7 @@ The installer creates:
 ~/.config/autostart/ai-cli-status-widget.desktop
 ```
 
-The widget should start automatically after you log in to Cinnamon.
+The widget should start automatically after you log in. On macOS the installer adds a LaunchAgent (`~/Library/LaunchAgents/com.github.ai-cli-status-monitor.widget.plist`). On Windows it adds the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ai-cli-status-monitor` registry value, which starts the widget with `pythonw.exe`, so no console window appears.
 
 ## 7a. `.env` configuration
 
@@ -224,7 +228,7 @@ Provider failures are independent. When a refresh fails, an unexpired last-known
 
 **With session windows (default)** every session window carries its own sticker, sticking out of its top-right corner. It stays up while the session works or waits, gets a new GIF only when the sticker status changes (e.g. `coding` → `waiting`), and tucks away when the session is `done` or `idle`.
 
-**With the classic list**, a single sticker pops out of the widget's top-right corner when an agent's status changes, stays for 4 seconds and tucks away. `waiting` and `error` stickers stay until the status changes, because they need your attention. Hovering an agent row brings its last sticker back. The sticker lives in its own click-through window, so the widget never moves and clicks still reach the buttons underneath. It needs a compositing desktop (Cinnamon has one by default).
+**With the classic list**, a single sticker pops out of the widget's top-right corner when an agent's status changes, stays for 4 seconds and tucks away. `waiting` and `error` stickers stay until the status changes, because they need your attention. Hovering an agent row brings its last sticker back. The sticker lives in its own click-through window, so the widget never moves and clicks still reach the buttons underneath. It needs a compositing desktop (Cinnamon, GNOME, KDE, macOS and Windows have one by default).
 
 | Sticker | Shown for |
 |---|---|
@@ -365,13 +369,15 @@ With multiple consoles running, statuses are kept separately in:
 
 The `claude.json` and `codex.json` files still point to the latest status of each agent, for compatibility with older scripts.
 
-The widget plays `notification.mp3` only when entering a state that requires your interaction, e.g. waiting for approval or waiting for a reply. If you hear no sound, check `~/.cache/ai-cli-status-monitor/widget.log`; the widget uses whatever local player is available, e.g. `mpv`, `ffplay`, `mpg123`, `gst-play-1.0` or `paplay`.
+The widget plays `notification.mp3` only when entering a state that requires your interaction, e.g. waiting for approval or waiting for a reply. If you hear no sound, check `~/.cache/ai-cli-status-monitor/widget.log`; the widget uses whatever player is available: `afplay` on macOS, PowerShell (Windows Media Player engine) on Windows, and on Linux `mpv`, `ffplay`, `mpg123`, `gst-play-1.0` or `paplay`.
 
-If the widget is not above all windows, check:
+If the widget is not above all windows on Linux, check:
 
 ```bash
 command -v wmctrl
 ```
+
+If the widget does not start on Linux with `Could not load the Qt platform plugin "xcb"` (or the doctor reports it), install `libxcb-cursor0`.
 
 ## 11. Limitations
 
@@ -380,7 +386,12 @@ command -v wmctrl
 - The `waiting for you` status depends on the available notification, stop and permission events.
 - Usage-limit integrations are best-effort and may temporarily show `Unavailable` if Claude or Codex changes its private local/API data shape.
 - Claude usage requires an active Claude Code OAuth login; API-key spend and billing limits are outside this widget's scope.
-- Always-on-top and all-workspaces work best on X11/Cinnamon.
-- Wayland may limit the sticky/above/skip-taskbar behavior.
-- Each AI session has its own row. Session identity comes from `session_id` (Claude), and when it is missing (Codex) — from the POSIX session leader (the terminal's shell), so one session = one stable row, even without `session_id`.
-- The `→` switch matches a window by the terminal process PID, and when a single emulator process owns multiple windows (e.g. gnome-terminal) it disambiguates them by window title. Full certainty comes from a one-process-per-window terminal (alacritty, kitty, xterm); `wmctrl` cannot switch to a specific tab. It requires `wmctrl`/X11; under Wayland, tmux, screen or ssh it may not hit the right window. A diagnostic entry lands in `widget.log`.
+- Always-on-top works on every OS. Staying visible on *every* workspace/desktop is enforced only on Linux/X11 (via `wmctrl`). On macOS and Windows the widget stays on the desktop/Space where it was opened.
+- On Wayland the widget runs through XWayland when `libxcb-cursor0` is installed, because Wayland does not let apps place their own windows (docked session windows, sticker overlay).
+- Each AI session has its own row. Session identity comes from `session_id` (Claude). When it is missing (Codex), it comes from the terminal: the POSIX session leader (the terminal's shell) on Linux/macOS, or the console window on Windows. So one session = one stable row, even without `session_id`.
+- The `→` switch matches a window by the terminal process PID:
+  - Linux: `wmctrl`/X11. When one emulator process owns several windows (e.g. gnome-terminal), the window title disambiguates them. Full certainty comes from a one-process-per-window terminal (alacritty, kitty, xterm).
+  - macOS: System Events. It brings the terminal app to the front and raises the window whose title contains the project. Grant Accessibility access to your Python/terminal if it asks.
+  - Windows: Win32 `SetForegroundWindow`. It targets the Windows Terminal or console window.
+
+  No platform can switch to a specific tab. Under tmux, screen or ssh it may not hit the right window. A diagnostic entry lands in `widget.log`.

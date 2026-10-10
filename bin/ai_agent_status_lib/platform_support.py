@@ -288,6 +288,22 @@ def play_sound(path: Path, log: Callable[[str], None] = lambda _message: None) -
     return False
 
 
+# ----------------------------- Qt runtime -----------------------------
+
+# Qt 6.5+ loads its X11 (xcb) backend only when libxcb-cursor is present; it is not
+# installed by default on every distribution (Debian/Ubuntu/Mint: libxcb-cursor0).
+LINUX_QT_LIBRARIES = (("xcb-cursor", "libxcb-cursor0"),)
+
+
+def missing_linux_qt_packages(find_library: Callable[[str], str | None] | None = None) -> list[str]:
+    """Debian package names of X11 libraries Qt needs but cannot find (Linux only)."""
+    if find_library is None:
+        import ctypes.util
+
+        find_library = ctypes.util.find_library
+    return [package for library, package in LINUX_QT_LIBRARIES if not find_library(library)]
+
+
 # ----------------------------- processes -----------------------------
 
 def hidden_window_flags(platform: str | None = None) -> dict[str, int]:
@@ -377,8 +393,10 @@ def process_command_line(pid: int, platform: str | None = None) -> str:
 def terminate_pid(pid: int, platform: str | None = None) -> bool:
     if (platform or PLATFORM) == WINDOWS:
         try:
+            # No /T: the widget's self-update spawns the updater as its child, and the
+            # updater stops the widget through here — a tree kill would take it down too.
             result = subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                ["taskkill", "/PID", str(pid), "/F"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
                 **hidden_window_flags(WINDOWS),
             )

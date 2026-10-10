@@ -13,8 +13,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _pyside6_importable() -> bool:
+    try:
+        import PySide6.QtWidgets  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+GUI_TESTS_AVAILABLE = bool(shutil.which("xvfb-run")) and _pyside6_importable()
+
+
 class WidgetStickerTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("xvfb-run"), "xvfb-run is required")
+    @unittest.skipUnless(GUI_TESTS_AVAILABLE, "xvfb-run and PySide6 are required")
     def test_status_changes_pop_stickers_and_serious_mode_silences_them(self) -> None:
         probe = textwrap.dedent(
             """
@@ -25,18 +36,17 @@ class WidgetStickerTests(unittest.TestCase):
 
             sys.path.insert(0, "bin")
             module = runpy.run_path("bin/ai-agent-status-widget", run_name="widget_stickers_smoke")
-            GLib = module["GLib"]
+            process_events = module["process_events"]
             widget = module["StatusWidget"](demo=True)
             overlay = widget.sticker_overlay
             assert overlay is not None
 
             def pump(condition, seconds=3.0):
                 deadline = time.monotonic() + seconds
-                context = GLib.MainContext.default()
                 while time.monotonic() < deadline:
                     if condition():
                         return True
-                    context.iteration(False)
+                    process_events()
                     time.sleep(0.01)
                 return condition()
 
@@ -88,11 +98,11 @@ class WidgetStickerTests(unittest.TestCase):
             assert widget.klipy_api_key == ""
             guide.on_verified("good-key", "ok")
             assert widget.klipy_api_key == "good-key" and widget.sticker_source.klipy is not None
-            assert widget.settings_window.klipy_entry.get_text() == "good-key"
-            assert "works" in guide.status.get_text()
-            guide.destroy()
+            assert widget.settings_window.klipy_entry.text() == "good-key"
+            assert "works" in guide.status.text()
+            guide.close()
             assert widget.klipy_guide is None
-            widget.settings_window.destroy()
+            widget.settings_window.close()
             widget.update_setting("AI_STATUS_KLIPY_API_KEY", "")
 
             # KLIPY media arrives as in-memory bytes and still animates.
@@ -100,7 +110,7 @@ class WidgetStickerTests(unittest.TestCase):
             gif = base64.b64decode("R0lGODlhBAAEAPAAAP8AAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACH/C0ltYWdlTWFnaWNrDmdhbW1hPTAuNDU0NTQ1ACwAAAAABAAEAAACBISPCQUAIfkEAAoAAAAh/wtJbWFnZU1hZ2ljaw5nYW1tYT0wLjQ1NDU0NQAsAAAAAAQABACAAAD/AAAAAgSEjwkFADs=")
             from_klipy = module["stickers"].StickerChoice("done", None, "ta-da", "klipy", data=gif, title="party-1")
             overlay.present_sticker(from_klipy, sticky=True)
-            assert overlay.animation_iter is not None and overlay.pixbuf is not None
+            assert overlay.movie is not None and overlay.frame is not None
             assert from_klipy.label == "party-1"
 
             widget.note_usage_limits({"providers": {"claude": [
@@ -113,7 +123,7 @@ class WidgetStickerTests(unittest.TestCase):
             ]}}, trigger=True)
             assert widget.sticker_request == debounce_before, "same limit window pops only once"
 
-            widget.destroy()
+            widget.shutdown()
             """
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -141,7 +151,7 @@ class WidgetStickerTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
 
 
-    @unittest.skipUnless(shutil.which("xvfb-run"), "xvfb-run is required")
+    @unittest.skipUnless(GUI_TESTS_AVAILABLE, "xvfb-run and PySide6 are required")
     def test_window_hints_target_own_window_and_hover_survives_spurious_leaves(self) -> None:
         probe = textwrap.dedent(
             """
@@ -152,13 +162,11 @@ class WidgetStickerTests(unittest.TestCase):
 
             sys.path.insert(0, "bin")
             module = runpy.run_path("bin/ai-agent-status-widget", run_name="widget_hints_smoke")
-            GLib = module["GLib"]
+            process_events = module["process_events"]
             stickers = module["stickers"]
             widget = module["StatusWidget"](demo=True)
-            widget.show_all()
-            context = GLib.MainContext.default()
-            for _ in range(50):
-                context.iteration(False)
+            widget.show()
+            process_events(0.5)
 
             # wmctrl must address this widget by window id, never by a title substring
             # that a terminal ("... AI Agents Status ...") could also match.
@@ -178,16 +186,14 @@ class WidgetStickerTests(unittest.TestCase):
             widget.sticker_hovered = "claude:app"
             overlay.present_sticker(choice, sticky=False, hold_ms=None)
             widget.pointer_inside = lambda _box: True
-            class Crossing:
-                detail = module["Gdk"].NotifyType.NONLINEAR
-            widget.on_row_leave(widget, Crossing(), "claude:app")
+            widget.on_row_leave(widget, "claude:app")
             assert overlay.phase == "in" and widget.sticker_hovered == "claude:app"
 
             # After a row rebuild the hover is re-checked; pointer gone → tuck.
             widget.row_hover_boxes = {}
             widget.verify_hover()
             assert overlay.phase == "out" and widget.sticker_hovered is None
-            widget.destroy()
+            widget.shutdown()
             """
         )
         with tempfile.TemporaryDirectory() as directory:

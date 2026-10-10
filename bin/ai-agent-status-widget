@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Floating status widget for ai-cli-status-monitor (Qt / PySide6 on Linux, macOS and Windows)."""
 from __future__ import annotations
 
 import argparse
@@ -7,28 +8,34 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from typing import Callable
 
-from ai_agent_status_lib import platform_support
-from ai_agent_status_lib import process_control
-from ai_agent_status_lib import stickers
-from ai_agent_status_lib import updates
-from ai_agent_status_lib import usage_limits
-from ai_agent_status_lib import window_switch
-from ai_agent_status_lib.env_config import format_agents
-from ai_agent_status_lib.env_config import load_settings
-from ai_agent_status_lib.env_config import SUPPORTED_AGENTS
-from ai_agent_status_lib.env_config import write_env_value
-from ai_agent_status_lib.status_model import IN_PROGRESS_KINDS
-from ai_agent_status_lib.status_model import INACTIVE_KINDS
-from ai_agent_status_lib.status_model import classify_status_text
-from ai_agent_status_lib.status_model import normalize_kind
-from ai_agent_status_lib.status_model import StatusKind
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from ai_agent_status_lib import platform_support  # noqa: E402
+from ai_agent_status_lib import process_control  # noqa: E402
+from ai_agent_status_lib import screen_geometry  # noqa: E402
+from ai_agent_status_lib import stickers  # noqa: E402
+from ai_agent_status_lib import updates  # noqa: E402
+from ai_agent_status_lib import usage_limits  # noqa: E402
+from ai_agent_status_lib import window_switch  # noqa: E402
+from ai_agent_status_lib.env_config import format_agents  # noqa: E402
+from ai_agent_status_lib.env_config import load_settings  # noqa: E402
+from ai_agent_status_lib.env_config import SUPPORTED_AGENTS  # noqa: E402
+from ai_agent_status_lib.env_config import write_env_value  # noqa: E402
+from ai_agent_status_lib.status_model import IN_PROGRESS_KINDS  # noqa: E402
+from ai_agent_status_lib.status_model import INACTIVE_KINDS  # noqa: E402
+from ai_agent_status_lib.status_model import classify_status_text  # noqa: E402
+from ai_agent_status_lib.status_model import normalize_kind  # noqa: E402
+from ai_agent_status_lib.status_model import StatusKind  # noqa: E402
 
 
 CONFIG_WARNINGS: list[str] = []
@@ -61,9 +68,8 @@ WIDGET_DIR = Path(__file__).resolve().parent
 UPDATE_SCRIPT = WIDGET_DIR / "ai-agent-status-update"
 USAGE_ANIMATION_INTERVAL_MS = 33
 USAGE_ROTATION_RADIANS_PER_TICK = 0.36 * USAGE_ANIMATION_INTERVAL_MS / 200
-# Breathing room kept between a rescued window and the edge of its monitor.
-OFFSCREEN_MARGIN = 40
-MIN_VISIBLE_HEIGHT = 120
+# Transparent margin around every card window (room for the card's rounded border).
+WINDOW_MARGIN = 8
 
 # Per-state palette, taken straight from the design legend.
 STATE_COLORS = {
@@ -91,6 +97,8 @@ META_COLOR = "#566173"
 TITLE_COLOR = "#E6EDF3"
 IN_PROGRESS = IN_PROGRESS_KINDS
 INACTIVE = INACTIVE_KINDS
+SANS_FAMILIES = ["IBM Plex Sans", "Inter", "Segoe UI", "Helvetica Neue", "Cantarell", "Noto Sans", "sans-serif"]
+MONO_FAMILIES = ["JetBrains Mono", "IBM Plex Mono", "SF Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "monospace"]
 
 DEFAULT_CONFIG = SETTINGS.widget_config
 
@@ -104,115 +112,570 @@ def log(message: str) -> None:
         pass
 
 
-try:
-    import gi
+def reexec_with_widget_python() -> None:
+    """Without PySide6 here, re-run under the interpreter the installer prepared (its venv)."""
+    candidate = process_control.load_interpreters(DATA_DIR).get("widget")
+    if not candidate or os.environ.get("AI_STATUS_WIDGET_REEXEC"):
+        return
+    # Compare paths, not resolved files: a venv's python is a symlink to the base one.
+    if os.path.abspath(candidate) == os.path.abspath(sys.executable):
+        return
+    os.environ["AI_STATUS_WIDGET_REEXEC"] = "1"
+    argv = [candidate, str(Path(__file__).resolve()), *sys.argv[1:]]
+    if platform_support.PLATFORM == platform_support.WINDOWS:
+        raise SystemExit(subprocess.call(argv))
+    os.execv(candidate, argv)
 
-    gi.require_version("Gtk", "3.0")
-    gi.require_version("Gdk", "3.0")
-    gi.require_version("GdkPixbuf", "2.0")
-    from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
-except Exception as error:  # pragma: no cover - exercised on systems without GTK
-    log(f"GTK import failed: {error}")
-    print("GTK/PyGObject is not available.")
-    print("Install on Linux Mint with:")
-    print("  sudo apt install python3-gi gir1.2-gtk-3.0 wmctrl")
+
+try:
+    from PySide6.QtCore import QBuffer
+    from PySide6.QtCore import QByteArray
+    from PySide6.QtCore import QEvent
+    from PySide6.QtCore import QIODevice
+    from PySide6.QtCore import QObject
+    from PySide6.QtCore import QPointF
+    from PySide6.QtCore import QRectF
+    from PySide6.QtCore import QSize
+    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QUrl
+    from PySide6.QtCore import Signal
+    from PySide6.QtGui import QAction
+    from PySide6.QtGui import QActionGroup
+    from PySide6.QtGui import QColor
+    from PySide6.QtGui import QCursor
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtGui import QFont
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtGui import QImage
+    from PySide6.QtGui import QImageReader
+    from PySide6.QtGui import QLinearGradient
+    from PySide6.QtGui import QMovie
+    from PySide6.QtGui import QPainter
+    from PySide6.QtGui import QPainterPath
+    from PySide6.QtGui import QPen
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtGui import QRadialGradient
+    from PySide6.QtGui import QTextLayout
+    from PySide6.QtGui import QTextOption
+    from PySide6.QtWidgets import QAbstractButton
+    from PySide6.QtWidgets import QAbstractSpinBox
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QCheckBox
+    from PySide6.QtWidgets import QDoubleSpinBox
+    from PySide6.QtWidgets import QFrame
+    from PySide6.QtWidgets import QGraphicsOpacityEffect
+    from PySide6.QtWidgets import QGridLayout
+    from PySide6.QtWidgets import QHBoxLayout
+    from PySide6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLayout
+    from PySide6.QtWidgets import QLineEdit
+    from PySide6.QtWidgets import QMenu
+    from PySide6.QtWidgets import QProgressBar
+    from PySide6.QtWidgets import QPushButton
+    from PySide6.QtWidgets import QSizePolicy
+    from PySide6.QtWidgets import QSpinBox
+    from PySide6.QtWidgets import QVBoxLayout
+    from PySide6.QtWidgets import QWidget
+except ImportError as error:  # pragma: no cover - exercised on systems without PySide6
+    if __name__ == "__main__":
+        reexec_with_widget_python()
+    log(f"PySide6 import failed: {error}")
+    print("PySide6 (Qt for Python) is not available for this Python.")
+    print("Re-run the installer (it sets PySide6 up in a private venv), or install it with:")
+    print(f"  {sys.executable} -m pip install --user 'PySide6-Essentials>=6.5'")
     raise SystemExit(1)
-
-try:
-    import cairo
-
-    CAIRO_OK = True
-except Exception as error:  # pragma: no cover
-    log(f"cairo import failed, using flat dots: {error}")
-    CAIRO_OK = False
-
-try:
-    gi.require_version("GdkX11", "3.0")
-    from gi.repository import GdkX11  # noqa: F401  (adds GdkWindow.get_xid on X11)
-except Exception:  # pragma: no cover - Wayland-only or minimal installs
-    pass
-
-try:
-    gi.require_version("PangoCairo", "1.0")
-    from gi.repository import PangoCairo
-
-    PANGOCAIRO_OK = True
-except Exception as error:  # pragma: no cover
-    log(f"PangoCairo import failed, stickers will have no speech bubble: {error}")
-    PANGOCAIRO_OK = False
-
-
-def hex_to_rgb(value: str) -> tuple[float, float, float]:
-    value = value.lstrip("#")
-    return tuple(int(value[i : i + 2], 16) / 255.0 for i in (0, 2, 4))  # type: ignore[return-value]
 
 
 def classify(status: str) -> str:
-    """Map a Polish status string to a state kind used for colour and animation."""
+    """Map a legacy status string to a state kind used for colour and animation."""
     return classify_status_text(status)
 
 
-class StatusDot(Gtk.DrawingArea):
+# ----------------------------- Qt main-loop helpers -----------------------------
+
+class _MainThreadDispatcher(QObject):
+    """Runs callbacks posted from worker threads on the Qt main thread."""
+
+    call = Signal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.call.connect(self._run, Qt.ConnectionType.QueuedConnection)
+
+    def _run(self, callback: Callable[[], object]) -> None:
+        try:
+            callback()
+        except Exception as error:  # never let a late callback take the widget down
+            log(f"main-thread callback failed: {error}")
+
+
+_DISPATCHER: _MainThreadDispatcher | None = None
+
+
+def prefer_x11() -> None:
+    """On Linux, run through X11/XWayland when possible.
+
+    The widget positions its own windows (docked session cards, the sticker overlay, the
+    saved position) and raises terminals via wmctrl, none of which Wayland clients may do.
+    Qt 6.5+ needs libxcb-cursor for its xcb backend, so only switch when it is present —
+    and on a pure X11 session without it, explain instead of letting Qt abort.
+    """
+    if platform_support.PLATFORM != platform_support.LINUX or os.environ.get("QT_QPA_PLATFORM"):
+        return
+    missing = platform_support.missing_linux_qt_packages()
+    if os.environ.get("WAYLAND_DISPLAY"):
+        if os.environ.get("DISPLAY") and not missing:
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+        return
+    if missing:
+        message = f"Qt needs {', '.join(missing)} for X11: sudo apt install {' '.join(missing)}"
+        log(message)
+        print(message, file=sys.stderr)
+        raise SystemExit(1)
+
+
+def ensure_app() -> QApplication:
+    global _DISPATCHER
+    app = QApplication.instance()
+    if app is None:
+        prefer_x11()
+        app = QApplication(sys.argv[:1])
+        app.setApplicationName("AI Status Monitor")
+        app.setQuitOnLastWindowClosed(False)
+        app.setStyle("Fusion")
+        app.setStyleSheet(STYLE_SHEET)
+    if _DISPATCHER is None:
+        _DISPATCHER = _MainThreadDispatcher()
+    return app  # type: ignore[return-value]
+
+
+def idle_add(callback: Callable[..., object], *args: object) -> None:
+    """Thread-safe: run ``callback(*args)`` on the main thread (GLib.idle_add semantics)."""
+    assert _DISPATCHER is not None, "ensure_app() must run first"
+    _DISPATCHER.call.emit(lambda: callback(*args))
+
+
+def timeout_add(interval_ms: int, callback: Callable[..., object], *args: object) -> QTimer:
+    """Repeat ``callback`` every ``interval_ms`` while it returns True (GLib.timeout_add semantics)."""
+    timer = QTimer(QApplication.instance())
+    timer.setInterval(max(0, int(interval_ms)))
+
+    def fire() -> None:
+        try:
+            keep = callback(*args)
+        except Exception as error:
+            log(f"timer callback failed: {error}")
+            keep = False
+        if not keep:
+            source_remove(timer)
+
+    timer.timeout.connect(fire)
+    timer.start()
+    return timer
+
+
+def timeout_add_seconds(seconds: int, callback: Callable[..., object], *args: object) -> QTimer:
+    return timeout_add(seconds * 1000, callback, *args)
+
+
+def source_remove(timer: QTimer | None) -> None:
+    if timer is None:
+        return
+    try:
+        timer.stop()
+        timer.deleteLater()
+    except RuntimeError:  # already deleted
+        pass
+
+
+def process_events(seconds: float = 0.0) -> None:
+    """Pump the event loop (tests and one-off waits)."""
+    deadline = time.monotonic() + seconds
+    while True:
+        QApplication.processEvents()
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.01)
+
+
+def monotonic_ms() -> float:
+    return time.monotonic() * 1000.0
+
+
+# ----------------------------- painting helpers -----------------------------
+
+def qcolor(value: str, alpha: float = 1.0) -> QColor:
+    color = QColor(value)
+    color.setAlphaF(max(0.0, min(1.0, alpha)))
+    return color
+
+
+def add_arc(path: QPainterPath, cx: float, cy: float, radius: float, start: float, end: float,
+            connect: bool = True) -> None:
+    """Append a cairo-style arc (radians, y down, clockwise for growing angles)."""
+    while end < start:
+        end += 2 * math.pi
+    steps = max(2, int((end - start) / (2 * math.pi) * 96) + 1)
+    for index in range(steps + 1):
+        angle = start + (end - start) * index / steps
+        point = QPointF(cx + radius * math.cos(angle), cy + radius * math.sin(angle))
+        if index == 0 and (not connect or path.elementCount() == 0):
+            path.moveTo(point)
+        else:
+            path.lineTo(point)
+
+
+def rounded_rect_path(x: float, y: float, w: float, h: float,
+                      radii: tuple[float, float, float, float]) -> QPainterPath:
+    """Rounded rectangle; radii are (top-left, top-right, bottom-right, bottom-left)."""
+    tl, tr, br, bl = radii
+    path = QPainterPath()
+    add_arc(path, x + w - tr, y + tr, tr, -math.pi / 2, 0, connect=False)
+    add_arc(path, x + w - br, y + h - br, br, 0, math.pi / 2)
+    add_arc(path, x + bl, y + h - bl, bl, math.pi / 2, math.pi)
+    add_arc(path, x + tl, y + tl, tl, math.pi, 3 * math.pi / 2)
+    path.closeSubpath()
+    return path
+
+
+def make_font(families: list[str], point_size: float, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
+    font = QFont()
+    font.setFamilies(families)
+    font.setPointSizeF(point_size)
+    font.setWeight(weight)
+    return font
+
+
+def text_block(text: str, font: QFont, width: float) -> tuple[QTextLayout, float, float]:
+    """Lay out wrapped text (word boundaries, else anywhere); returns (layout, width, height)."""
+    layout = QTextLayout(text, font)
+    option = QTextOption()
+    option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+    layout.setTextOption(option)
+    layout.beginLayout()
+    height = 0.0
+    natural = 0.0
+    while True:
+        line = layout.createLine()
+        if not line.isValid():
+            break
+        line.setLineWidth(width)
+        line.setPosition(QPointF(0, height))
+        height += line.height()
+        natural = max(natural, line.naturalTextWidth())
+    layout.endLayout()
+    return layout, natural, height
+
+
+def load_scaled_pixmap(path: Path, size: int) -> QPixmap | None:
+    """Load a PNG/SVG at ``size`` logical pixels, rendered for the screen's pixel ratio."""
+    reader = QImageReader(str(path))
+    native = reader.size()
+    ratio = max(1.0, QGuiApplication.primaryScreen().devicePixelRatio() if QGuiApplication.primaryScreen() else 1.0)
+    target = round(size * ratio)
+    if native.isValid() and native.width() > 0 and native.height() > 0:
+        scale = target / max(native.width(), native.height())
+        reader.setScaledSize(QSize(max(1, round(native.width() * scale)), max(1, round(native.height() * scale))))
+    image = reader.read()
+    if image.isNull():
+        return None
+    pixmap = QPixmap.fromImage(image)
+    pixmap.setDevicePixelRatio(ratio)
+    return pixmap
+
+
+def set_flag(widget: QWidget, name: str, enabled: bool) -> None:
+    """Toggle a boolean style-sheet property (``#card[waiting="true"]``) and re-polish."""
+    value = "true" if enabled else "false"
+    if widget.property(name) == value:
+        return
+    widget.setProperty(name, value)
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+    widget.update()
+
+
+def flag(widget: QWidget, name: str) -> bool:
+    return widget.property(name) == "true"
+
+
+def clear_layout(layout: QLayout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        child = item.widget()
+        if child is not None:
+            child.hide()
+            child.setParent(None)
+            child.deleteLater()
+        elif item.layout() is not None:
+            clear_layout(item.layout())
+
+
+def markup(value: str, color: str) -> str:
+    return f'<span style="color:{color}">{html.escape(value)}</span>'
+
+
+def tool_window_flags(accept_focus: bool = True) -> Qt.WindowType:
+    flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+    if not accept_focus:
+        flags |= Qt.WindowType.WindowDoesNotAcceptFocus
+    return flags
+
+
+def prepare_floating_window(window: QWidget) -> None:
+    window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    # macOS hides tool windows whenever the app is not active; keep them up.
+    window.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
+
+
+def window_id_of(window: QWidget) -> str | None:
+    """A window's X11 id as wmctrl expects it (hex), or None off X11 / before it exists."""
+    if QGuiApplication.platformName() != "xcb":
+        return None
+    try:
+        return hex(int(window.winId()))
+    except Exception:
+        return None
+
+
+STYLE_SHEET = f"""
+QWidget {{ font-family: {", ".join(f"\"{f}\"" if " " in f else f for f in SANS_FAMILIES)}; }}
+QFrame#card {{
+  background: rgba(13,19,26,245);
+  border: 1px solid rgba(255,255,255,23);
+  border-radius: 14px;
+}}
+QFrame#card[waiting="true"] {{ border: 1px solid rgba(251,112,96,102); }}
+QFrame#card[waiting="true"][pulse="true"] {{ border: 1px solid rgba(251,112,96,209); }}
+QFrame#header {{ border: none; border-bottom: 1px solid rgba(255,255,255,14); background: transparent; }}
+QLabel#headerTitle {{ color: #E6EDF3; font-size: 12px; font-weight: 600; }}
+QLabel#badge {{
+  font-family: "IBM Plex Mono", monospace; font-size: 9px; font-weight: 600;
+  padding: 2px 7px; border-radius: 6px;
+}}
+QLabel#badge[state="live"] {{ background: rgba(74,222,128,26); border: 1px solid rgba(74,222,128,56); }}
+QLabel#badge[state="alert"] {{ background: rgba(251,112,96,31); border: 1px solid rgba(251,112,96,77); }}
+QLabel#badge[state="idle"] {{ background: rgba(107,119,133,26); border: 1px solid rgba(107,119,133,56); }}
+QPushButton#updatePill {{
+  font-family: "IBM Plex Mono", monospace; font-size: 9px; font-weight: 600;
+  color: #2DD4BF; background: rgba(45,212,191,31);
+  border: 1px solid rgba(45,212,191,77); border-radius: 6px; padding: 2px 7px;
+}}
+QPushButton#updatePill:hover {{ color: #ffffff; background: rgba(45,212,191,56); }}
+QPushButton#close, QPushButton#settingsButton {{
+  color: #7a8493; background: transparent; border: none; padding: 0 3px;
+}}
+QPushButton#close {{ font-size: 15px; }}
+QPushButton#settingsButton {{ font-size: 13px; }}
+QPushButton#close:hover, QPushButton#settingsButton:hover {{ color: #ffffff; }}
+QFrame#row {{ border-radius: 9px; border: 1px solid transparent; background: transparent; }}
+QFrame#row[alert="true"] {{
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(251,112,96,33), stop:1 rgba(251,112,96,8));
+  border: 1px solid rgba(251,112,96,56);
+}}
+QLabel#agentName {{ font-size: 12px; font-weight: 600; }}
+QLabel#statusText, QLabel#meta, QLabel#footer, QLabel#lockupSub {{ font-family: "IBM Plex Mono", monospace; }}
+QLabel#statusText {{ font-size: 11px; }}
+QLabel#meta {{ font-size: 10px; color: #566173; }}
+QLabel#footer {{ font-size: 9px; color: #4a5462; padding: 5px 0 2px 0; }}
+QPushButton#dotSwitch {{ background: transparent; border: none; padding: 0; margin: 0; }}
+QFrame#usagePanel {{ border: none; border-top: 1px solid rgba(255,255,255,14); background: transparent; }}
+QPushButton#usageProviderButton {{
+  background: transparent; border: none; border-radius: 15px; padding: 0;
+  min-width: 30px; min-height: 30px; max-width: 30px; max-height: 30px;
+}}
+QPushButton#usageProviderButton:hover {{ background: rgba(255,255,255,18); }}
+QLabel#usageProviderFallback, QLabel#usageWindow, QLabel#usagePercent, QLabel#usageReset {{
+  font-family: "IBM Plex Mono", monospace; font-size: 9px;
+}}
+QLabel#usageProviderFallback {{ font-weight: 600; color: #AEB6C0; }}
+QLabel#usageWindow {{ color: #8A95A3; font-weight: 600; }}
+QLabel#usagePercent {{ font-weight: 600; color: #D4DCE5; }}
+QLabel#usageReset {{ color: #566173; }}
+QLabel#usageWindow[stale="true"], QLabel#usagePercent[stale="true"] {{ color: #6B7785; }}
+QLabel#usagePercent[unavailable="true"] {{ color: #566173; font-weight: 500; }}
+QProgressBar#usageProgress {{
+  min-height: 4px; max-height: 4px; border: none; border-radius: 2px;
+  background: rgba(255,255,255,20);
+}}
+QProgressBar#usageProgress::chunk {{ border-radius: 2px; background: #4ADE80; }}
+QProgressBar#usageProgress[usage="usage-orange"]::chunk {{ background: #F59E0B; }}
+QProgressBar#usageProgress[usage="usage-red"]::chunk {{ background: #FB7060; }}
+QLabel#lockupTitle {{ font-size: 19px; font-weight: 600; }}
+QLabel#lockupSub {{ font-size: 9px; font-weight: 500; color: #566173; }}
+QMenu {{
+  background: #151C25; color: #D4DCE5; border: 1px solid rgba(255,255,255,26); padding: 4px;
+}}
+QMenu::item {{ padding: 5px 18px 5px 22px; border-radius: 5px; }}
+QMenu::item:selected {{ background: rgba(45,212,191,46); color: #ffffff; }}
+QMenu::item:disabled {{ color: #566173; }}
+QMenu::separator {{ height: 1px; background: rgba(255,255,255,20); margin: 4px 6px; }}
+QToolTip {{ background: #151C25; color: #D4DCE5; border: 1px solid rgba(255,255,255,26); }}
+QWidget#settingsWindow {{ background: #0D131A; }}
+QFrame#settingsHeader {{ border: none; border-bottom: 1px solid rgba(255,255,255,14); }}
+QLabel#settingsHeading {{ color: #E6EDF3; font-size: 13px; font-weight: 600; }}
+QLabel#settingsSection {{
+  font-family: "IBM Plex Mono", monospace; font-size: 9px; font-weight: 600; color: #2DD4BF;
+  margin-top: 12px; margin-bottom: 4px;
+}}
+QLabel#settingsLabel {{ font-size: 12px; font-weight: 600; color: #D4DCE5; }}
+QLabel#settingsHint {{ font-family: "IBM Plex Mono", monospace; font-size: 9px; color: #566173; }}
+QFrame#settingsFooter {{ border: none; border-top: 1px solid rgba(255,255,255,14); }}
+QPushButton#settingsClose {{
+  font-size: 11px; font-weight: 600; color: #2DD4BF; background: rgba(45,212,191,31);
+  border: 1px solid rgba(45,212,191,77); border-radius: 7px; padding: 3px 14px;
+}}
+QPushButton#settingsClose:hover {{ color: #ffffff; background: rgba(45,212,191,56); }}
+QPushButton#settingsClose:disabled {{ color: #566173; border-color: rgba(255,255,255,26); }}
+QWidget#settingsWindow QSpinBox, QWidget#settingsWindow QDoubleSpinBox, QWidget#settingsWindow QLineEdit {{
+  background: #151C25; color: #E6EDF3; border: 1px solid rgba(255,255,255,26); border-radius: 7px;
+  font-family: "IBM Plex Mono", monospace; font-size: 11px; min-height: 24px; padding: 0 6px;
+  selection-background-color: rgba(45,212,191,140);
+}}
+QWidget#settingsWindow QSpinBox:focus, QWidget#settingsWindow QDoubleSpinBox:focus,
+QWidget#settingsWindow QLineEdit:focus {{ border-color: rgba(45,212,191,140); }}
+QPushButton#spinStep {{
+  color: #8A95A3; background: #151C25; border: 1px solid rgba(255,255,255,26);
+  font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 600;
+  min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; padding: 0;
+}}
+QPushButton#spinStep:hover {{ color: #ffffff; background: rgba(255,255,255,15); }}
+QPushButton#spinStep:disabled {{ color: #3a4350; }}
+QPushButton#spinStep[side="minus"] {{ border-radius: 0; border-left: none; }}
+QPushButton#spinStep[side="plus"] {{ border-top-right-radius: 7px; border-bottom-right-radius: 7px; border-left: none; }}
+QWidget#settingsWindow QAbstractSpinBox {{ border-top-right-radius: 0; border-bottom-right-radius: 0; min-width: 44px; }}
+QWidget#settingsWindow QAbstractSpinBox::up-button, QWidget#settingsWindow QAbstractSpinBox::down-button {{
+  width: 0; border: none;
+}}
+QWidget#settingsWindow QCheckBox {{ color: #D4DCE5; font-size: 12px; font-weight: 600; spacing: 6px; }}
+QWidget#settingsWindow QCheckBox::indicator {{
+  width: 14px; height: 14px; border-radius: 3px;
+  background: #151C25; border: 1px solid rgba(255,255,255,46);
+}}
+QWidget#settingsWindow QCheckBox::indicator:checked {{ background: #2DD4BF; border-color: #2DD4BF; }}
+"""
+
+
+# ----------------------------- small widgets -----------------------------
+
+class ElidedLabel(QLabel):
+    """Single-line label that ends in "…" when narrower than its text (Pango ellipsize)."""
+
+    def __init__(self, text: str = "", color: str | None = None) -> None:
+        super().__init__()
+        self.full_text = text
+        self.color = color
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.setText(text)
+
+    def set_full_text(self, text: str) -> None:
+        self.full_text = text
+        self.setText(text)
+        self.update()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), self.fontMetrics().horizontalAdvance("…") + 2), hint.height())
+
+    def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        if self.color:
+            painter.setPen(QColor(self.color))
+        else:
+            painter.setPen(self.palette().color(self.foregroundRole()))
+        rect = self.contentsRect()
+        elided = self.fontMetrics().elidedText(self.full_text, Qt.TextElideMode.ElideRight, rect.width())
+        painter.drawText(rect, int(self.alignment()), elided)
+
+
+class StatusDot(QWidget):
     """A glowing status dot, or (`arrow=True`) a glowing `→` in the same state colour that
-    serves as the row's window-switch button. Draws nothing when cairo is missing."""
+    serves as the row's window-switch button."""
 
     def __init__(self, arrow: bool = False) -> None:
         super().__init__()
-        self.set_size_request(14, 20)
-        self.rgb = hex_to_rgb(STATE_COLORS["neutral"])
+        self.setFixedSize(14, 20)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.color = STATE_COLORS["neutral"]
         self.waiting = False
         self.arrow = arrow
         self.hover = False
         self.phase = 0.0
-        if CAIRO_OK:
-            self.connect("draw", self.on_draw)
 
     def configure_dot(self, color: str, waiting: bool) -> None:
-        self.rgb = hex_to_rgb(color)
+        self.color = color
         self.waiting = waiting
-        self.queue_draw()
-
-    def on_draw(self, _area: Gtk.DrawingArea, cr: "cairo.Context") -> bool:
-        width = self.get_allocated_width()
-        height = self.get_allocated_height()
-        cx, cy = width / 2.0, height / 2.0
-        r, g, b = self.rgb
-        if self.waiting:
-            radius = 3.4 + self.phase * 7.0
-            cr.set_source_rgba(r, g, b, max(0.0, (1.0 - self.phase) * 0.55))
-            cr.set_line_width(1.6)
-            cr.arc(cx, cy, radius, 0, 2 * math.pi)
-            cr.stroke()
-        else:
-            glow = cairo.RadialGradient(cx, cy, 1.0, cx, cy, 8.5)
-            glow.add_color_stop_rgba(0.0, r, g, b, 0.42)
-            glow.add_color_stop_rgba(1.0, r, g, b, 0.0)
-            cr.set_source(glow)
-            cr.arc(cx, cy, 8.5, 0, 2 * math.pi)
-            cr.fill()
-        if self.arrow:
-            cr.set_source_rgba(r, g, b, 1.0 if self.hover else 0.92)
-            cr.set_line_width(2.2 if self.hover else 1.9)
-            cr.set_line_cap(cairo.LINE_CAP_ROUND)
-            cr.set_line_join(cairo.LINE_JOIN_ROUND)
-            cr.move_to(cx - 4.5, cy)
-            cr.line_to(cx + 4.5, cy)
-            cr.move_to(cx + 1.0, cy - 3.5)
-            cr.line_to(cx + 4.5, cy)
-            cr.line_to(cx + 1.0, cy + 3.5)
-            cr.stroke()
-            return False
-        cr.set_source_rgb(r, g, b)
-        cr.arc(cx, cy, 3.4, 0, 2 * math.pi)
-        cr.fill()
-        return False
+        self.update()
 
     def set_hover(self, hover: bool) -> None:
         self.hover = hover
-        self.queue_draw()
+        self.update()
+
+    def queue_draw(self) -> None:
+        self.update()
+
+    def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx, cy = self.width() / 2.0, self.height() / 2.0
+        center = QPointF(cx, cy)
+        if self.waiting:
+            radius = 3.4 + self.phase * 7.0
+            painter.setPen(QPen(qcolor(self.color, max(0.0, (1.0 - self.phase) * 0.55)), 1.6))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(center, radius, radius)
+        else:
+            glow = QRadialGradient(center, 8.5)
+            glow.setColorAt(0.0, qcolor(self.color, 0.42))
+            glow.setColorAt(1.0, qcolor(self.color, 0.0))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(glow)
+            painter.drawEllipse(center, 8.5, 8.5)
+        if self.arrow:
+            pen = QPen(qcolor(self.color, 1.0 if self.hover else 0.92), 2.2 if self.hover else 1.9)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            path = QPainterPath()
+            path.moveTo(cx - 4.5, cy)
+            path.lineTo(cx + 4.5, cy)
+            path.moveTo(cx + 1.0, cy - 3.5)
+            path.lineTo(cx + 4.5, cy)
+            path.lineTo(cx + 1.0, cy + 3.5)
+            painter.drawPath(path)
+            return
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self.color))
+        painter.drawEllipse(center, 3.4, 3.4)
 
 
-class LogoMark(Gtk.DrawingArea):
+class DotSwitch(QPushButton):
+    """Flat button around a `StatusDot(arrow=True)`; the dot brightens on hover."""
+
+    def __init__(self, dot: StatusDot) -> None:
+        super().__init__()
+        self.dot = dot
+        self.setObjectName("dotSwitch")
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(dot)
+        self.setFixedSize(dot.size())
+
+    def enterEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        self.dot.set_hover(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        self.dot.set_hover(False)
+        super().leaveEvent(event)
+
+
+class LogoMark(QWidget):
     """The AI Status Monitor radar logo, drawn in a 0-100 viewBox scaled to any size.
 
     Variants: 'full' (teal rings + rotating sweep wedge + colored blips + core) used in the
@@ -225,129 +688,156 @@ class LogoMark(Gtk.DrawingArea):
     def __init__(self, size: int, variant: str = "full", sweep: bool = False,
                  tile: bool = False, mono_color: str = "#E6EDF3") -> None:
         super().__init__()
-        self.set_size_request(size, size)
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.variant = variant
         self.sweep = sweep
         self.tile = tile
-        self.mono_rgb = hex_to_rgb(mono_color)
+        self.mono_color = mono_color
         self.angle = 0.0
-        if CAIRO_OK:
-            self.connect("draw", self.on_draw)
 
-    def on_draw(self, _area: Gtk.DrawingArea, cr: "cairo.Context") -> bool:
-        size = min(self.get_allocated_width(), self.get_allocated_height())
+    def queue_draw(self) -> None:
+        self.update()
+
+    def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
+        size = min(self.width(), self.height())
         if size <= 0:
-            return False
-        cr.translate((self.get_allocated_width() - size) / 2.0,
-                     (self.get_allocated_height() - size) / 2.0)
-        cr.scale(size / 100.0, size / 100.0)
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.translate((self.width() - size) / 2.0, (self.height() - size) / 2.0)
+        painter.scale(size / 100.0, size / 100.0)
         if self.tile:
-            self._draw_tile(cr)
+            self._draw_tile(painter)
         if self.variant == "mono":
-            self._draw_mono(cr)
+            self._draw_mono(painter)
         else:
-            self._draw_full(cr)
-        return False
+            self._draw_full(painter)
 
-    def _rounded_rect(self, cr: "cairo.Context", x: float, y: float, w: float, h: float, r: float) -> None:
-        cr.new_sub_path()
-        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
-        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
-        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
-        cr.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
-        cr.close_path()
+    @staticmethod
+    def _ring(painter: QPainter, color: QColor, width: float, radius: float) -> None:
+        painter.setPen(QPen(color, width))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(50, 50), radius, radius)
 
-    def _draw_tile(self, cr: "cairo.Context") -> None:
-        self._rounded_rect(cr, 1, 1, 98, 98, 22)
-        grad = cairo.LinearGradient(0, 0, 100, 100)
-        grad.add_color_stop_rgb(0.0, *hex_to_rgb("#17242f"))
-        grad.add_color_stop_rgb(1.0, *hex_to_rgb("#0b121a"))
-        cr.set_source(grad)
-        cr.fill_preserve()
-        cr.set_source_rgba(1, 1, 1, 0.08)
-        cr.set_line_width(1.0)
-        cr.stroke()
+    @staticmethod
+    def _disc(painter: QPainter, color: QColor, x: float, y: float, radius: float) -> None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(QPointF(x, y), radius, radius)
 
-    def _draw_full(self, cr: "cairo.Context") -> None:
-        teal = hex_to_rgb("#2DD4BF")
-        core = hex_to_rgb("#5EEAD4")
-        cr.set_line_width(1.2)
+    def _draw_tile(self, painter: QPainter) -> None:
+        path = rounded_rect_path(1, 1, 98, 98, (22, 22, 22, 22))
+        gradient = QLinearGradient(0, 0, 100, 100)
+        gradient.setColorAt(0.0, QColor("#17242f"))
+        gradient.setColorAt(1.0, QColor("#0b121a"))
+        painter.setPen(QPen(qcolor("#ffffff", 0.08), 1.0))
+        painter.setBrush(gradient)
+        painter.drawPath(path)
+
+    def _draw_full(self, painter: QPainter) -> None:
+        teal, core = "#2DD4BF", "#5EEAD4"
         for radius, alpha in ((34, 0.20), (23, 0.24), (12, 0.32)):
-            cr.set_source_rgba(*teal, alpha)
-            cr.arc(50, 50, radius, 0, 2 * math.pi)
-            cr.stroke()
-        cr.save()
-        cr.translate(50, 50)
-        cr.rotate(self.angle)
-        cr.set_source_rgba(*teal, 0.32)
-        cr.move_to(0, 0)
-        cr.arc(0, 0, 34, -math.pi / 2, math.radians(-50))
-        cr.close_path()
-        cr.fill()
-        cr.set_source_rgba(*core, 0.85)
-        cr.set_line_width(1.4)
-        cr.move_to(0, 0)
-        cr.line_to(0, -34)
-        cr.stroke()
-        cr.restore()
+            self._ring(painter, qcolor(teal, alpha), 1.2, radius)
+        painter.save()
+        painter.translate(50, 50)
+        painter.rotate(math.degrees(self.angle))
+        wedge = QPainterPath()
+        wedge.moveTo(0, 0)
+        add_arc(wedge, 0, 0, 34, -math.pi / 2, math.radians(-50))
+        wedge.closeSubpath()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(qcolor(teal, 0.32))
+        painter.drawPath(wedge)
+        painter.setPen(QPen(qcolor(core, 0.85), 1.4))
+        painter.drawLine(QPointF(0, 0), QPointF(0, -34))
+        painter.restore()
         for (bx, by), color in self.BLIPS:
-            cr.set_source_rgba(*hex_to_rgb(color), 0.22)
-            cr.arc(bx, by, 5.2, 0, 2 * math.pi)
-            cr.fill()
-            cr.set_source_rgb(*hex_to_rgb(color))
-            cr.arc(bx, by, 2.6, 0, 2 * math.pi)
-            cr.fill()
-        cr.set_source_rgba(*core, 0.25)
-        cr.arc(50, 50, 6, 0, 2 * math.pi)
-        cr.fill()
-        cr.set_source_rgb(*core)
-        cr.arc(50, 50, 3.4, 0, 2 * math.pi)
-        cr.fill()
+            self._disc(painter, qcolor(color, 0.22), bx, by, 5.2)
+            self._disc(painter, QColor(color), bx, by, 2.6)
+        self._disc(painter, qcolor(core, 0.25), 50, 50, 6)
+        self._disc(painter, QColor(core), 50, 50, 3.4)
 
-    def _draw_mono(self, cr: "cairo.Context") -> None:
-        r, g, b = self.mono_rgb
-        cr.set_line_width(3.0)
-        cr.set_source_rgba(r, g, b, 0.35)
-        cr.arc(50, 50, 34, 0, 2 * math.pi)
-        cr.stroke()
-        cr.set_source_rgba(r, g, b, 0.55)
-        cr.arc(50, 50, 20, 0, 2 * math.pi)
-        cr.stroke()
-        cr.set_source_rgba(r, g, b, 0.5)
-        cr.move_to(50, 50)
-        cr.arc(50, 50, 38, -math.pi / 2, math.radians(-45))
-        cr.close_path()
-        cr.fill()
-        cr.set_source_rgb(r, g, b)
-        cr.arc(50, 50, 6, 0, 2 * math.pi)
-        cr.fill()
+    def _draw_mono(self, painter: QPainter) -> None:
+        color = self.mono_color
+        self._ring(painter, qcolor(color, 0.35), 3.0, 34)
+        self._ring(painter, qcolor(color, 0.55), 3.0, 20)
+        wedge = QPainterPath()
+        wedge.moveTo(50, 50)
+        add_arc(wedge, 50, 50, 38, -math.pi / 2, math.radians(-45))
+        wedge.closeSubpath()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(qcolor(color, 0.5))
+        painter.drawPath(wedge)
+        self._disc(painter, QColor(color), 50, 50, 6)
 
 
-class RotatingProviderLogo(Gtk.DrawingArea):
-    """Draw a provider pixbuf around its center at a mutable angle."""
+class RotatingProviderLogo(QWidget):
+    """Draw a provider logo around its center at a mutable angle."""
 
-    def __init__(self, pixbuf: GdkPixbuf.Pixbuf, size: int = 30) -> None:
+    def __init__(self, pixmap: QPixmap, size: int = 30) -> None:
         super().__init__()
-        self.pixbuf = pixbuf
+        self.pixmap = pixmap
         self.angle = 0.0
-        self.set_size_request(size, size)
-        self.connect("draw", self.on_draw)
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-    def on_draw(self, _area: Gtk.DrawingArea, cr: "cairo.Context") -> bool:
-        width = self.get_allocated_width()
-        height = self.get_allocated_height()
-        cr.save()
-        cr.translate(width / 2.0, height / 2.0)
-        cr.rotate(self.angle)
-        Gdk.cairo_set_source_pixbuf(
-            cr,
-            self.pixbuf,
-            -self.pixbuf.get_width() / 2.0,
-            -self.pixbuf.get_height() / 2.0,
-        )
-        cr.paint()
-        cr.restore()
-        return False
+    def queue_draw(self) -> None:
+        self.update()
+
+    def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.translate(self.width() / 2.0, self.height() / 2.0)
+        painter.rotate(math.degrees(self.angle))
+        size = self.pixmap.deviceIndependentSize()
+        painter.drawPixmap(QPointF(-size.width() / 2.0, -size.height() / 2.0), self.pixmap)
+
+
+class ToggleSwitch(QAbstractButton):
+    """Pill-shaped on/off switch (GtkSwitch look-alike)."""
+
+    def __init__(self, checked: bool = False) -> None:
+        super().__init__()
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(40, 22)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        return QSize(40, 22)
+
+    def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        on = self.isChecked()
+        painter.setPen(QPen(qcolor(ACCENT, 0.9) if on else qcolor("#ffffff", 0.10), 1))
+        painter.setBrush(qcolor(ACCENT, 0.75) if on else QColor("#151C25"))
+        painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        knob = rect.height() - 6
+        x = rect.right() - knob - 3 if on else rect.left() + 3
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#E6EDF3"))
+        painter.drawEllipse(QRectF(x, rect.top() + 3, knob, knob))
+
+
+class HoverBox(QWidget):
+    """Row container reporting pointer enter/leave (shows the row's last sticker)."""
+
+    def __init__(self, on_enter: Callable[["HoverBox"], None], on_leave: Callable[["HoverBox"], None]) -> None:
+        super().__init__()
+        self.on_enter = on_enter
+        self.on_leave = on_leave
+
+    def enterEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        self.on_enter(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        self.on_leave(self)
+        super().leaveEvent(event)
 
 
 # ---- GIF sticker geometry (design spec "C · Naklejka wyskakuje", card-relative) ----
@@ -380,63 +870,37 @@ def ease_out_back(progress: float) -> float:
     return 1 + c3 * t * t * t + c1 * t * t
 
 
-def rounded_rect(cr: "cairo.Context", x: float, y: float, w: float, h: float, radii: tuple[float, float, float, float]) -> None:
-    """Rounded rectangle path; radii are (top-left, top-right, bottom-right, bottom-left)."""
-    tl, tr, br, bl = radii
-    cr.new_sub_path()
-    cr.arc(x + w - tr, y + tr, tr, -math.pi / 2, 0)
-    cr.arc(x + w - br, y + h - br, br, 0, math.pi / 2)
-    cr.arc(x + bl, y + h - bl, bl, math.pi / 2, math.pi)
-    cr.arc(x + tl, y + tl, tl, math.pi, 3 * math.pi / 2)
-    cr.close_path()
+class StickerOverlay(QWidget):
+    """Transparent, click-through window that shows a tilted GIF sticker plus a speech bubble.
 
-
-class StickerOverlay(Gtk.Window):
-    """Transparent, click-through popup that shows a tilted GIF sticker plus a speech bubble.
-
-    It lives in its own window so the widget card never changes size or shifts. Only GTK's
-    built-in GdkPixbuf GIF animation is used; nothing here touches the network.
+    It lives in its own window so the widget card never changes size or shifts. KLIPY media
+    arrives as bytes and is decoded from memory (QBuffer); it is never written to disk.
     """
 
     WIDTH = OVERLAY_LEFT_ROOM + STICKER_WIDTH + OVERLAY_RIGHT_ROOM
     HEIGHT = OVERLAY_TOP_ROOM + STICKER_HEIGHT + OVERLAY_BOTTOM_ROOM
 
     def __init__(self) -> None:
-        super().__init__(type=Gtk.WindowType.POPUP)
-        self.set_name("stickerOverlay")
-        self.set_app_paintable(True)
-        self.set_decorated(False)
-        self.set_keep_above(True)
-        self.set_accept_focus(False)
-        self.set_skip_taskbar_hint(True)
-        self.set_skip_pager_hint(True)
-        self.set_default_size(self.WIDTH, self.HEIGHT)
-        self.set_size_request(self.WIDTH, self.HEIGHT)
-        screen = self.get_screen()
-        visual = screen.get_rgba_visual()
-        self.transparent = visual is not None and screen.is_composited()
-        if visual is not None:
-            self.set_visual(visual)
-        self.area = Gtk.DrawingArea()
-        self.area.connect("draw", self.on_draw)
-        self.add(self.area)
-        if CAIRO_OK:
-            # Click-through: an empty input shape lets the pointer and clicks reach the widget
-            # below. Set through GTK (not GdkWindow) so GtkWindow does not reset it on resize.
-            self.input_shape_combine_region(cairo.Region())
-            self.area.input_shape_combine_region(cairo.Region())
+        super().__init__(None, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint
+                         | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowTransparentForInput
+                         | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.setObjectName("stickerOverlay")
+        prepare_floating_window(self)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
 
         self.choice: stickers.StickerChoice | None = None
         self.color = "#8B93A1"
-        self.pixbuf: GdkPixbuf.Pixbuf | None = None
-        self.animation_iter: GdkPixbuf.PixbufAnimationIter | None = None
+        self.frame: QImage | None = None
+        self.movie: QMovie | None = None
+        self.buffer: QBuffer | None = None
         self.phase = "hidden"  # hidden → in → shown → out → hidden
-        self.phase_started = 0
+        self.phase_started = 0.0
         self.sticky = False
         self.reduced_motion = False
-        self.tick_source: int | None = None
-        self.frame_source: int | None = None
-        self.hold_source: int | None = None
+        self.tick_source: QTimer | None = None
+        self.hold_source: QTimer | None = None
 
     @property
     def visible(self) -> bool:
@@ -447,74 +911,66 @@ class StickerOverlay(Gtk.Window):
         sticker_top = card_top + STICKER_OFFSET_TOP
         self.move(sticker_left - OVERLAY_LEFT_ROOM, sticker_top - OVERLAY_TOP_ROOM)
 
+    def stop_movie(self) -> None:
+        if self.movie is not None:
+            self.movie.stop()
+            self.movie.deleteLater()
+        self.movie = None
+        self.buffer = None
+
     def load_image(self, choice: stickers.StickerChoice) -> None:
         """Load a local file, or KLIPY media straight from memory (it is never written to disk)."""
-        self.stop_source("frame_source")
-        self.pixbuf = None
-        self.animation_iter = None
+        self.stop_movie()
+        self.frame = None
         if choice.image is None and choice.data is None:
             return
-        try:
-            if choice.data is not None:
-                loader = GdkPixbuf.PixbufLoader()
-                loader.write(choice.data)
-                loader.close()
-                animation = loader.get_animation()
-            else:
-                animation = GdkPixbuf.PixbufAnimation.new_from_file(str(choice.image))
-        except Exception as error:
-            log(f"sticker: cannot load {choice.label}: {error}")
+        movie = QMovie()
+        if choice.data is not None:
+            self.buffer = QBuffer()
+            self.buffer.setData(QByteArray(bytes(choice.data)))
+            self.buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+            movie.setDevice(self.buffer)
+        else:
+            movie.setFileName(str(choice.image))
+        if not movie.isValid() or not movie.jumpToFrame(0):
+            log(f"sticker: cannot load {choice.label}")
+            self.buffer = None
             return
-        if animation is None:
+        self.frame = movie.currentImage()
+        if self.frame.isNull():
+            log(f"sticker: cannot decode {choice.label}")
+            self.frame = None
+            self.buffer = None
             return
-        if animation.is_static_image():
-            self.pixbuf = animation.get_static_image()
+        if movie.frameCount() == 1:
             log(f"sticker: {choice.label} is a still image (no animation frames)")
+            self.buffer = None
             return
-        self.animation_iter = animation.get_iter(None)
-        self.pixbuf = self.animation_iter.get_pixbuf()
-        self.schedule_frame()
+        movie.frameChanged.connect(self.on_frame)
+        self.movie = movie
+        movie.start()
 
-    def schedule_frame(self) -> None:
-        if self.animation_iter is None:
+    def on_frame(self, _number: int) -> None:
+        if self.movie is None or not self.visible:
             return
-        delay = self.animation_iter.get_delay_time()
-        if delay < 0:
-            return  # last frame of a non-looping GIF
-        self.frame_source = GLib.timeout_add(max(20, delay), self.on_frame)
-
-    def on_frame(self) -> bool:
-        self.frame_source = None
-        if self.animation_iter is None or not self.visible:
-            return False
-        self.animation_iter.advance(None)
-        self.pixbuf = self.animation_iter.get_pixbuf()
-        self.area.queue_draw()
-        self.schedule_frame()
-        return False
-
-    def stop_source(self, name: str) -> None:
-        source = getattr(self, name)
-        if source is not None:
-            GLib.source_remove(source)
-            setattr(self, name, None)
+        self.frame = self.movie.currentImage()
+        self.update()
 
     def present_sticker(self, choice: stickers.StickerChoice, sticky: bool, hold_ms: int | None = STICKER_HOLD_MS) -> None:
         """Pop a sticker in. `hold_ms=None` keeps it until `tuck()` (hover, sticky states)."""
-        settings = Gtk.Settings.get_default()
-        self.reduced_motion = settings is not None and not settings.get_property("gtk-enable-animations")
-        self.stop_source("hold_source")
+        source_remove(self.hold_source)
+        self.hold_source = None
         self.choice = choice
         self.color = stickers.STICKER_COLORS.get(choice.key, "#8B93A1")
         self.sticky = sticky
         self.load_image(choice)
         self.phase = "in"
-        self.phase_started = GLib.get_monotonic_time()
-        self.show_all()
-        self.area.queue_draw()
+        self.phase_started = monotonic_ms()
+        self.show()
+        self.update()
         self.start_tick()
         if not sticky and hold_ms is not None:
-            self.hold_source = GLib.timeout_add(hold_ms, self.on_hold_done)
+            self.hold_source = timeout_add(hold_ms, self.on_hold_done)
 
     def on_hold_done(self) -> bool:
         self.hold_source = None
@@ -524,26 +980,28 @@ class StickerOverlay(Gtk.Window):
     def tuck(self) -> None:
         if self.phase in ("hidden", "out"):
             return
-        self.stop_source("hold_source")
+        source_remove(self.hold_source)
+        self.hold_source = None
         self.phase = "out"
-        self.phase_started = GLib.get_monotonic_time()
+        self.phase_started = monotonic_ms()
         self.start_tick()
 
     def hide_now(self) -> None:
-        for name in ("hold_source", "tick_source", "frame_source"):
-            self.stop_source(name)
+        for name in ("hold_source", "tick_source"):
+            source_remove(getattr(self, name))
+            setattr(self, name, None)
+        self.stop_movie()
         self.phase = "hidden"
         self.choice = None
-        self.pixbuf = None
-        self.animation_iter = None
+        self.frame = None
         self.hide()
 
     def start_tick(self) -> None:
         if self.tick_source is None:
-            self.tick_source = GLib.timeout_add(STICKER_FRAME_MS, self.on_tick)
+            self.tick_source = timeout_add(STICKER_FRAME_MS, self.on_tick)
 
     def elapsed_ms(self) -> float:
-        return (GLib.get_monotonic_time() - self.phase_started) / 1000.0
+        return monotonic_ms() - self.phase_started
 
     def on_tick(self) -> bool:
         elapsed = self.elapsed_ms()
@@ -553,7 +1011,7 @@ class StickerOverlay(Gtk.Window):
             self.tick_source = None
             self.hide_now()
             return False
-        self.area.queue_draw()
+        self.update()
         if self.phase == "shown":
             self.tick_source = None
             return False
@@ -576,121 +1034,96 @@ class StickerOverlay(Gtk.Window):
             return 1.0 - 0.1 * eased, 1.0, 1.0 - eased, 40.0 * eased
         return 1.0, 1.0, 1.0, 0.0
 
-    def on_draw(self, _area: Gtk.Widget, cr: "cairo.Context") -> bool:
-        if not CAIRO_OK:
-            return False
-        cr.set_operator(cairo.OPERATOR_SOURCE)
-        cr.set_source_rgba(0, 0, 0, 0)
-        cr.paint()
-        cr.set_operator(cairo.OPERATOR_OVER)
+    def paintEvent(self, _event: object) -> None:  # noqa: N802 - Qt API
         if self.choice is None or not self.visible:
-            return False
-        self.draw_sticker(cr)
-        if self.choice.bubble and PANGOCAIRO_OK:
-            self.draw_bubble(cr)
-        return False
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        self.draw_sticker(painter)
+        if self.choice.bubble:
+            self.draw_bubble(painter)
 
-    def draw_sticker(self, cr: "cairo.Context") -> None:
+    def draw_sticker(self, painter: QPainter) -> None:
         scale, turn, opacity, dy = self.transform()
         if opacity <= 0:
             return
-        cx = OVERLAY_LEFT_ROOM + STICKER_WIDTH / 2
-        cy = OVERLAY_TOP_ROOM + STICKER_HEIGHT / 2 + dy
-        cr.save()
-        cr.translate(cx, cy)
-        cr.rotate(math.radians(STICKER_ROTATION_DEG * turn))
-        cr.scale(scale, scale)
-        cr.push_group()
+        painter.save()
+        painter.translate(OVERLAY_LEFT_ROOM + STICKER_WIDTH / 2, OVERLAY_TOP_ROOM + STICKER_HEIGHT / 2 + dy)
+        painter.rotate(STICKER_ROTATION_DEG * turn)
+        painter.scale(scale, scale)
+        painter.setOpacity(opacity)
         half_w, half_h = STICKER_WIDTH / 2, STICKER_HEIGHT / 2
+        painter.setPen(Qt.PenStyle.NoPen)
 
         # Soft drop shadow: a few stacked translucent layers approximate a 24 px blur.
         for spread, alpha in ((10, 0.06), (6, 0.10), (3, 0.16), (0, 0.22)):
-            rounded_rect(cr, -half_w - spread, -half_h + 10 - spread, STICKER_WIDTH + 2 * spread,
-                         STICKER_HEIGHT + 2 * spread, (10 + spread,) * 4)
-            cr.set_source_rgba(0, 0, 0, alpha)
-            cr.fill()
-
-        rounded_rect(cr, -half_w, -half_h, STICKER_WIDTH, STICKER_HEIGHT, (10, 10, 10, 10))
-        cr.set_source_rgb(*hex_to_rgb("#F4F1EA"))
-        cr.fill()
+            painter.setBrush(qcolor("#000000", alpha))
+            painter.drawPath(rounded_rect_path(-half_w - spread, -half_h + 10 - spread, STICKER_WIDTH + 2 * spread,
+                                               STICKER_HEIGHT + 2 * spread, (10 + spread,) * 4))
+        painter.setBrush(QColor("#F4F1EA"))
+        painter.drawPath(rounded_rect_path(-half_w, -half_h, STICKER_WIDTH, STICKER_HEIGHT, (10, 10, 10, 10)))
 
         inner_w = STICKER_WIDTH - 2 * STICKER_PADDING
         inner_h = STICKER_HEIGHT - 2 * STICKER_PADDING
-        rounded_rect(cr, -inner_w / 2, -inner_h / 2, inner_w, inner_h, (6, 6, 6, 6))
-        cr.clip()
-        if self.pixbuf is not None:
-            width, height = self.pixbuf.get_width(), self.pixbuf.get_height()
+        painter.setClipPath(rounded_rect_path(-inner_w / 2, -inner_h / 2, inner_w, inner_h, (6, 6, 6, 6)))
+        if self.frame is not None and not self.frame.isNull():
+            width, height = self.frame.width(), self.frame.height()
             cover = max(inner_w / width, inner_h / height)
-            cr.save()
-            cr.scale(cover, cover)
-            Gdk.cairo_set_source_pixbuf(cr, self.pixbuf, -width / 2, -height / 2)
-            cr.paint()
-            cr.restore()
+            target = QRectF(-width * cover / 2, -height * cover / 2, width * cover, height * cover)
+            painter.drawImage(target, self.frame)
         else:
-            self.draw_placeholder(cr, inner_w, inner_h)
-        if self.choice is not None and self.choice.source == "klipy" and PANGOCAIRO_OK:
-            self.draw_klipy_mark(cr, inner_w, inner_h)
-        cr.pop_group_to_source()
-        cr.paint_with_alpha(opacity)
-        cr.restore()
+            self.draw_placeholder(painter, inner_w, inner_h)
+        if self.choice is not None and self.choice.source == "klipy":
+            self.draw_klipy_mark(painter, inner_w, inner_h)
+        painter.restore()
 
-    def draw_klipy_mark(self, cr: "cairo.Context", width: float, height: float) -> None:
+    def draw_klipy_mark(self, painter: QPainter, width: float, height: float) -> None:
         """Small "KLIPY" attribution mark in the image's bottom-right corner."""
-        layout = PangoCairo.create_layout(cr)
-        layout.set_font_description(Pango.FontDescription.from_string("IBM Plex Sans, Cantarell, sans-serif Bold 6"))
-        layout.set_text("KLIPY", -1)
-        text_w, text_h = layout.get_pixel_size()
+        font = make_font(SANS_FAMILIES, 6, QFont.Weight.Bold)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        text_w, text_h = metrics.horizontalAdvance("KLIPY"), metrics.height()
         x = width / 2 - text_w - 8
         y = height / 2 - text_h - 5
-        rounded_rect(cr, x - 4, y - 1, text_w + 8, text_h + 2, (4, 4, 4, 4))
-        cr.set_source_rgba(0, 0, 0, 0.45)
-        cr.fill()
-        cr.move_to(x, y)
-        cr.set_source_rgba(1, 1, 1, 0.9)
-        PangoCairo.show_layout(cr, layout)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(qcolor("#000000", 0.45))
+        painter.drawPath(rounded_rect_path(x - 4, y - 1, text_w + 8, text_h + 2, (4, 4, 4, 4)))
+        painter.setPen(qcolor("#ffffff", 0.9))
+        painter.drawText(QRectF(x, y, text_w + 1, text_h), Qt.AlignmentFlag.AlignLeft, "KLIPY")
 
-    def draw_placeholder(self, cr: "cairo.Context", width: float, height: float) -> None:
+    def draw_placeholder(self, painter: QPainter, width: float, height: float) -> None:
         """Diagonal stripes in the status colour (the spec's "no GIF in the pool" look)."""
-        red, green, blue = hex_to_rgb(self.color)
-        cr.set_source_rgb(red * 0.35, green * 0.35, blue * 0.35)
-        cr.paint()
-        cr.set_source_rgba(red, green, blue, 0.55)
-        cr.set_line_width(8)
+        base = QColor(self.color)
+        painter.fillRect(QRectF(-width / 2, -height / 2, width, height),
+                         QColor.fromRgbF(base.redF() * 0.35, base.greenF() * 0.35, base.blueF() * 0.35))
+        painter.setPen(QPen(qcolor(self.color, 0.55), 8))
         for offset in range(-int(height) - int(width), int(width) + int(height), 22):
-            cr.move_to(-width / 2 + offset, height / 2)
-            cr.line_to(-width / 2 + offset + height, -height / 2)
-        cr.stroke()
+            painter.drawLine(QPointF(-width / 2 + offset, height / 2), QPointF(-width / 2 + offset + height, -height / 2))
 
-    def draw_bubble(self, cr: "cairo.Context") -> None:
+    def draw_bubble(self, painter: QPainter) -> None:
         scale, turn, opacity, dy = self.transform(delay_ms=BUBBLE_DELAY_MS if self.phase == "in" else 0.0)
         if opacity <= 0 or self.choice is None:
             return
-        layout = PangoCairo.create_layout(cr)
-        layout.set_font_description(Pango.FontDescription.from_string("JetBrains Mono, IBM Plex Mono, monospace Semi-Bold 9"))
-        layout.set_width((BUBBLE_MAX_WIDTH - 20) * Pango.SCALE)
-        layout.set_wrap(Pango.WrapMode.WORD_CHAR)
-        layout.set_text(self.choice.bubble, -1)
-        text_w, text_h = layout.get_pixel_size()
+        layout, text_w, text_h = text_block(
+            self.choice.bubble, make_font(MONO_FAMILIES, 9, QFont.Weight.DemiBold), BUBBLE_MAX_WIDTH - 20,
+        )
         bubble_w, bubble_h = text_w + 20, text_h + 12
         right = OVERLAY_LEFT_ROOM - BUBBLE_GAP
         top = OVERLAY_TOP_ROOM + 14 + dy
-        cr.save()
-        cr.translate(right - bubble_w / 2, top + bubble_h / 2)
-        cr.rotate(math.radians(-3.0 * turn))
-        cr.scale(scale, scale)
-        cr.push_group()
-        rounded_rect(cr, -bubble_w / 2, -bubble_h / 2 + 3, bubble_w, bubble_h, (12, 12, 2, 12))
-        cr.set_source_rgba(0, 0, 0, 0.30)
-        cr.fill()
-        rounded_rect(cr, -bubble_w / 2, -bubble_h / 2, bubble_w, bubble_h, (12, 12, 2, 12))
-        cr.set_source_rgb(*hex_to_rgb(self.color))
-        cr.fill()
-        cr.move_to(-text_w / 2, -text_h / 2)
-        cr.set_source_rgb(*hex_to_rgb("#0E1218"))
-        PangoCairo.show_layout(cr, layout)
-        cr.pop_group_to_source()
-        cr.paint_with_alpha(opacity)
-        cr.restore()
+        painter.save()
+        painter.translate(right - bubble_w / 2, top + bubble_h / 2)
+        painter.rotate(-3.0 * turn)
+        painter.scale(scale, scale)
+        painter.setOpacity(opacity)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(qcolor("#000000", 0.30))
+        painter.drawPath(rounded_rect_path(-bubble_w / 2, -bubble_h / 2 + 3, bubble_w, bubble_h, (12, 12, 2, 12)))
+        painter.setBrush(QColor(self.color))
+        painter.drawPath(rounded_rect_path(-bubble_w / 2, -bubble_h / 2, bubble_w, bubble_h, (12, 12, 2, 12)))
+        painter.setPen(QColor("#0E1218"))
+        layout.draw(painter, QPointF(-text_w / 2, -text_h / 2))
+        painter.restore()
 
 
 # Docked session windows stack under the widget with this much room between cards, so each
@@ -699,7 +1132,23 @@ SESSION_CARD_GAP = 88
 SESSION_CARD_TITLE = "AI agent session"
 
 
-class SessionCard(Gtk.Window):
+def build_card_window(window: QWidget) -> tuple[QFrame, QVBoxLayout]:
+    """Transparent window → 8 px margin → rounded `#card` frame; the window hugs its content."""
+    outer = QVBoxLayout(window)
+    outer.setContentsMargins(WINDOW_MARGIN, WINDOW_MARGIN, WINDOW_MARGIN, WINDOW_MARGIN)
+    outer.setSpacing(0)
+    outer.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+    card = QFrame()
+    card.setObjectName("card")
+    card.setFixedWidth(CARD_WIDTH)
+    outer.addWidget(card)
+    inner = QVBoxLayout(card)
+    inner.setContentsMargins(0, 0, 0, 0)
+    inner.setSpacing(0)
+    return card, inner
+
+
+class SessionCard(QWidget):
     """A separate, draggable window for one agent session (run), with its own GIF sticker.
 
     Docked cards stack under the main widget and follow it; dragging a card makes it
@@ -708,56 +1157,32 @@ class SessionCard(Gtk.Window):
     """
 
     def __init__(self, owner: "StatusWidget", session_id: str) -> None:
-        super().__init__(title=SESSION_CARD_TITLE)
+        super().__init__(None, tool_window_flags(accept_focus=False))
         self.owner = owner
         self.session_id = session_id
-        self.set_name("window")
-        self.set_app_paintable(True)
-        screen = self.get_screen()
-        visual = screen.get_rgba_visual()
-        if visual is not None and screen.is_composited():
-            self.set_visual(visual)
-        self.set_resizable(False)
-        self.set_decorated(False)
-        self.set_keep_above(True)
-        self.set_skip_taskbar_hint(True)
-        self.set_skip_pager_hint(True)
-        self.set_accept_focus(False)
-        self.stick()
-        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
-
-        event_box = Gtk.EventBox()
-        event_box.connect("button-press-event", self.on_button_press)
-        self.add(event_box)
-        self.card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.card.set_name("card")
-        self.card.set_size_request(CARD_WIDTH, -1)
-        for setter in (self.card.set_margin_top, self.card.set_margin_bottom,
-                       self.card.set_margin_start, self.card.set_margin_end):
-            setter(8)
-        event_box.add(self.card)
-        self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        for setter in (self.content.set_margin_top, self.content.set_margin_bottom,
-                       self.content.set_margin_start, self.content.set_margin_end):
-            setter(6)
-        self.card.pack_start(self.content, True, True, 0)
+        self.setWindowTitle(SESSION_CARD_TITLE)
+        self.setObjectName("window")
+        prepare_floating_window(self)
+        self.card, card_layout = build_card_window(self)
+        self.content = QVBoxLayout()
+        self.content.setContentsMargins(6, 6, 6, 6)
+        card_layout.addLayout(self.content)
 
         self.waiting_dots: list[StatusDot] = []
-        self.dot_labels: list[Gtk.Label] = []
+        self.dot_labels: list[QLabel] = []
         self.signature: str | None = None
         self.session: dict[str, object] | None = None
         self.floating = False
         self.closed = False
         self.sticker_key: str | None = None
         self.sticker_request = 0
-        self.sticker_debounce: int | None = None
-        self.rotate_source: int | None = None
-        self.save_source: int | None = None
-        self.overlay = StickerOverlay() if CAIRO_OK else None
-        self.connect("configure-event", self.on_configure)
+        self.sticker_debounce: QTimer | None = None
+        self.rotate_source: QTimer | None = None
+        self.save_source: QTimer | None = None
+        self.overlay: StickerOverlay | None = StickerOverlay()
 
     # ---- content ----
-    def update(self, session: dict[str, object]) -> None:
+    def update_session(self, session: dict[str, object]) -> None:
         self.session = session
         signature = json.dumps(
             [session["name"], session["status"], session["project"], session["time"], session["kind"]],
@@ -765,20 +1190,15 @@ class SessionCard(Gtk.Window):
         )
         if signature != self.signature:
             self.signature = signature
-            for child in self.content.get_children():
-                self.content.remove(child)
+            clear_layout(self.content)
             self.waiting_dots = []
             self.dot_labels = []
-            row = self.owner.build_row(session, self.waiting_dots, self.dot_labels)
-            self.content.pack_start(row, False, False, 0)
-            context = self.card.get_style_context()
-            if session["kind"] == "waiting":
-                context.add_class("waiting")
-            else:
-                context.remove_class("waiting")
-                context.remove_class("waitingPulse")
-            self.content.show_all()
-            self.resize(1, 1)  # shrink-wrap to the new row
+            self.content.addWidget(self.owner.build_row(session, self.waiting_dots, self.dot_labels))
+            waiting = session["kind"] == "waiting"
+            set_flag(self.card, "waiting", waiting)
+            if not waiting:
+                set_flag(self.card, "pulse", False)
+            self.adjustSize()  # shrink-wrap to the new row
         self.update_sticker()
 
     def update_sticker(self) -> None:
@@ -797,8 +1217,7 @@ class SessionCard(Gtk.Window):
     def request_sticker(self, key: str) -> None:
         if self.overlay is None:
             return
-        if self.sticker_debounce is not None:
-            GLib.source_remove(self.sticker_debounce)
+        source_remove(self.sticker_debounce)
         self.sticker_request += 1
         request = self.sticker_request
         source = self.owner.sticker_source
@@ -812,18 +1231,17 @@ class SessionCard(Gtk.Window):
                 except Exception as error:  # never let a sticker take the widget down
                     log(f"sticker: pick failed: {error}")
                     choice = stickers.StickerChoice(key, None, "", "placeholder")
-                GLib.idle_add(self.apply_sticker, request, choice)
+                idle_add(self.apply_sticker, request, choice)
 
             threading.Thread(target=worker, daemon=True).start()
             return False
 
-        self.sticker_debounce = GLib.timeout_add(STICKER_DEBOUNCE_MS, pick_in_background)
+        self.sticker_debounce = timeout_add(STICKER_DEBOUNCE_MS, pick_in_background)
 
     def apply_sticker(self, request: int, choice: stickers.StickerChoice) -> bool:
         if self.closed or self.overlay is None or request != self.sticker_request or self.owner.serious_mode:
             return False
-        log(f"sticker: {self.session_id} {choice.key} from {choice.source}"
-            + f" ({choice.label})")
+        log(f"sticker: {self.session_id} {choice.key} from {choice.source} ({choice.label})")
         self.place_overlay()
         self.overlay.present_sticker(choice, sticky=True)
         self.schedule_rotation()
@@ -834,12 +1252,11 @@ class SessionCard(Gtk.Window):
         self.stop_rotation()
         seconds = self.owner.sticker_rotate_seconds
         if seconds > 0 and self.sticker_key is not None:
-            self.rotate_source = GLib.timeout_add_seconds(seconds, self.on_rotate)
+            self.rotate_source = timeout_add_seconds(seconds, self.on_rotate)
 
     def stop_rotation(self) -> None:
-        if self.rotate_source is not None:
-            GLib.source_remove(self.rotate_source)
-            self.rotate_source = None
+        source_remove(self.rotate_source)
+        self.rotate_source = None
 
     def on_rotate(self) -> bool:
         self.rotate_source = None
@@ -854,9 +1271,8 @@ class SessionCard(Gtk.Window):
         self.stop_rotation()
         self.sticker_key = None
         self.sticker_request += 1
-        if self.sticker_debounce is not None:
-            GLib.source_remove(self.sticker_debounce)
-            self.sticker_debounce = None
+        source_remove(self.sticker_debounce)
+        self.sticker_debounce = None
         if self.overlay is not None and self.overlay.visible:
             self.overlay.tuck()
 
@@ -868,71 +1284,67 @@ class SessionCard(Gtk.Window):
     def place_overlay(self) -> None:
         if self.overlay is None:
             return
-        x, y = self.get_position()
-        width, _height = self.get_size()
-        self.overlay.place_for_card(x + width - 8, y + 8)
+        geometry = self.geometry()
+        self.overlay.place_for_card(geometry.x() + geometry.width() - WINDOW_MARGIN, geometry.y() + WINDOW_MARGIN)
 
     # ---- placement ----
     def dock_at(self, x: int, y: int) -> None:
         if self.floating:
             return
-        if tuple(self.get_position()) != (x, y):
+        if (self.x(), self.y()) != (x, y):
             self.move(x, y)
 
-    def on_configure(self, _widget: Gtk.Widget, _event: Gdk.EventConfigure) -> bool:
+    def moveEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        super().moveEvent(event)
         if self.overlay is not None and self.overlay.visible:
             self.place_overlay()
-        if self.floating:
-            # A drag fires many configure events; persist once it settles.
-            if self.save_source is not None:
-                GLib.source_remove(self.save_source)
-            self.save_source = GLib.timeout_add(400, self.save_position)
-        return False
+        if self.floating and not self.closed:
+            # A drag fires many move events; persist once it settles.
+            source_remove(self.save_source)
+            self.save_source = timeout_add(400, self.save_position)
 
     def save_position(self) -> bool:
         self.save_source = None
         if not self.closed and self.floating:
-            x, y = self.get_position()
-            self.owner.save_card_position(self.session_id, x, y)
+            self.owner.save_card_position(self.session_id, self.x(), self.y())
         return False
 
-    def on_button_press(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
-        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 1:
+    def mousePressEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        button = event.button()
+        if button == Qt.MouseButton.LeftButton:
             self.floating = True
-            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
-            return True
-        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
-            menu = Gtk.Menu()
-            another = Gtk.MenuItem(label="Show another GIF")
-            another.set_sensitive(self.sticker_key is not None and not self.owner.serious_mode)
-            another.connect("activate", lambda _item: self.show_another_gif())
-            dock = Gtk.MenuItem(label="Dock under the widget")
-            dock.set_sensitive(self.floating)
-            dock.connect("activate", lambda _item: self.owner.dock_card(self.session_id))
-            dock_all = Gtk.MenuItem(label="Dock all session windows")
-            dock_all.connect("activate", lambda _item: self.owner.dock_all_cards())
-            settings = Gtk.MenuItem(label="Settings…")
-            settings.connect("activate", lambda _item: self.owner.open_settings())
-            for item in (another, dock, dock_all, settings):
-                menu.append(item)
-            menu.show_all()
-            menu.popup_at_pointer(event)
-            return True
-        return False
+            handle = self.windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+            return
+        if button == Qt.MouseButton.RightButton:
+            menu = QMenu(self)
+            another = menu.addAction("Show another GIF")
+            another.setEnabled(self.sticker_key is not None and not self.owner.serious_mode)
+            another.triggered.connect(self.show_another_gif)
+            dock = menu.addAction("Dock under the widget")
+            dock.setEnabled(self.floating)
+            dock.triggered.connect(lambda: self.owner.dock_card(self.session_id))
+            dock_all = menu.addAction("Dock all session windows")
+            dock_all.triggered.connect(self.owner.dock_all_cards)
+            settings = menu.addAction("Settings…")
+            settings.triggered.connect(self.owner.open_settings)
+            menu.exec(event.globalPosition().toPoint())
+            return
+        super().mousePressEvent(event)
 
-    def close(self) -> None:
+    def close_card(self) -> None:
         if self.closed:
             return
         self.closed = True
         for name in ("sticker_debounce", "save_source", "rotate_source"):
-            source = getattr(self, name)
-            if source is not None:
-                GLib.source_remove(source)
-                setattr(self, name, None)
+            source_remove(getattr(self, name))
+            setattr(self, name, None)
         if self.overlay is not None:
             self.overlay.hide_now()
-            self.overlay.destroy()
-        self.destroy()
+            self.overlay.deleteLater()
+        self.hide()
+        self.deleteLater()
 
 
 # Timing settings shown in the Settings window: (env key, widget config key, label, hint).
@@ -950,299 +1362,299 @@ MAX_ROWS_LIMIT = 12
 MAX_MINUTES = 24 * 60
 
 
-class SettingsWindow(Gtk.Window):
+def section_label(text: str) -> QLabel:
+    label = QLabel(text.upper())
+    label.setObjectName("settingsSection")
+    return label
+
+
+def hint_label(text: str, wrap: bool = False) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("settingsHint")
+    label.setWordWrap(wrap)
+    return label
+
+
+def dialog_button(text: str) -> QPushButton:
+    button = QPushButton(text)
+    button.setObjectName("settingsClose")
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    return button
+
+
+def new_grid() -> QGridLayout:
+    grid = QGridLayout()
+    grid.setVerticalSpacing(8)
+    grid.setHorizontalSpacing(18)
+    grid.setColumnStretch(0, 1)
+    return grid
+
+
+def style_spin(spin: QAbstractSpinBox) -> None:
+    # The step buttons live next to the field (see spin_field): style sheets cannot draw
+    # Fusion's arrow images, so the built-in ones are collapsed to zero width in
+    # STYLE_SHEET (NoButtons plus a style sheet leaves Qt's line edit 1 px wide).
+    spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+
+
+def spin_field(spin: QAbstractSpinBox) -> QWidget:
+    """A spin box with GTK-style "−" / "+" buttons on its right."""
+    field = QWidget()
+    layout = QHBoxLayout(field)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    layout.addWidget(spin)
+    for side, text, step in (("minus", "−", spin.stepDown), ("plus", "+", spin.stepUp)):
+        button = QPushButton(text)
+        button.setObjectName("spinStep")
+        button.setProperty("side", side)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.setAutoRepeat(True)
+        button.clicked.connect(step)
+        layout.addWidget(button)
+    return field
+
+
+def minutes_spin(maximum: float, value: float) -> QDoubleSpinBox:
+    spin = QDoubleSpinBox()
+    style_spin(spin)
+    spin.setRange(0, maximum)
+    spin.setSingleStep(0.5)
+    spin.setDecimals(1)
+    spin.setValue(value)
+    spin.setKeyboardTracking(False)
+    return spin
+
+
+class DialogWindow(QWidget):
+    """Dark, always-on-top dialog shell shared by Settings and the KLIPY guide."""
+
+    def __init__(self, title: str, heading: str) -> None:
+        super().__init__(None, Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowTitle(title)
+        self.setObjectName("settingsWindow")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+        self.outer = outer
+
+        header = QFrame()
+        header.setObjectName("settingsHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(16, 12, 16, 10)
+        header_layout.setSpacing(8)
+        header_layout.addWidget(LogoMark(17, variant="mono", mono_color="#E6EDF3"))
+        heading_label = QLabel(heading)
+        heading_label.setObjectName("settingsHeading")
+        header_layout.addWidget(heading_label, 1)
+        outer.addWidget(header)
+
+        content_frame = QWidget()
+        self.content = QVBoxLayout(content_frame)
+        self.content.setContentsMargins(16, 4, 16, 12)
+        self.content.setSpacing(4)
+        outer.addWidget(content_frame)
+
+        footer = QFrame()
+        footer.setObjectName("settingsFooter")
+        self.footer = QHBoxLayout(footer)
+        self.footer.setContentsMargins(16, 10, 16, 12)
+        self.footer.setSpacing(8)
+        self.footer_frame = footer
+
+    def finish(self, note: QLabel) -> None:
+        self.footer.addWidget(note, 1)
+        close = dialog_button("Close")
+        close.clicked.connect(self.close)
+        self.footer.addWidget(close, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.outer.addWidget(self.footer_frame)
+
+    def keyPressEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            return
+        super().keyPressEvent(event)
+
+
+class SettingsWindow(DialogWindow):
     """Small instant-apply settings dialog; every change is saved to the runtime .env."""
 
     def __init__(self, owner: "StatusWidget") -> None:
-        super().__init__(title="AI Status Monitor — Settings")
+        super().__init__("AI Status Monitor — Settings", "Settings")
         self.owner = owner
-        self.set_name("settingsWindow")
-        self.set_transient_for(owner)
-        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
-        self.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
-        self.set_keep_above(True)
-        self.set_resizable(False)
-        self.set_border_width(0)
-        self.agent_checks: dict[str, Gtk.CheckButton] = {}
-        self.connect("key-press-event", self.on_key_press)
-        self.connect("delete-event", lambda *_args: self.close_window() or True)
-        # Native controls (switch, spin buttons, checkboxes) follow the widget's dark look.
-        gtk_settings = Gtk.Settings.get_default()
-        if gtk_settings is not None:
-            gtk_settings.set_property("gtk-application-prefer-dark-theme", True)
-
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        outer.set_name("settingsBody")
-        self.add(outer)
-
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        header.set_name("settingsHeader")
-        mark = LogoMark(17, variant="mono", mono_color="#E6EDF3")
-        mark.set_valign(Gtk.Align.CENTER)
-        header.pack_start(mark, False, False, 0)
-        heading = Gtk.Label(label="Settings")
-        heading.set_name("settingsHeading")
-        heading.set_xalign(0)
-        header.pack_start(heading, True, True, 0)
-        outer.pack_start(header, False, False, 0)
-
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        content.set_name("settingsContent")
-        outer.pack_start(content, True, True, 0)
+        self.agent_checks: dict[str, QCheckBox] = {}
+        self.klipy_save_source: QTimer | None = None
+        content = self.content
 
         # ---- agents ----
-        content.pack_start(self.section_label("Agents"), False, False, 0)
-        agents_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        content.addWidget(section_label("Agents"))
+        agents_row = QHBoxLayout()
+        agents_row.setSpacing(14)
         for agent, label in (("claude", "Claude Code"), ("codex", "Codex")):
-            check = Gtk.CheckButton()
-            check.set_name("settingsCheck")
-            inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            pixbuf = owner.logo_pixbufs.get(agent)
-            if pixbuf is not None:
-                inner.pack_start(Gtk.Image.new_from_pixbuf(pixbuf), False, False, 0)
-            text = Gtk.Label()
-            text.set_markup(owner.markup(label, AGENT_NAME_COLORS[agent]))
-            text.set_name("settingsAgentName")
-            inner.pack_start(text, False, False, 0)
-            check.add(inner)
-            check.set_active(agent in owner.agents)
-            check.connect("toggled", self.on_agent_toggled)
+            check = QCheckBox(label)
+            check.setStyleSheet(f"color: {AGENT_NAME_COLORS[agent]};")
+            pixmap = owner.logo_pixmaps.get(agent)
+            if pixmap is not None:
+                check.setIcon(pixmap)
+            check.setChecked(agent in owner.agents)
+            check.toggled.connect(lambda _checked, box=check: self.on_agent_toggled(box))
             self.agent_checks[agent] = check
-            agents_box.pack_start(check, False, False, 0)
-        content.pack_start(agents_box, False, False, 0)
-        content.pack_start(self.hint_label("Hidden agents get no rows, usage bars, sounds or usage requests."), False, False, 0)
+            agents_row.addWidget(check)
+        agents_row.addStretch(1)
+        content.addLayout(agents_row)
+        content.addWidget(hint_label("Hidden agents get no rows, usage bars, sounds or usage requests."))
 
         # ---- display ----
-        content.pack_start(self.section_label("Display"), False, False, 0)
-        grid = self.new_grid()
-        self.sound_switch = Gtk.Switch()
-        self.sound_switch.set_halign(Gtk.Align.END)
-        self.sound_switch.set_valign(Gtk.Align.CENTER)
-        self.sound_switch.set_active(owner.config.get("sound_enabled") is True)
-        self.sound_switch.connect("notify::active", self.on_sound_changed)
+        content.addWidget(section_label("Display"))
+        grid = new_grid()
+        self.sound_switch = ToggleSwitch(owner.config.get("sound_enabled") is True)
+        self.sound_switch.toggled.connect(self.on_sound_changed)
         self.attach_row(grid, 0, "Notification sound", "on waiting and when done", self.sound_switch)
-
-        self.rows_spin = Gtk.SpinButton.new_with_range(1, MAX_ROWS_LIMIT, 1)
-        self.rows_spin.set_value(owner.max_rows)
-        self.rows_spin.connect("value-changed", self.on_rows_changed)
-        self.attach_row(grid, 1, "Visible rows", "sessions shown at once", self.rows_spin)
-
-        self.windows_switch = Gtk.Switch()
-        self.windows_switch.set_halign(Gtk.Align.END)
-        self.windows_switch.set_active(owner.session_windows)
-        self.windows_switch.connect("notify::active", self.on_windows_changed)
+        self.rows_spin = QSpinBox()
+        style_spin(self.rows_spin)
+        self.rows_spin.setRange(1, MAX_ROWS_LIMIT)
+        self.rows_spin.setValue(owner.max_rows)
+        self.rows_spin.setKeyboardTracking(False)
+        self.rows_spin.valueChanged.connect(self.on_rows_changed)
+        self.attach_row(grid, 1, "Visible rows", "sessions shown at once", spin_field(self.rows_spin))
+        self.windows_switch = ToggleSwitch(owner.session_windows)
+        self.windows_switch.toggled.connect(self.on_windows_changed)
         self.attach_row(grid, 2, "Session windows", "each run in its own draggable window", self.windows_switch)
-        content.pack_start(grid, False, False, 0)
+        content.addLayout(grid)
 
         # ---- stickers ----
-        content.pack_start(self.section_label("Stickers"), False, False, 0)
-        grid = self.new_grid()
-        self.serious_switch = Gtk.Switch()
-        self.serious_switch.set_halign(Gtk.Align.END)
-        self.serious_switch.set_active(owner.serious_mode)
-        self.serious_switch.connect("notify::active", self.on_serious_changed)
+        content.addWidget(section_label("Stickers"))
+        grid = new_grid()
+        self.serious_switch = ToggleSwitch(owner.serious_mode)
+        self.serious_switch.toggled.connect(self.on_serious_changed)
         self.attach_row(grid, 0, "Serious mode", "no GIF stickers, good for meetings", self.serious_switch)
 
-        self.klipy_entry = Gtk.Entry()
-        self.klipy_entry.set_name("settingsEntry")
-        self.klipy_entry.set_visibility(False)
-        self.klipy_entry.set_width_chars(10)
-        self.klipy_entry.set_placeholder_text("optional")
-        self.klipy_entry.set_text(owner.klipy_api_key)
-        self.klipy_entry.connect("changed", self.on_klipy_changed)
-        self.klipy_save_source: int | None = None
-        key_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        key_box.pack_start(self.klipy_entry, True, True, 0)
-        guide_button = Gtk.Button(label="Get a free key…")
-        guide_button.set_name("settingsClose")
-        guide_button.connect("clicked", lambda _button: owner.open_klipy_guide(self))
-        key_box.pack_start(guide_button, False, False, 0)
-        self.attach_row(grid, 1, "KLIPY API key", "random GIFs · Powered by KLIPY", key_box)
+        self.klipy_entry = QLineEdit(owner.klipy_api_key)
+        self.klipy_entry.setEchoMode(QLineEdit.EchoMode.Password)
+        self.klipy_entry.setPlaceholderText("optional")
+        self.klipy_entry.setFixedWidth(110)
+        self.klipy_entry.textChanged.connect(self.on_klipy_changed)
+        key_box = QHBoxLayout()
+        key_box.setSpacing(6)
+        key_box.addWidget(self.klipy_entry)
+        guide_button = dialog_button("Get a free key…")
+        guide_button.clicked.connect(lambda: owner.open_klipy_guide(self))
+        key_box.addWidget(guide_button)
+        key_widget = QWidget()
+        key_widget.setLayout(key_box)
+        key_box.setContentsMargins(0, 0, 0, 0)
+        self.attach_row(grid, 1, "KLIPY API key", "random GIFs · Powered by KLIPY", key_widget)
 
-        self.rotate_spin = Gtk.SpinButton.new_with_range(0, 30, 0.5)
-        self.rotate_spin.set_digits(1)
-        self.rotate_spin.set_value(owner.sticker_rotate_seconds / 60)
-        self.rotate_spin.connect("value-changed", self.on_rotate_changed)
-        self.attach_row(grid, 2, "New GIF every (min)", "while an agent works · 0 = never", self.rotate_spin)
+        self.rotate_spin = minutes_spin(30, owner.sticker_rotate_seconds / 60)
+        self.rotate_spin.valueChanged.connect(self.on_rotate_changed)
+        self.attach_row(grid, 2, "New GIF every (min)", "while an agent works · 0 = never", spin_field(self.rotate_spin))
 
-        test = Gtk.Button(label="Show test sticker")
-        test.set_name("settingsClose")
-        test.connect("clicked", lambda _button: owner.show_test_sticker())
+        test = dialog_button("Show test sticker")
+        test.clicked.connect(lambda: owner.show_test_sticker())
         self.attach_row(grid, 3, "Preview", "cycles through every status", test)
-        content.pack_start(grid, False, False, 0)
-        gifs_hint = self.hint_label(f"Local GIFs: {display_path(GIFS_DIR)}/<status>/")
-        gifs_hint.set_line_wrap(True)
-        gifs_hint.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        gifs_hint.set_max_width_chars(48)
-        content.pack_start(gifs_hint, False, False, 0)
+        content.addLayout(grid)
+        content.addWidget(hint_label(f"Local GIFs: {display_path(GIFS_DIR)}/<status>/", wrap=True))
 
         # ---- timing ----
-        content.pack_start(self.section_label("Timing (minutes)"), False, False, 0)
-        grid = self.new_grid()
+        content.addWidget(section_label("Timing (minutes)"))
+        grid = new_grid()
         for index, (env_key, config_key, label, hint) in enumerate(TIMING_SETTINGS):
-            spin = Gtk.SpinButton.new_with_range(0, MAX_MINUTES, 0.5)
-            spin.set_digits(1)
-            spin.set_value(owner.config_seconds(config_key) / 60)
-            spin.connect("value-changed", self.on_timing_changed, env_key, config_key)
-            self.attach_row(grid, index, label, hint, spin)
-        content.pack_start(grid, False, False, 0)
+            spin = minutes_spin(MAX_MINUTES, owner.config_seconds(config_key) / 60)
+            spin.valueChanged.connect(lambda value, key=env_key: self.on_timing_changed(value, key))
+            self.attach_row(grid, index, label, hint, spin_field(spin))
+        content.addLayout(grid)
 
-        # ---- footer ----
-        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        footer.set_name("settingsFooter")
-        saved = self.hint_label(f"Saved automatically to {display_path(SETTINGS.env_file)}")
-        saved.set_line_wrap(True)
-        saved.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        saved.set_max_width_chars(34)
-        footer.pack_start(saved, True, True, 0)
-        close = Gtk.Button(label="Close")
-        close.set_name("settingsClose")
-        close.set_valign(Gtk.Align.CENTER)
-        close.connect("clicked", lambda _button: self.close_window())
-        footer.pack_end(close, False, False, 0)
-        outer.pack_start(footer, False, False, 0)
+        note = hint_label(f"Saved automatically to {display_path(SETTINGS.env_file)}", wrap=True)
+        note.setMaximumWidth(260)
+        self.finish(note)
 
     @staticmethod
-    def section_label(text: str) -> Gtk.Label:
-        label = Gtk.Label(label=text.upper())
-        label.set_name("settingsSection")
-        label.set_xalign(0)
-        return label
+    def attach_row(grid: QGridLayout, row: int, title: str, hint: str, control: QWidget) -> None:
+        labels = QVBoxLayout()
+        labels.setSpacing(1)
+        name = QLabel(title)
+        name.setObjectName("settingsLabel")
+        labels.addWidget(name)
+        labels.addWidget(hint_label(hint))
+        grid.addLayout(labels, row, 0)
+        grid.addWidget(control, row, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-    @staticmethod
-    def hint_label(text: str) -> Gtk.Label:
-        label = Gtk.Label(label=text)
-        label.set_name("settingsHint")
-        label.set_xalign(0)
-        return label
-
-    @staticmethod
-    def new_grid() -> Gtk.Grid:
-        grid = Gtk.Grid()
-        grid.set_row_spacing(8)
-        grid.set_column_spacing(18)
-        return grid
-
-    def attach_row(self, grid: Gtk.Grid, row: int, title: str, hint: str, control: Gtk.Widget) -> None:
-        labels = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        name = Gtk.Label(label=title)
-        name.set_name("settingsLabel")
-        name.set_xalign(0)
-        labels.pack_start(name, False, False, 0)
-        labels.pack_start(self.hint_label(hint), False, False, 0)
-        labels.set_hexpand(True)
-        grid.attach(labels, 0, row, 1, 1)
-        control.set_valign(Gtk.Align.CENTER)
-        grid.attach(control, 1, row, 1, 1)
-
-    def close_window(self) -> None:
+    def closeEvent(self, event: object) -> None:  # noqa: N802 - Qt API
         if self.klipy_save_source is not None:
-            GLib.source_remove(self.klipy_save_source)
+            source_remove(self.klipy_save_source)
             self.save_klipy_key()
-        self.destroy()
+        self.owner.on_settings_closed(self)
+        super().closeEvent(event)
 
-    def on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> bool:
-        if event.keyval == Gdk.KEY_Escape:
-            self.close_window()
-            return True
-        return False
-
-    def on_agent_toggled(self, check: Gtk.CheckButton) -> None:
-        agents = tuple(agent for agent in SUPPORTED_AGENTS if self.agent_checks[agent].get_active())
+    def on_agent_toggled(self, check: QCheckBox) -> None:
+        agents = tuple(agent for agent in SUPPORTED_AGENTS if self.agent_checks[agent].isChecked())
         if not agents:
             # At least one agent must stay visible; undo the last uncheck.
-            check.set_active(True)
+            check.setChecked(True)
             return
         self.owner.set_agents(agents)
 
-    def on_sound_changed(self, switch: Gtk.Switch, _param: object) -> None:
-        self.owner.update_setting("AI_STATUS_SOUND_ENABLED", "true" if switch.get_active() else "false")
+    def on_sound_changed(self, checked: bool) -> None:
+        self.owner.update_setting("AI_STATUS_SOUND_ENABLED", "true" if checked else "false")
 
-    def on_serious_changed(self, switch: Gtk.Switch, _param: object) -> None:
-        if switch.get_active() != self.owner.serious_mode:
-            self.owner.set_serious_mode(switch.get_active())
+    def on_serious_changed(self, checked: bool) -> None:
+        if checked != self.owner.serious_mode:
+            self.owner.set_serious_mode(checked)
 
-    def on_rotate_changed(self, spin: Gtk.SpinButton) -> None:
-        self.owner.update_setting("AI_STATUS_STICKER_ROTATE_SECONDS", str(round(spin.get_value() * 60)))
+    def on_rotate_changed(self, value: float) -> None:
+        self.owner.update_setting("AI_STATUS_STICKER_ROTATE_SECONDS", str(round(value * 60)))
 
-    def on_klipy_changed(self, _entry: Gtk.Entry) -> None:
+    def on_klipy_changed(self, _text: str) -> None:
         # Save once typing/pasting settles instead of on every keystroke.
-        if self.klipy_save_source is not None:
-            GLib.source_remove(self.klipy_save_source)
-        self.klipy_save_source = GLib.timeout_add(700, self.save_klipy_key)
+        source_remove(self.klipy_save_source)
+        self.klipy_save_source = timeout_add(700, self.save_klipy_key)
 
     def save_klipy_key(self) -> bool:
         self.klipy_save_source = None
-        value = self.klipy_entry.get_text().strip()
+        value = self.klipy_entry.text().strip()
         if value != self.owner.klipy_api_key:
             self.owner.update_setting("AI_STATUS_KLIPY_API_KEY", value)
         return False
 
-    def on_windows_changed(self, switch: Gtk.Switch, _param: object) -> None:
-        self.owner.update_setting("AI_STATUS_SESSION_WINDOWS", "true" if switch.get_active() else "false")
+    def on_windows_changed(self, checked: bool) -> None:
+        self.owner.update_setting("AI_STATUS_SESSION_WINDOWS", "true" if checked else "false")
 
-    def on_rows_changed(self, spin: Gtk.SpinButton) -> None:
-        self.owner.update_setting("AI_STATUS_MAX_ROWS", str(spin.get_value_as_int()))
+    def on_rows_changed(self, value: int) -> None:
+        self.owner.update_setting("AI_STATUS_MAX_ROWS", str(int(value)))
 
-    def on_timing_changed(self, spin: Gtk.SpinButton, env_key: str, _config_key: str) -> None:
-        self.owner.update_setting(env_key, str(round(spin.get_value() * 60)))
+    def on_timing_changed(self, value: float, env_key: str) -> None:
+        self.owner.update_setting(env_key, str(round(value * 60)))
 
 
-class KlipyKeyGuide(Gtk.Window):
+class KlipyKeyGuide(DialogWindow):
     """Step-by-step "get a free KLIPY key" guide with copy buttons and a key test."""
 
-    def __init__(self, owner: "StatusWidget", parent: Gtk.Window | None = None) -> None:
-        super().__init__(title="Get a free KLIPY key")
+    def __init__(self, owner: "StatusWidget") -> None:
+        super().__init__("Get a free KLIPY key", "Get a free KLIPY key")
         self.owner = owner
-        self.set_name("settingsWindow")
-        if parent is not None:
-            self.set_transient_for(parent)
-        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
-        self.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
-        self.set_keep_above(True)
-        self.set_resizable(False)
-        self.connect("key-press-event", self.on_key_press)
         self.checking = False
-
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        outer.set_name("settingsBody")
-        self.add(outer)
-
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        header.set_name("settingsHeader")
-        mark = LogoMark(17, variant="mono", mono_color="#E6EDF3")
-        mark.set_valign(Gtk.Align.CENTER)
-        header.pack_start(mark, False, False, 0)
-        heading = Gtk.Label(label="Get a free KLIPY key")
-        heading.set_name("settingsHeading")
-        heading.set_xalign(0)
-        header.pack_start(heading, True, True, 0)
-        outer.pack_start(header, False, False, 0)
-
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        content.set_name("settingsContent")
-        outer.pack_start(content, True, True, 0)
-        intro = SettingsWindow.hint_label(
+        content = self.content
+        content.setSpacing(6)
+        content.addWidget(self.hint(
             "Stickers can show random GIFs from KLIPY. It takes about two minutes and is free; "
             "without a key the widget uses local GIFs only."
-        )
-        intro.set_line_wrap(True)
-        intro.set_max_width_chars(52)
-        content.pack_start(intro, False, False, 4)
+        ))
 
         # 1. account
-        content.pack_start(SettingsWindow.section_label("1 · Sign up"), False, False, 0)
-        open_button = Gtk.Button(label="Open the KLIPY Partner Panel ↗")
-        open_button.set_name("settingsClose")
-        open_button.set_halign(Gtk.Align.START)
-        open_button.connect("clicked", lambda _button: self.open_partner_panel())
-        content.pack_start(open_button, False, False, 0)
-        content.pack_start(self.hint(f"{stickers.KLIPY_PARTNER_URL} — sign up, it is free."), False, False, 0)
+        content.addWidget(section_label("1 · Sign up"))
+        open_button = dialog_button("Open the KLIPY Partner Panel ↗")
+        open_button.clicked.connect(self.open_partner_panel)
+        content.addWidget(open_button, 0, Qt.AlignmentFlag.AlignLeft)
+        content.addWidget(self.hint(f"{stickers.KLIPY_PARTNER_URL} — sign up, it is free."))
 
         # 2. platform details
-        content.pack_start(SettingsWindow.section_label("2 · Add your platform"), False, False, 0)
-        grid = SettingsWindow.new_grid()
-        grid.set_row_spacing(6)
+        content.addWidget(section_label("2 · Add your platform"))
+        grid = new_grid()
+        grid.setVerticalSpacing(6)
         for row, (label, value) in enumerate((
             ("Platform name", stickers.KLIPY_GUIDE_PLATFORM_NAME),
             ("Platform website", stickers.KLIPY_GUIDE_WEBSITE),
@@ -1250,145 +1662,123 @@ class KlipyKeyGuide(Gtk.Window):
         )):
             text = stickers.KLIPY_GUIDE_DESCRIPTION if row == 2 else value
             self.attach_copy_row(grid, row, label, value, text)
-        content.pack_start(grid, False, False, 0)
-        content.pack_start(self.hint("Then tick the KLIPY API Terms checkbox (read them first) and press Add Platform."),
-                           False, False, 0)
+        content.addLayout(grid)
+        content.addWidget(self.hint("Then tick the KLIPY API Terms checkbox (read them first) and press Add Platform."))
 
         # 3. key
-        content.pack_start(SettingsWindow.section_label("3 · Create an API key"), False, False, 0)
-        grid = SettingsWindow.new_grid()
-        grid.set_row_spacing(6)
+        content.addWidget(section_label("3 · Create an API key"))
+        grid = new_grid()
+        grid.setVerticalSpacing(6)
         self.attach_copy_row(grid, 0, "Key name", stickers.KLIPY_GUIDE_KEY_NAME, stickers.KLIPY_GUIDE_KEY_NAME)
         self.attach_copy_row(grid, 1, "URL", stickers.KLIPY_GUIDE_WEBSITE, stickers.KLIPY_GUIDE_WEBSITE)
-        content.pack_start(grid, False, False, 0)
-        content.pack_start(self.hint("Leave “Enable the Ads API” OFF, then press Create and copy the key."),
-                           False, False, 0)
+        content.addLayout(grid)
+        content.addWidget(self.hint("Leave “Enable the Ads API” OFF, then press Create and copy the key."))
 
         # 4. paste + test
-        content.pack_start(SettingsWindow.section_label("4 · Paste and test"), False, False, 0)
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.key_entry = Gtk.Entry()
-        self.key_entry.set_name("settingsEntry")
-        self.key_entry.set_visibility(False)
-        self.key_entry.set_placeholder_text("paste your KLIPY key")
-        self.key_entry.set_text(owner.klipy_api_key)
-        self.key_entry.connect("activate", lambda _entry: self.test_and_save())
-        row.pack_start(self.key_entry, True, True, 0)
-        self.test_button = Gtk.Button(label="Test & save")
-        self.test_button.set_name("settingsClose")
-        self.test_button.connect("clicked", lambda _button: self.test_and_save())
-        row.pack_start(self.test_button, False, False, 0)
-        content.pack_start(row, False, False, 0)
+        content.addWidget(section_label("4 · Paste and test"))
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.key_entry = QLineEdit(owner.klipy_api_key)
+        self.key_entry.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key_entry.setPlaceholderText("paste your KLIPY key")
+        self.key_entry.returnPressed.connect(self.test_and_save)
+        row.addWidget(self.key_entry, 1)
+        self.test_button = dialog_button("Test && save")
+        self.test_button.clicked.connect(self.test_and_save)
+        row.addWidget(self.test_button)
+        content.addLayout(row)
         self.status = self.hint("")
-        self.status.set_line_wrap(True)
-        self.status.set_max_width_chars(52)
-        content.pack_start(self.status, False, False, 0)
+        content.addWidget(self.status)
 
-        note = self.hint(
+        self.finish(self.hint(
             "Free test keys allow 100 requests per hour; the widget stays under 60. The key is saved "
             f"in {display_path(SETTINGS.env_file)} (mode 0600) and never written to logs. Powered by KLIPY."
-        )
-        note.set_line_wrap(True)
-        note.set_max_width_chars(52)
-
-        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        footer.set_name("settingsFooter")
-        footer.pack_start(note, True, True, 0)
-        close = Gtk.Button(label="Close")
-        close.set_name("settingsClose")
-        close.set_valign(Gtk.Align.CENTER)
-        close.connect("clicked", lambda _button: self.destroy())
-        footer.pack_end(close, False, False, 0)
-        outer.pack_start(footer, False, False, 0)
+        ))
 
     @staticmethod
-    def hint(text: str) -> Gtk.Label:
-        label = SettingsWindow.hint_label(text)
-        label.set_line_wrap(True)
-        label.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        label.set_max_width_chars(52)
+    def hint(text: str) -> QLabel:
+        label = hint_label(text, wrap=True)
+        label.setFixedWidth(380)
         return label
 
-    def attach_copy_row(self, grid: Gtk.Grid, row: int, label: str, shown: str, copied: str) -> None:
-        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        name = Gtk.Label(label=label)
-        name.set_name("settingsLabel")
-        name.set_xalign(0)
-        texts.pack_start(name, False, False, 0)
-        value = SettingsWindow.hint_label(shown)
-        value.set_ellipsize(Pango.EllipsizeMode.END)
-        value.set_max_width_chars(38)
-        texts.pack_start(value, False, False, 0)
-        texts.set_hexpand(True)
-        grid.attach(texts, 0, row, 1, 1)
-        button = Gtk.Button(label="Copy")
-        button.set_name("settingsClose")
-        button.set_valign(Gtk.Align.CENTER)
-        button.connect("clicked", self.on_copy, copied)
-        grid.attach(button, 1, row, 1, 1)
+    def attach_copy_row(self, grid: QGridLayout, row: int, label: str, shown: str, copied: str) -> None:
+        texts = QVBoxLayout()
+        texts.setSpacing(1)
+        name = QLabel(label)
+        name.setObjectName("settingsLabel")
+        texts.addWidget(name)
+        value = ElidedLabel(shown, color="#566173")
+        value.setObjectName("settingsHint")
+        value.setFixedWidth(280)
+        texts.addWidget(value)
+        grid.addLayout(texts, row, 0)
+        button = dialog_button("Copy")
+        button.clicked.connect(lambda: self.on_copy(button, copied))
+        grid.addWidget(button, row, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-    def on_copy(self, button: Gtk.Button, text: str) -> None:
-        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
-        button.set_label("Copied ✓")
-        GLib.timeout_add(1500, lambda: button.set_label("Copy") or False)
+    def on_copy(self, button: QPushButton, text: str) -> None:
+        QGuiApplication.clipboard().setText(text)
+        button.setText("Copied ✓")
+        # Parented to the button: the reset is dropped if the guide closes first.
+        QTimer.singleShot(1500, button, lambda: button.setText("Copy"))
 
     def open_partner_panel(self) -> None:
-        try:
-            Gtk.show_uri_on_window(self, stickers.KLIPY_PARTNER_URL, Gdk.CURRENT_TIME)
-        except Exception:
+        if not QDesktopServices.openUrl(QUrl(stickers.KLIPY_PARTNER_URL)):
             platform_support.open_path(stickers.KLIPY_PARTNER_URL)
 
     def test_and_save(self) -> None:
         if self.checking:
             return
-        key = self.key_entry.get_text().strip()
+        key = self.key_entry.text().strip()
         if not key:
             self.show_status("Paste the key from the KLIPY Partner Panel first.", ok=False)
             return
         self.checking = True
-        self.test_button.set_sensitive(False)
+        self.test_button.setEnabled(False)
         self.show_status("Checking the key with KLIPY…", ok=None)
 
         def worker() -> None:
             result = stickers.verify_klipy_key(key, stickers.load_customer_id(KLIPY_CUSTOMER_ID_FILE))
-            GLib.idle_add(self.on_verified, key, result)
+            idle_add(self.on_verified, key, result)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def on_verified(self, key: str, result: str) -> bool:
         self.checking = False
-        self.test_button.set_sensitive(True)
+        self.test_button.setEnabled(True)
         if result in ("ok", "rate_limited"):
             self.owner.update_setting("AI_STATUS_KLIPY_API_KEY", key)
             window = self.owner.settings_window
-            if window is not None and window.klipy_entry.get_text().strip() != key:
-                window.klipy_entry.set_text(key)
+            if window is not None and window.klipy_entry.text().strip() != key:
+                window.klipy_entry.setText(key)
         log(f"KLIPY key check: {result}")
         self.show_status(stickers.KLIPY_KEY_STATUS_MESSAGES.get(result, result), ok=result in ("ok", "rate_limited"))
         return False
 
     def show_status(self, text: str, ok: bool | None) -> None:
         color = {True: "#4ADE80", False: "#FB7060", None: "#8A95A3"}[ok]
-        self.status.set_markup(f'<span foreground="{color}">{html.escape(text)}</span>')
+        self.status.setText(markup(text, color))
 
-    def on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> bool:
-        if event.keyval == Gdk.KEY_Escape:
-            self.destroy()
-            return True
-        return False
+    def closeEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        self.owner.on_klipy_guide_closed(self)
+        super().closeEvent(event)
 
 
 def display_path(path: Path) -> str:
     try:
-        return "~/" + str(path.relative_to(Path.home()))
+        relative = path.relative_to(Path.home())
     except ValueError:
         return str(path)
+    return "~/" + relative.as_posix()
 
 
-class StatusWidget(Gtk.Window):
+class StatusWidget(QWidget):
     def __init__(self, demo: bool = False) -> None:
-        super().__init__(title=TITLE)
-        self.set_name("window")
+        ensure_app()
+        super().__init__(None, tool_window_flags())
+        self.setWindowTitle(TITLE)
+        self.setObjectName("window")
+        prepare_floating_window(self)
         self.demo = demo
         self.demo_index = 0
         self.config = self.load_config()
@@ -1398,15 +1788,15 @@ class StatusWidget(Gtk.Window):
         self.klipy_guide: KlipyKeyGuide | None = None
         self.serious_mode = SETTINGS.serious_mode
         self.klipy_api_key = SETTINGS.klipy_api_key
-        self.sticker_overlay = StickerOverlay() if CAIRO_OK else None
+        self.sticker_overlay: StickerOverlay | None = StickerOverlay()
         self.sticker_source = self.build_sticker_source()
         self.sticker_kinds: dict[str, str] = {}
         self.sticker_primed = False
         self.sticker_request = 0
-        self.sticker_debounce: int | None = None
+        self.sticker_debounce: QTimer | None = None
         self.sticker_owner: str | None = None
         self.sticker_hovered: str | None = None
-        self.row_hover_boxes: dict[str, Gtk.Widget] = {}
+        self.row_hover_boxes: dict[str, HoverBox] = {}
         self.last_stickers: dict[str, stickers.StickerChoice] = {}
         self.limits_seen: set[tuple[str, str, str]] = set()
         self.test_sticker_index = 0
@@ -1418,19 +1808,21 @@ class StatusWidget(Gtk.Window):
         self.was_waiting_for_interaction = False
         self.was_done = False
         self.anim_frame = 0
-        self.signature = None
-        self.anim_dot_labels: list[Gtk.Label] = []
+        self.signature: str | None = None
+        self.anim_dot_labels: list[QLabel] = []
         self.waiting_dots: list[StatusDot] = []
         self.spinning: list[LogoMark] = []
         self.intro = True
+        self.closing = False
+        self.timers: list[QTimer] = []
         self.update_available: str | None = None
         self.updating = False
         self.usage_refreshing = False
         self.usage_refreshing_providers: set[str] = set()
-        self.usage_animation_source_id: int | None = None
+        self.usage_animation_source_id: QTimer | None = None
         self.usage_animation_angle = 0.0
         self.usage_logo_widgets: dict[str, RotatingProviderLogo] = {}
-        self.usage_logo_buttons: dict[str, Gtk.Button] = {}
+        self.usage_logo_buttons: dict[str, QPushButton] = {}
         self.usage_snapshot: usage_limits.UsageSnapshot = {
             "providers": usage_limits.load_usage_cache(USAGE_CACHE_FILE),
             "errors": {},
@@ -1439,8 +1831,8 @@ class StatusWidget(Gtk.Window):
         self.demo_usage_scenarios = usage_limits.demo_usage_states()
         if demo:
             self.usage_snapshot = self.demo_usage_scenarios[0]["snapshot"]
-        self.logo_pixbufs = self.load_logos()
-        self.usage_logo_pixbufs = self.load_logos(size=20)
+        self.logo_pixmaps = self.load_logos()
+        self.usage_logo_pixmaps = self.load_logos(size=20)
         self.demo_scenarios = [
             [("claude", "reading code", "unitbox-front", "22:16"),
              ("codex", "analyzing", "ai-cli-status-monitor", "22:16")],
@@ -1453,26 +1845,8 @@ class StatusWidget(Gtk.Window):
             [],
         ]
 
-        self.set_app_paintable(True)
-        screen = self.get_screen()
-        visual = screen.get_rgba_visual()
-        if visual is not None and screen.is_composited():
-            self.set_visual(visual)
-        self.set_resizable(False)
-        self.set_decorated(False)
-        self.set_keep_above(True)
-        self.set_skip_taskbar_hint(True)
-        self.set_skip_pager_hint(True)
-        self.stick()
-        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
-        self.set_position(Gtk.WindowPosition.NONE)
-        self.restore_position()
-
         self._build_ui()
-        self.connect("delete-event", self.on_delete)
-        self.connect("button-press-event", self.on_button_press)
-        self.connect("key-press-event", self.on_key_press)
-        self.connect("configure-event", self.on_configure)
+        self.restore_position()
 
         if self.session_windows:
             # The widget is just the usage panel; agents appear as their own windows.
@@ -1482,299 +1856,81 @@ class StatusWidget(Gtk.Window):
             self.rebuild_body([], 0, show_lockup=False)
         else:
             self.build_intro()
-            GLib.timeout_add_seconds(3, self.end_intro)
-        GLib.timeout_add_seconds(1, self.refresh_status)
-        GLib.timeout_add(200, self.tick_animation)
-        GLib.timeout_add_seconds(4, self.apply_wmctrl_hints)
+            self.timers.append(timeout_add_seconds(3, self.end_intro))
+        self.timers.append(timeout_add_seconds(1, self.refresh_status))
+        self.timers.append(timeout_add(200, self.tick_animation))
+        self.timers.append(timeout_add_seconds(4, self.apply_wmctrl_hints))
         if not demo:
             # Check GitHub for a newer release once, a few seconds after startup so
             # it never competes with the intro or first paint.
-            GLib.timeout_add_seconds(4, self.start_update_check)
-            GLib.timeout_add_seconds(4, self.start_usage_refresh)
-            GLib.timeout_add_seconds(120, self.usage_refresh_tick)
+            self.timers.append(timeout_add_seconds(4, self.start_update_check))
+            self.timers.append(timeout_add_seconds(4, self.start_usage_refresh))
+            self.timers.append(timeout_add_seconds(120, self.usage_refresh_tick))
 
     def _build_ui(self) -> None:
-        css = b"""
-        #window { background: transparent; }
-        #card {
-          background: rgba(13,19,26,0.96);
-          border: 1px solid rgba(255,255,255,0.09);
-          border-radius: 14px;
-        }
-        #card.waiting { border: 1px solid rgba(251,112,96,0.40); }
-        #card.waitingPulse { border: 1px solid rgba(251,112,96,0.82); }
-        #header {
-          border-bottom: 1px solid rgba(255,255,255,0.055);
-          padding: 10px 12px 9px;
-        }
-        #headerTitle {
-          color: #E6EDF3;
-          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
-          font-size: 12px;
-          font-weight: 600;
-        }
-        #badge {
-          font-family: 'IBM Plex Mono', monospace;
-          font-size: 9px;
-          font-weight: 600;
-          padding: 3px 7px;
-          border-radius: 6px;
-        }
-        #badge.live { color: #4ADE80; background: rgba(74,222,128,0.10); border: 1px solid rgba(74,222,128,0.22); }
-        #badge.alert { color: #FB7060; background: rgba(251,112,96,0.12); border: 1px solid rgba(251,112,96,0.30); }
-        #badge.idle  { color: #6B7785; background: rgba(107,119,133,0.10); border: 1px solid rgba(107,119,133,0.22); }
-        #updatePill {
-          font-family: 'IBM Plex Mono', monospace;
-          font-size: 9px; font-weight: 600;
-          color: #2DD4BF;
-          background: rgba(45,212,191,0.12);
-          border: 1px solid rgba(45,212,191,0.30);
-          border-radius: 6px;
-          padding: 2px 7px; margin: 0 2px;
-          box-shadow: none; outline: none; min-height: 0;
-        }
-        #updatePill:hover { color: #ffffff; background: rgba(45,212,191,0.22); }
-        #close { color: #7a8493; font-size: 15px; padding: 0 3px; }
-        #settingsButton { color: #7a8493; font-size: 13px; padding: 0 2px; }
-        #settingsButton:hover, #close:hover { color: #ffffff; }
-        #settingsWindow, #settingsBody { background: #0D131A; }
-        #settingsHeader {
-          padding: 12px 16px 10px;
-          border-bottom: 1px solid rgba(255,255,255,0.055);
-        }
-        #settingsHeading {
-          color: #E6EDF3;
-          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
-          font-size: 13px; font-weight: 600;
-        }
-        #settingsContent { padding: 4px 16px 12px; }
-        #settingsSection {
-          font-family: 'IBM Plex Mono', monospace;
-          font-size: 9.5px; font-weight: 600; color: #2DD4BF;
-          margin-top: 12px; margin-bottom: 4px;
-        }
-        #settingsLabel, #settingsAgentName {
-          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
-          font-size: 12px; font-weight: 600; color: #D4DCE5;
-        }
-        #settingsHint {
-          font-family: 'IBM Plex Mono', monospace;
-          font-size: 9.5px; color: #566173;
-        }
-        #settingsFooter {
-          padding: 10px 16px 12px;
-          border-top: 1px solid rgba(255,255,255,0.055);
-        }
-        #settingsClose {
-          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
-          font-size: 11px; font-weight: 600;
-          color: #2DD4BF; background: rgba(45,212,191,0.12); background-image: none;
-          border: 1px solid rgba(45,212,191,0.30); border-radius: 7px;
-          box-shadow: none; padding: 3px 14px;
-        }
-        #settingsClose:hover { color: #ffffff; background: rgba(45,212,191,0.22); }
-        #settingsWindow spinbutton {
-          background: #151C25; background-image: none; color: #E6EDF3;
-          border: 1px solid rgba(255,255,255,0.10); border-radius: 7px;
-          box-shadow: none;
-        }
-        #settingsWindow spinbutton:focus-within { border-color: rgba(45,212,191,0.55); }
-        #settingsWindow spinbutton entry {
-          background: transparent; color: #E6EDF3; border: none; box-shadow: none;
-          font-family: 'IBM Plex Mono', monospace; font-size: 11px;
-          min-width: 44px; padding: 0 6px;
-        }
-        #settingsWindow spinbutton button {
-          background: transparent; background-image: none; color: #8A95A3;
-          border: none; border-left: 1px solid rgba(255,255,255,0.07);
-          box-shadow: none; min-height: 26px; min-width: 26px;
-        }
-        #settingsWindow spinbutton button:hover { color: #ffffff; background: rgba(255,255,255,0.06); }
-        #settingsWindow spinbutton button:disabled { color: #3a4350; }
-        #settingsWindow entry {
-          background: #151C25; background-image: none; color: #E6EDF3;
-          border: 1px solid rgba(255,255,255,0.10); border-radius: 7px; box-shadow: none;
-          font-family: 'IBM Plex Mono', monospace; font-size: 11px; min-height: 26px;
-        }
-        #settingsWindow entry:focus { border-color: rgba(45,212,191,0.55); }
-        #settingsWindow switch {
-          background: #151C25; background-image: none;
-          border: 1px solid rgba(255,255,255,0.10); box-shadow: none;
-        }
-        #settingsWindow switch:checked { background: rgba(45,212,191,0.75); border-color: rgba(45,212,191,0.9); }
-        #settingsWindow switch slider { background: #E6EDF3; background-image: none; border: none; box-shadow: none; }
-        #settingsWindow check {
-          background: #151C25; background-image: none; color: #0D131A;
-          border: 1px solid rgba(255,255,255,0.18); box-shadow: none;
-        }
-        #settingsWindow check:checked { background: #2DD4BF; border-color: #2DD4BF; }
-        #row { padding: 4px 8px; border-radius: 9px; }
-        #row.alertRow {
-          background: linear-gradient(90deg, rgba(251,112,96,0.13), rgba(251,112,96,0.03));
-          border: 1px solid rgba(251,112,96,0.22);
-        }
-        .dim { opacity: 0.55; }
-        #logoBox { border-radius: 7px; }
-        #agentName {
-          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
-          font-size: 12.5px;
-          font-weight: 600;
-        }
-        #statusText, #meta, #footer, #altPill, #idleSub {
-          font-family: 'IBM Plex Mono', monospace;
-        }
-        #statusText { font-size: 11px; }
-        #meta { font-size: 10px; color: #566173; }
-        #footer { font-size: 9.5px; color: #4a5462; padding: 5px 0 2px; }
-        #dotSwitch {
-          font-family: 'IBM Plex Mono', monospace;
-          font-size: 11px; font-weight: 600; color: #79828f;
-          background: transparent; background-image: none;
-          border: none; box-shadow: none; outline: none;
-          min-height: 0; min-width: 0; padding: 0;
-        }
-        #dotSwitch:hover { color: #ffffff; }
-        #usagePanel {
-          border-top: 1px solid rgba(255,255,255,0.055);
-          padding: 7px 10px 9px;
-        }
-        #usageProviderButton {
-          background: transparent; background-image: none;
-          border: none; box-shadow: none; outline: none;
-          min-height: 30px; min-width: 30px; padding: 0;
-          border-radius: 15px;
-        }
-        #usageProviderButton:hover { background: rgba(255,255,255,0.07); }
-        #usageProviderButton:focus { border: 1px solid rgba(45,212,191,0.45); }
-        #usageProviderButton:disabled { opacity: 0.62; }
-        #usageProviderBlock { padding: 4px 0; }
-        #usageLimitStack { padding: 0; }
-        #usageLimit { padding: 1px 0; }
-        #usageProviderFallback, #usageWindow, #usagePercent, #usageReset {
-          font-family: 'IBM Plex Mono', monospace;
-          font-size: 9px;
-        }
-        #usageProviderFallback { font-weight: 600; color: #AEB6C0; }
-        #usageWindow { color: #8A95A3; font-weight: 600; }
-        #usagePercent { font-weight: 600; color: #D4DCE5; }
-        #usageReset { color: #566173; }
-        #usageLimit.stale #usageWindow, #usageLimit.stale #usagePercent { color: #6B7785; }
-        #usageLimit.unavailable #usagePercent { color: #566173; font-weight: 500; }
-        #usageProgress { min-height: 4px; }
-        #usageProgress trough {
-          min-height: 4px; border: none; border-radius: 3px;
-          background: rgba(255,255,255,0.08);
-        }
-        #usageProgress progress {
-          min-height: 4px; border: none; border-radius: 3px;
-        }
-        #usageProgress.usage-green progress { background: #4ADE80; }
-        #usageProgress.usage-orange progress { background: #F59E0B; }
-        #usageProgress.usage-red progress { background: #FB7060; }
-        #idleTitle {
-          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
-          font-size: 12.5px; font-weight: 600; color: #AEB6C0;
-        }
-        #idleSub { font-size: 10px; color: #566173; }
-        #lockupTitle {
-          font-family: 'IBM Plex Sans', 'Cantarell', sans-serif;
-          font-size: 19px; font-weight: 600;
-        }
-        #lockupSub {
-          font-family: 'IBM Plex Mono', monospace;
-          font-size: 9.5px; font-weight: 500; color: #566173;
-        }
-        """
-        provider = Gtk.CssProvider()
-        provider.load_from_data(css)
-        Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(),
-            provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
-        )
-
-        event_box = Gtk.EventBox()
-        event_box.set_visible_window(False)
-        self.add(event_box)
-
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.card = card
-        card.set_name("card")
-        card.set_size_request(CARD_WIDTH, -1)
-        for setter in (card.set_margin_top, card.set_margin_bottom, card.set_margin_start, card.set_margin_end):
-            setter(8)
-        event_box.add(card)
+        self.card, card_layout = build_card_window(self)
 
         # ---- header ----
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        header.set_name("header")
-        card.pack_start(header, False, False, 0)
+        header = QFrame()
+        header.setObjectName("header")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(12, 10, 12, 9)
+        header_layout.setSpacing(8)
+        card_layout.addWidget(header)
 
         self.header_icon = LogoMark(17, variant="mono", mono_color="#E6EDF3")
-        icon_align = Gtk.Box()
-        icon_align.set_valign(Gtk.Align.CENTER)
-        icon_align.pack_start(self.header_icon, False, False, 0)
-        header.pack_start(icon_align, False, False, 0)
+        header_layout.addWidget(self.header_icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        title = Gtk.Label(label=TITLE)
-        title.set_name("headerTitle")
-        title.set_xalign(0)
-        header.pack_start(title, True, True, 0)
+        title = ElidedLabel(TITLE, color=TITLE_COLOR)
+        title.setObjectName("headerTitle")
+        header_layout.addWidget(title, 1)
 
         # Update pill: hidden until the startup check finds a newer version.
-        self.update_button = Gtk.Button(label="update ↑")
-        self.update_button.set_name("updatePill")
-        self.update_button.set_relief(Gtk.ReliefStyle.NONE)
-        self.update_button.set_can_focus(False)
-        self.update_button.set_focus_on_click(False)
-        self.update_button.set_valign(Gtk.Align.CENTER)
-        self.update_button.set_no_show_all(True)
-        self.update_button.set_tooltip_text("A newer version is available — click to update")
-        self.update_button.connect("clicked", self.run_update)
-        header.pack_start(self.update_button, False, False, 0)
+        self.update_button = QPushButton("update ↑")
+        self.update_button.setObjectName("updatePill")
+        self.update_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.update_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_button.setToolTip("A newer version is available — click to update")
+        self.update_button.clicked.connect(self.run_update)
+        self.update_button.hide()
+        header_layout.addWidget(self.update_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.badge = Gtk.Label()
-        self.badge.set_name("badge")
-        self.badge.set_valign(Gtk.Align.CENTER)
-        header.pack_start(self.badge, False, False, 0)
+        self.badge = QLabel()
+        self.badge.setObjectName("badge")
+        self.badge.setTextFormat(Qt.TextFormat.RichText)
+        header_layout.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        settings_button = Gtk.Button(label="⚙")
-        settings_button.set_name("settingsButton")
-        settings_button.set_relief(Gtk.ReliefStyle.NONE)
-        settings_button.set_can_focus(False)
-        settings_button.set_focus_on_click(False)
-        settings_button.set_valign(Gtk.Align.CENTER)
-        settings_button.set_tooltip_text("Settings")
-        settings_button.connect("clicked", lambda _button: self.open_settings())
-        header.pack_start(settings_button, False, False, 0)
+        settings_button = QPushButton("⚙")
+        settings_button.setObjectName("settingsButton")
+        settings_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        settings_button.setToolTip("Settings")
+        settings_button.clicked.connect(self.open_settings)
+        header_layout.addWidget(settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        close = Gtk.Button(label="×")
-        close.set_name("close")
-        close.set_relief(Gtk.ReliefStyle.NONE)
-        close.set_can_focus(False)
-        close.set_focus_on_click(False)
-        close.set_valign(Gtk.Align.CENTER)
-        close.connect("clicked", self.quit)
-        header.pack_start(close, False, False, 0)
+        close = QPushButton("×")
+        close.setObjectName("close")
+        close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setToolTip("Quit")
+        close.clicked.connect(self.quit)
+        header_layout.addWidget(close, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # ---- body (rows or empty state) ----
-        self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.body.set_margin_top(6)
-        self.body.set_margin_bottom(6)
-        self.body.set_margin_start(6)
-        self.body.set_margin_end(6)
-        card.pack_start(self.body, True, True, 0)
+        self.body = QWidget()
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(6, 6, 6, 6)
+        self.body_layout.setSpacing(0)
+        card_layout.addWidget(self.body)
 
         # ---- account usage limits ----
-        usage_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        usage_panel.set_name("usagePanel")
-        card.pack_start(usage_panel, False, False, 0)
-
-        self.usage_rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        usage_panel.pack_start(self.usage_rows, False, False, 0)
+        usage_panel = QFrame()
+        usage_panel.setObjectName("usagePanel")
+        self.usage_rows = QVBoxLayout(usage_panel)
+        self.usage_rows.setContentsMargins(10, 7, 10, 9)
+        self.usage_rows.setSpacing(2)
+        card_layout.addWidget(usage_panel)
         self.render_usage_limits()
-
-        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
 
     # ----------------------------- config -----------------------------
     def load_config(self) -> dict[str, object]:
@@ -1793,16 +1949,17 @@ class StatusWidget(Gtk.Window):
         except (json.JSONDecodeError, OSError) as error:
             log(f"failed to write widget config: {error}")
 
-    def load_logos(self, size: int = 14) -> dict[str, GdkPixbuf.Pixbuf]:
-        logos: dict[str, GdkPixbuf.Pixbuf] = {}
+    def load_logos(self, size: int = 14) -> dict[str, QPixmap]:
+        logos: dict[str, QPixmap] = {}
         for agent, path in (("claude", ANTHROPIC_LOGO), ("codex", OPENAI_LOGO)):
             if not path.exists():
                 log(f"logo missing for {agent}: {path}")
                 continue
-            try:
-                logos[agent] = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), size, size, True)
-            except Exception as error:
-                log(f"failed to load logo for {agent}: {error}")
+            pixmap = load_scaled_pixmap(path, size)
+            if pixmap is None:
+                log(f"failed to load logo for {agent}: {path}")
+                continue
+            logos[agent] = pixmap
         return logos
 
     def config_seconds(self, key: str) -> int:
@@ -1843,6 +2000,7 @@ class StatusWidget(Gtk.Window):
         client_pids: list[int] | None = None,
         kind: StatusKind | str | None = None,
         source_kind: StatusKind | str | None = None,
+        console_window: int = 0,
     ) -> dict[str, object]:
         normalized_kind = normalize_kind(kind, status)
         original_kind = normalize_kind(source_kind if source_kind is not None else normalized_kind, status)
@@ -1856,6 +2014,7 @@ class StatusWidget(Gtk.Window):
             "time": hhmm,
             "cwd": cwd,
             "client_pids": client_pids or [],
+            "console_window": console_window,
             "id": f"{agent}:{project}",
             "color": STATE_COLORS.get(normalized_kind, STATE_COLORS["neutral"]),
         }
@@ -1884,6 +2043,8 @@ class StatusWidget(Gtk.Window):
             display_kind: StatusKind = source_kind
             raw_pids = data.get("client_pids")
             client_pids = [p for p in raw_pids if isinstance(p, int)] if isinstance(raw_pids, list) else []
+            console = data.get("console_window")
+            console_window = console if isinstance(console, int) and not isinstance(console, bool) else 0
             age = self.status_age(str(data.get("timestamp_iso") or ""))
             if age is not None:
                 if self.should_hide_status(source_kind, status, age):
@@ -1898,7 +2059,8 @@ class StatusWidget(Gtk.Window):
             if not status:
                 continue
             name, clean = self.split_agent_status(status, agent)
-            session = self.make_session(agent, clean, project, hhmm, cwd, client_pids, display_kind, source_kind)
+            session = self.make_session(agent, clean, project, hhmm, cwd, client_pids, display_kind, source_kind,
+                                        console_window)
             session["name"] = name
             session["id"] = path.stem
             sessions.append(session)
@@ -1985,10 +2147,8 @@ class StatusWidget(Gtk.Window):
         return sorted(sessions, key=rank)
 
     def refresh_status(self) -> bool:
-        # Cheaply re-assert "always on top" every tick: GNOME/Mutter keeps
-        # dropping _NET_WM_STATE_ABOVE, and this GTK call is a no-op when the
-        # state already holds, so it is safe to repeat.
-        self.set_keep_above(True)
+        if self.closing:
+            return False
         if self.intro:
             return True  # the startup lockup owns the body until end_intro()
         if self.demo:
@@ -2034,52 +2194,52 @@ class StatusWidget(Gtk.Window):
             self.demo_index += 1
         return True
 
-    def rebuild_body(self, sessions: list[dict[str, object]], hidden_done: int, show_lockup: bool = True) -> None:
+    def reset_body(self) -> None:
         self.row_hover_boxes = {}
-        for child in self.body.get_children():
-            self.body.remove(child)
+        clear_layout(self.body_layout)
         self.anim_dot_labels = []
         self.waiting_dots = []
         self.spinning = []
 
+    def rebuild_body(self, sessions: list[dict[str, object]], hidden_done: int, show_lockup: bool = True) -> None:
+        self.reset_body()
         if not sessions and not show_lockup:
             # Session windows are showing the rows: collapse the body to nothing.
-            self.body.set_no_show_all(True)
             self.body.hide()
             self.resize_to_content()
             return
-        self.body.set_no_show_all(False)
         self.body.show()
         if not sessions:
             self.build_empty_state()
         else:
             for session in sessions:
-                hover = Gtk.EventBox()
-                hover.set_visible_window(False)
-                hover.add(self.build_row(session))
                 session_id = str(session["id"])
-                hover.connect("enter-notify-event", self.on_row_enter, session_id)
-                hover.connect("leave-notify-event", self.on_row_leave, session_id)
-                self.body.pack_start(hover, False, False, 0)
+                hover = HoverBox(
+                    lambda _box, sid=session_id: self.on_row_enter(sid),
+                    lambda box, sid=session_id: self.on_row_leave(box, sid),
+                )
+                hover_layout = QVBoxLayout(hover)
+                hover_layout.setContentsMargins(0, 0, 0, 0)
+                hover_layout.addWidget(self.build_row(session))
+                self.body_layout.addWidget(hover)
                 self.row_hover_boxes[session_id] = hover
             if hidden_done > 0:
-                footer = Gtk.Label(label=f"+{hidden_done} finished, hidden automatically")
-                footer.set_name("footer")
-                self.body.pack_start(footer, False, False, 0)
+                footer = QLabel(f"+{hidden_done} finished, hidden automatically")
+                footer.setObjectName("footer")
+                self.body_layout.addWidget(footer)
 
-        self.body.show_all()
         self.resize_to_content()
         if self.sticker_hovered is not None:
             # The hovered row was rebuilt, so its leave event will never come: re-check once
             # the new rows are laid out and tuck the sticker only if the pointer really left.
-            GLib.idle_add(self.verify_hover)
+            QTimer.singleShot(0, self.verify_hover)
 
     def build_row(
         self,
         session: dict[str, object],
         waiting_dots: list[StatusDot] | None = None,
-        dot_labels: list[Gtk.Label] | None = None,
-    ) -> Gtk.Widget:
+        dot_labels: list[QLabel] | None = None,
+    ) -> QWidget:
         """One session row. Animated parts register in the given lists (a session window's own),
         defaulting to the main widget's lists that `tick_animation` drives."""
         waiting_dots = self.waiting_dots if waiting_dots is None else waiting_dots
@@ -2088,143 +2248,126 @@ class StatusWidget(Gtk.Window):
         color = str(session["color"])
         agent = str(session["agent"])
         waiting = kind == "waiting"
-
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=11)
-        row.set_name("row")
-        if waiting:
-            row.get_style_context().add_class("alertRow")
         dim = kind in INACTIVE
+
+        row = QFrame()
+        row.setObjectName("row")
+        set_flag(row, "alert", waiting)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(11)
 
         # The status dot itself is the `→` window-switch button: drawn as an arrow in the state
         # colour (glow / waiting ring kept), on the left edge where the sticker overlay never
-        # reaches. Without cairo it falls back to a plain text `→`.
-        dot = StatusDot(arrow=CAIRO_OK)
+        # reaches.
+        dot = StatusDot(arrow=True)
         dot.configure_dot(color, waiting)
         if waiting:
             waiting_dots.append(dot)
-        switch = Gtk.Button()
-        switch.set_name("dotSwitch")
-        if CAIRO_OK:
-            switch.add(dot)
-            switch.connect("enter-notify-event", lambda _w, _e, d=dot: d.set_hover(True) or False)
-            switch.connect("leave-notify-event", lambda _w, _e, d=dot: d.set_hover(False) or False)
-        else:
-            switch.set_label("→")
-        switch.set_relief(Gtk.ReliefStyle.NONE)
-        switch.set_can_focus(False)
-        switch.set_focus_on_click(False)
-        switch.set_valign(Gtk.Align.START)
-        switch.set_margin_top(4)
-        switch.set_tooltip_text("Switch to this session's window")
+        switch = DotSwitch(dot)
+        switch.setToolTip("Switch to this session's window")
         project_name = str(session["project"])
         cwd = str(session["cwd"])
         pids = list(session["client_pids"]) if isinstance(session["client_pids"], list) else []
-        switch.connect(
-            "clicked",
-            lambda _b, p=project_name, c=cwd, ids=pids: self.switch_to_session(p, c, ids),
+        console_window = int(session.get("console_window") or 0)
+        switch.clicked.connect(
+            lambda _checked=False, p=project_name, c=cwd, ids=pids, con=console_window:
+            self.switch_to_session(p, c, ids, con)
         )
-        row.pack_start(switch, False, False, 0)
+        layout.addWidget(switch, 0, Qt.AlignmentFlag.AlignTop)
 
-        logo_box = Gtk.Box()
-        logo_box.set_name("logoBox")
-        if agent in ("claude", "codex"):
-            logo_box.get_style_context().add_class(agent)
-        logo_box.set_size_request(24, 24)
-        logo_box.set_valign(Gtk.Align.START)
-        logo_box.set_halign(Gtk.Align.CENTER)
-        pixbuf = self.logo_pixbufs.get(agent)
-        if pixbuf is not None:
-            image = Gtk.Image.new_from_pixbuf(pixbuf)
-            image.set_halign(Gtk.Align.CENTER)
-            image.set_valign(Gtk.Align.CENTER)
-            logo_box.pack_start(image, True, True, 0)
+        logo_box = QLabel()
+        logo_box.setObjectName("logoBox")
+        logo_box.setFixedSize(24, 24)
+        logo_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = self.logo_pixmaps.get(agent)
+        if pixmap is not None:
+            logo_box.setPixmap(pixmap)
         if dim:
-            logo_box.get_style_context().add_class("dim")
-        row.pack_start(logo_box, False, False, 0)
+            self.dim_widget(logo_box)
+        layout.addWidget(logo_box, 0, Qt.AlignmentFlag.AlignTop)
 
-        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text_box = QWidget()
+        text_layout = QVBoxLayout(text_box)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(2)
         if dim:
-            text_box.get_style_context().add_class("dim")
-        row.pack_start(text_box, True, True, 0)
+            self.dim_widget(text_box)
+        layout.addWidget(text_box, 1)
 
-        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        text_box.pack_start(top, False, False, 0)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        text_layout.addLayout(top)
 
-        name = Gtk.Label()
-        name.set_name("agentName")
-        name.set_xalign(0)
-        name.set_markup(self.markup(str(session["name"]), AGENT_NAME_COLORS.get(agent, "#9AA4B2")))
-        top.pack_start(name, False, False, 0)
+        name = QLabel(str(session["name"]))
+        name.setObjectName("agentName")
+        name.setStyleSheet(f"color: {AGENT_NAME_COLORS.get(agent, '#9AA4B2')};")
+        top.addWidget(name)
 
-        status = Gtk.Label()
-        status.set_name("statusText")
-        status.set_xalign(0)
-        status.set_ellipsize(Pango.EllipsizeMode.END)
-        status.set_markup(self.markup(str(session["status"]), color))
-        top.pack_start(status, False, False, 0)
+        status = ElidedLabel(str(session["status"]), color=color)
+        status.setObjectName("statusText")
+        top.addWidget(status, 1 if kind not in IN_PROGRESS else 0)
 
         if kind in IN_PROGRESS:
-            dots = Gtk.Label()
-            dots.set_name("statusText")
-            dots.set_xalign(0)
-            dots.set_markup(self.markup("", color))
+            dots = QLabel()
+            dots.setObjectName("statusText")
+            dots.setTextFormat(Qt.TextFormat.RichText)
+            dots.setText(markup("", color))
+            dots.setMinimumWidth(dots.fontMetrics().horizontalAdvance("...") + 2)
             dots.base_color = color  # type: ignore[attr-defined]
             dot_labels.append(dots)
-            top.pack_start(dots, False, False, 0)
+            top.addWidget(dots)
+            top.addStretch(1)
 
         meta_text = " · ".join(part for part in (str(session["project"]), str(session["time"])) if part)
         if meta_text:
-            meta = Gtk.Label(label=meta_text)
-            meta.set_name("meta")
-            meta.set_xalign(0)
-            meta.set_ellipsize(Pango.EllipsizeMode.END)
-            text_box.pack_start(meta, False, False, 0)
+            meta = ElidedLabel(meta_text, color=META_COLOR)
+            meta.setObjectName("meta")
+            text_layout.addWidget(meta)
 
         return row
 
-    def build_lockup(self, subtitle: str) -> Gtk.Widget:
+    @staticmethod
+    def dim_widget(widget: QWidget) -> None:
+        effect = QGraphicsOpacityEffect(widget)
+        effect.setOpacity(0.55)
+        widget.setGraphicsEffect(effect)
+
+    def build_lockup(self, subtitle: str) -> QWidget:
         """Horizontal lockup: full radar logo + 'AI Status Monitor' + a subtitle line.
 
         Reused for the startup intro and the idle state (different subtitle each time)."""
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        box.set_halign(Gtk.Align.CENTER)
-        box.set_margin_top(22)
-        box.set_margin_bottom(24)
-        box.set_margin_start(18)
-        box.set_margin_end(18)
+        box = QWidget()
+        layout = QHBoxLayout(box)
+        layout.setContentsMargins(18, 22, 18, 24)
+        layout.setSpacing(16)
+        layout.addStretch(1)
 
         logo = LogoMark(54, variant="full", sweep=True, tile=True)
-        logo.set_valign(Gtk.Align.CENTER)
         self.spinning.append(logo)
-        box.pack_start(logo, False, False, 0)
+        layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        text.set_valign(Gtk.Align.CENTER)
-        title = Gtk.Label()
-        title.set_name("lockupTitle")
-        title.set_xalign(0)
-        title.set_markup('<span foreground="#E6EDF3">AI Status</span>'
-                         '<span foreground="#2DD4BF"> Monitor</span>')
-        text.pack_start(title, False, False, 0)
-        sub = Gtk.Label(label=subtitle)
-        sub.set_name("lockupSub")
-        sub.set_xalign(0)
-        text.pack_start(sub, False, False, 0)
-        box.pack_start(text, False, False, 0)
+        text = QVBoxLayout()
+        text.setSpacing(6)
+        title = QLabel('<span style="color:#E6EDF3">AI Status</span><span style="color:#2DD4BF"> Monitor</span>')
+        title.setObjectName("lockupTitle")
+        title.setTextFormat(Qt.TextFormat.RichText)
+        text.addWidget(title)
+        sub = QLabel(subtitle)
+        sub.setObjectName("lockupSub")
+        text.addWidget(sub)
+        layout.addLayout(text)
+        layout.addStretch(1)
         return box
 
     def build_empty_state(self) -> None:
-        self.body.pack_start(self.build_lockup("no active agents"), True, True, 0)
+        self.body_layout.addWidget(self.build_lockup("no active agents"))
 
     def build_intro(self) -> None:
-        for child in self.body.get_children():
-            self.body.remove(child)
-        self.anim_dot_labels = []
-        self.waiting_dots = []
-        self.spinning = []
-        self.body.pack_start(self.build_lockup("CLI agent activity"), True, True, 0)
+        self.reset_body()
+        self.body.show()
+        self.body_layout.addWidget(self.build_lockup("CLI agent activity"))
         self.set_badge(False, 0)
-        self.body.show_all()
         self.resize_to_content()
 
     def end_intro(self) -> bool:
@@ -2234,36 +2377,29 @@ class StatusWidget(Gtk.Window):
         return False  # one-shot
 
     def resize_to_content(self) -> None:
-        try:
-            _minimum, natural = self.get_preferred_size()
-            self.resize(max(natural.width, CARD_WIDTH + 16), max(natural.height, 1))
-        except Exception as error:
-            log(f"resize failed: {error}")
-        GLib.idle_add(self.layout_cards_once)
+        self.adjustSize()
+        QTimer.singleShot(0, self.layout_cards)
 
     def markup(self, value: str, color: str) -> str:
-        return f'<span foreground="{color}">{html.escape(value)}</span>'
+        return markup(value, color)
 
     def set_badge(self, has_sessions: bool, waiting_count: int) -> None:
-        context = self.badge.get_style_context()
-        for cls in ("live", "alert", "idle"):
-            context.remove_class(cls)
         if waiting_count > 0:
-            context.add_class("alert")
-            self.badge.set_markup(self.markup(f"▲ {waiting_count} ALERT", "#FB7060"))
+            state, text = "alert", markup(f"▲ {waiting_count} ALERT", "#FB7060")
         elif has_sessions:
-            context.add_class("live")
             alpha = "#4ADE80" if self.anim_frame % 8 < 4 else "#2f9c5a"
-            self.badge.set_markup(self.markup("● LIVE", alpha))
+            state, text = "live", markup("● LIVE", alpha)
         else:
-            context.add_class("idle")
-            self.badge.set_markup(self.markup("● IDLE", "#6B7785"))
+            state, text = "idle", markup("● IDLE", "#6B7785")
+        if self.badge.property("state") != state:
+            self.badge.setProperty("state", state)
+            self.badge.style().unpolish(self.badge)
+            self.badge.style().polish(self.badge)
+        self.badge.setText(text)
 
     # ----------------------------- usage limits -----------------------------
     def render_usage_limits(self) -> None:
-        for child in self.usage_rows.get_children():
-            self.usage_rows.remove(child)
-
+        clear_layout(self.usage_rows)
         self.usage_logo_widgets = {}
         self.usage_logo_buttons = {}
         for group in usage_limits.build_usage_groups(self.usage_snapshot):
@@ -2271,85 +2407,82 @@ class StatusWidget(Gtk.Window):
             if provider_key not in self.agents:
                 continue
             provider_name = str(group["provider"])
-            block = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
-            block.set_name("usageProviderBlock")
+            block = QWidget()
+            block_layout = QHBoxLayout(block)
+            block_layout.setContentsMargins(0, 4, 0, 4)
+            block_layout.setSpacing(9)
 
-            logo_button = Gtk.Button()
-            logo_button.set_name("usageProviderButton")
-            logo_button.set_relief(Gtk.ReliefStyle.NONE)
-            logo_button.set_focus_on_click(False)
-            logo_button.set_valign(Gtk.Align.CENTER)
-            logo_button.set_halign(Gtk.Align.CENTER)
-            logo_button.set_sensitive(not self.usage_refreshing)
-            logo_button.set_tooltip_text(f"Refresh {provider_name} usage")
-            logo_button.get_accessible().set_name(f"Refresh {provider_name} usage")
-            logo_button.connect(
-                "clicked",
-                lambda _button, key=provider_key: self.start_usage_refresh(key),
-            )
-            pixbuf = self.usage_logo_pixbufs.get(provider_key)
-            if pixbuf is not None and CAIRO_OK:
-                logo = RotatingProviderLogo(pixbuf)
+            logo_button = QPushButton()
+            logo_button.setObjectName("usageProviderButton")
+            logo_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            logo_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            logo_button.setEnabled(not self.usage_refreshing)
+            logo_button.setToolTip(f"Refresh {provider_name} usage")
+            logo_button.setAccessibleName(f"Refresh {provider_name} usage")
+            logo_button.clicked.connect(lambda _checked=False, key=provider_key: self.start_usage_refresh(key))
+            button_layout = QHBoxLayout(logo_button)
+            button_layout.setContentsMargins(0, 0, 0, 0)
+            pixmap = self.usage_logo_pixmaps.get(provider_key)
+            if pixmap is not None:
+                logo = RotatingProviderLogo(pixmap)
                 self.usage_logo_widgets[provider_key] = logo
-                logo_button.add(logo)
-            elif pixbuf is not None:
-                logo_button.add(Gtk.Image.new_from_pixbuf(pixbuf))
+                button_layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignCenter)
             else:
-                fallback = Gtk.Label(label=provider_name)
-                fallback.set_name("usageProviderFallback")
-                logo_button.add(fallback)
+                fallback = QLabel(provider_name)
+                fallback.setObjectName("usageProviderFallback")
+                fallback.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                button_layout.addWidget(fallback, 0, Qt.AlignmentFlag.AlignCenter)
             self.usage_logo_buttons[provider_key] = logo_button
-            block.pack_start(logo_button, False, False, 0)
+            block_layout.addWidget(logo_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
-            limit_stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-            limit_stack.set_name("usageLimitStack")
-            block.pack_start(limit_stack, True, True, 0)
+            limit_stack = QVBoxLayout()
+            limit_stack.setSpacing(4)
+            block_layout.addLayout(limit_stack, 1)
 
             for data in group["rows"]:
-                limit = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-                limit.set_name("usageLimit")
                 state = str(data["state"])
-                if state != "current":
-                    limit.get_style_context().add_class(state)
-
-                line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-                limit.pack_start(line, False, False, 0)
+                limit = QVBoxLayout()
+                limit.setSpacing(1)
+                line = QHBoxLayout()
+                line.setSpacing(5)
+                limit.addLayout(line)
 
                 window = str(data["window"])
                 if window:
-                    window_label = Gtk.Label(label=window)
-                    window_label.set_name("usageWindow")
-                    window_label.set_xalign(0)
-                    line.pack_start(window_label, False, False, 0)
-
-                percent = Gtk.Label(label=str(data["percent_text"]))
-                percent.set_name("usagePercent")
-                percent.set_xalign(1)
-                line.pack_end(percent, False, False, 0)
+                    window_label = QLabel(window)
+                    window_label.setObjectName("usageWindow")
+                    set_flag(window_label, "stale", state == "stale")
+                    line.addWidget(window_label)
+                line.addStretch(1)
+                percent = QLabel(str(data["percent_text"]))
+                percent.setObjectName("usagePercent")
+                set_flag(percent, "stale", state == "stale")
+                set_flag(percent, "unavailable", state == "unavailable")
+                line.addWidget(percent)
 
                 if state != "unavailable":
-                    progress = Gtk.ProgressBar()
-                    progress.set_name("usageProgress")
-                    progress.set_fraction(float(data["fraction"]))
+                    progress = QProgressBar()
+                    progress.setObjectName("usageProgress")
+                    progress.setTextVisible(False)
+                    progress.setRange(0, 1000)
+                    progress.setValue(round(max(0.0, min(1.0, float(data["fraction"]))) * 1000))
                     color_class = str(data["color_class"])
                     if color_class:
-                        progress.get_style_context().add_class(color_class)
-                    limit.pack_start(progress, False, False, 0)
+                        progress.setProperty("usage", color_class)
+                    limit.addWidget(progress)
 
                     reset_text = str(data["reset_text"])
                     if state == "stale":
                         reset_text = f"{reset_text} · stale"
                     if reset_text:
-                        reset = Gtk.Label(label=reset_text)
-                        reset.set_name("usageReset")
-                        reset.set_xalign(1)
-                        limit.pack_start(reset, False, False, 0)
+                        reset = QLabel(reset_text)
+                        reset.setObjectName("usageReset")
+                        reset.setAlignment(Qt.AlignmentFlag.AlignRight)
+                        limit.addWidget(reset)
 
-                limit_stack.pack_start(limit, False, False, 0)
+                limit_stack.addLayout(limit)
 
-            self.usage_rows.pack_start(block, False, False, 0)
-
-        self.usage_rows.show_all()
+            self.usage_rows.addWidget(block)
         self.resize_to_content()
 
     def apply_demo_usage_state(self, index: int) -> None:
@@ -2379,7 +2512,7 @@ class StatusWidget(Gtk.Window):
         self.start_usage_animation()
 
         if self.demo:
-            GLib.timeout_add(600, self.finish_demo_usage_refresh)
+            timeout_add(600, self.finish_demo_usage_refresh)
             return False
 
         def worker() -> None:
@@ -2393,7 +2526,7 @@ class StatusWidget(Gtk.Window):
                     "providers": usage_limits.load_usage_cache(USAGE_CACHE_FILE),
                     "errors": {provider: "unavailable" for provider in provider_keys},
                 }
-            GLib.idle_add(self.on_usage_result, snapshot)
+            idle_add(self.on_usage_result, snapshot)
 
         threading.Thread(target=worker, daemon=True).start()
         return False
@@ -2403,6 +2536,8 @@ class StatusWidget(Gtk.Window):
         return True
 
     def on_usage_result(self, snapshot: usage_limits.UsageSnapshot) -> bool:
+        if self.closing:
+            return False
         self.usage_snapshot = snapshot
         self.note_usage_limits(snapshot, trigger=True)
         self.stop_usage_animation()
@@ -2415,6 +2550,8 @@ class StatusWidget(Gtk.Window):
         return False
 
     def finish_demo_usage_refresh(self) -> bool:
+        if self.closing:
+            return False
         self.usage_snapshot = self.demo_usage_scenarios[0]["snapshot"]
         self.stop_usage_animation()
         self.usage_refreshing = False
@@ -2426,16 +2563,12 @@ class StatusWidget(Gtk.Window):
         if self.usage_animation_source_id is not None:
             return
         self.usage_animation_angle = 0.0
-        self.usage_animation_source_id = GLib.timeout_add(
-            USAGE_ANIMATION_INTERVAL_MS,
-            self.tick_usage_animation,
-        )
+        self.usage_animation_source_id = timeout_add(USAGE_ANIMATION_INTERVAL_MS, self.tick_usage_animation)
 
     def stop_usage_animation(self) -> None:
         source_id = self.usage_animation_source_id
         self.usage_animation_source_id = None
-        if source_id is not None:
-            GLib.source_remove(source_id)
+        source_remove(source_id)
         self.usage_animation_angle = 0.0
         for provider_key in self.usage_refreshing_providers:
             logo = self.usage_logo_widgets.get(provider_key)
@@ -2458,53 +2591,40 @@ class StatusWidget(Gtk.Window):
         return True
 
     def set_waiting_style(self, enabled: bool) -> None:
-        context = self.card.get_style_context()
-        if enabled:
-            context.add_class("waiting")
-        else:
-            context.remove_class("waiting")
-            context.remove_class("waitingPulse")
+        set_flag(self.card, "waiting", enabled)
+        if not enabled:
+            set_flag(self.card, "pulse", False)
 
     def tick_animation(self) -> bool:
+        if self.closing:
+            return False
         self.anim_frame += 1
 
         # trailing "..." for in-progress rows, cycling every ~400ms
         count = (self.anim_frame // 2) % 4
+        phase = (self.anim_frame % 8) / 8.0
+        pulse = self.anim_frame % 8 < 4
         for label in self.anim_dot_labels:
-            color = getattr(label, "base_color", STATE_COLORS["neutral"])
-            label.set_markup(self.markup("." * count, color))
+            label.setText(markup("." * count, getattr(label, "base_color", STATE_COLORS["neutral"])))
 
         # expanding ring on waiting dots
-        if self.waiting_dots:
-            phase = (self.anim_frame % 8) / 8.0
-            for dot in self.waiting_dots:
-                dot.phase = phase
-                dot.queue_draw()
+        for dot in self.waiting_dots:
+            dot.phase = phase
+            dot.queue_draw()
 
         # red border pulse when waiting
-        context = self.card.get_style_context()
-        if context.has_class("waiting"):
-            if self.anim_frame % 8 < 4:
-                context.add_class("waitingPulse")
-            else:
-                context.remove_class("waitingPulse")
+        if flag(self.card, "waiting"):
+            set_flag(self.card, "pulse", pulse)
 
         # the same animations inside every session window
         for card in self.session_cards.values():
             for label in card.dot_labels:
-                color = getattr(label, "base_color", STATE_COLORS["neutral"])
-                label.set_markup(self.markup("." * count, color))
-            if card.waiting_dots:
-                phase = (self.anim_frame % 8) / 8.0
-                for dot in card.waiting_dots:
-                    dot.phase = phase
-                    dot.queue_draw()
-            card_context = card.card.get_style_context()
-            if card_context.has_class("waiting"):
-                if self.anim_frame % 8 < 4:
-                    card_context.add_class("waitingPulse")
-                else:
-                    card_context.remove_class("waitingPulse")
+                label.setText(markup("." * count, getattr(label, "base_color", STATE_COLORS["neutral"])))
+            for dot in card.waiting_dots:
+                dot.phase = phase
+                dot.queue_draw()
+            if flag(card.card, "waiting"):
+                set_flag(card.card, "pulse", pulse)
 
         # rotating sweep on the lockup logo (startup intro + idle state)
         if self.spinning:
@@ -2514,9 +2634,8 @@ class StatusWidget(Gtk.Window):
                 logo.queue_draw()
 
         # subtle LIVE badge pulse
-        if "live" in self.badge.get_style_context().list_classes():
-            alpha = "#4ADE80" if self.anim_frame % 8 < 4 else "#2f9c5a"
-            self.badge.set_markup(self.markup("● LIVE", alpha))
+        if self.badge.property("state") == "live":
+            self.badge.setText(markup("● LIVE", "#4ADE80" if pulse else "#2f9c5a"))
         return True
 
     # ----------------------------- sound -----------------------------
@@ -2524,55 +2643,52 @@ class StatusWidget(Gtk.Window):
         platform_support.play_sound(NOTIFICATION_SOUND, log)
 
     # ----------------------------- window plumbing -----------------------------
-    def on_button_press(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> bool:
-        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 1:
-            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
-            return True
-        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
-            self.show_menu(event)
-            return True
-        return False
+    def mousePressEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        button = event.button()
+        if button == Qt.MouseButton.LeftButton:
+            handle = self.windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+            return
+        if button == Qt.MouseButton.RightButton:
+            self.show_menu(event.globalPosition().toPoint())
+            return
+        super().mousePressEvent(event)
 
-    def on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> bool:
-        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter, Gdk.KEY_Escape):
-            return True
-        return False
+    def keyPressEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape):
+            return
+        super().keyPressEvent(event)
 
-    def show_menu(self, event: Gdk.EventButton) -> None:
-        menu = Gtk.Menu()
-        reload_item = Gtk.MenuItem(label="Reload")
-        logs_item = Gtk.MenuItem(label="Open logs folder")
-        if self.update_available:
-            update_item = Gtk.MenuItem(label=f"Update to {self.update_available}")
-        else:
-            update_item = Gtk.MenuItem(label="Check for updates")
-        quit_item = Gtk.MenuItem(label="Quit")
-        settings_item = Gtk.MenuItem(label="Settings…")
-        settings_item.connect("activate", lambda _item: self.open_settings())
-        agents_item = Gtk.MenuItem(label="Show agents")
-        agents_item.set_submenu(self.build_agents_menu())
-        dock_item = Gtk.MenuItem(label="Dock all session windows")
-        dock_item.set_sensitive(any(card.floating for card in self.session_cards.values()))
-        dock_item.connect("activate", lambda _item: self.dock_all_cards())
-        klipy_item = Gtk.MenuItem(label="Get GIFs from KLIPY (free key)…")
-        klipy_item.connect("activate", lambda _item: self.open_klipy_guide())
-        serious_item = Gtk.CheckMenuItem(label="Serious mode (no stickers)")
-        serious_item.set_active(self.serious_mode)
-        serious_item.connect("toggled", lambda item: self.set_serious_mode(item.get_active()))
-        reload_item.connect("activate", lambda _item: self.refresh_status())
-        logs_item.connect("activate", lambda _item: self.open_logs_folder())
-        if self.update_available:
-            update_item.connect("activate", self.run_update)
-        else:
-            update_item.connect("activate", lambda _item: self.start_update_check())
-        quit_item.connect("activate", self.quit)
-        menu_items = [settings_item, agents_item, serious_item, dock_item]
+    def build_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.addAction("Settings…").triggered.connect(self.open_settings)
+        menu.addMenu(self.build_agents_menu(menu))
+        serious = menu.addAction("Serious mode (no stickers)")
+        serious.setCheckable(True)
+        serious.setChecked(self.serious_mode)
+        serious.toggled.connect(self.set_serious_mode)
+        dock = menu.addAction("Dock all session windows")
+        dock.setEnabled(any(card.floating for card in self.session_cards.values()))
+        dock.triggered.connect(self.dock_all_cards)
         if not self.klipy_api_key:
-            menu_items.append(klipy_item)
-        for item in (*menu_items, reload_item, logs_item, update_item, quit_item):
-            menu.append(item)
-        menu.show_all()
-        menu.popup_at_pointer(event)
+            menu.addAction("Get GIFs from KLIPY (free key)…").triggered.connect(lambda: self.open_klipy_guide())
+        menu.addSeparator()
+        menu.addAction("Reload").triggered.connect(self.reload)
+        menu.addAction("Open logs folder").triggered.connect(self.open_logs_folder)
+        if self.update_available:
+            menu.addAction(f"Update to {self.update_available}").triggered.connect(self.run_update)
+        else:
+            menu.addAction("Check for updates").triggered.connect(self.start_update_check)
+        menu.addAction("Quit").triggered.connect(self.quit)
+        return menu
+
+    def show_menu(self, position: object) -> None:
+        self.build_menu().exec(position)
+
+    def reload(self) -> None:
+        self.signature = None
+        self.refresh_status()
 
     # ----------------------------- session windows -----------------------------
     def load_card_positions(self) -> dict[str, dict[str, float]]:
@@ -2609,7 +2725,7 @@ class StatusWidget(Gtk.Window):
         """One window per visible session: create new ones, update, close finished ones."""
         wanted = {str(session["id"]) for session in sessions}
         for session_id in [key for key in self.session_cards if key not in wanted]:
-            self.session_cards.pop(session_id).close()
+            self.session_cards.pop(session_id).close_card()
             self.card_order.remove(session_id)
         for session in sessions:
             session_id = str(session["id"])
@@ -2618,36 +2734,30 @@ class StatusWidget(Gtk.Window):
                 card = SessionCard(self, session_id)
                 self.session_cards[session_id] = card
                 self.card_order.append(session_id)
-                card.update(session)
+                card.update_session(session)
                 saved = self.card_positions.get(session_id)
                 if saved is not None:
                     card.floating = True
                     card.move(*self.clamp_to_visible(int(saved["x"]), int(saved["y"])))
-                card.show_all()
+                card.show()
             else:
-                card.update(session)
+                card.update_session(session)
         self.layout_cards()
 
     def layout_cards(self) -> None:
         """Stack docked session windows under the widget, oldest first (stable order)."""
-        if not self.session_cards:
+        if not self.session_cards or self.closing:
             return
-        x, y = self.get_position()
-        _width, height = self.get_size()
+        geometry = self.geometry()
         # Window y + height - 8 px margin is the card's bottom edge; each session window
         # also has an 8 px margin, so its window top is (visual top - 8).
-        next_y = y + height - 16 + SESSION_CARD_GAP
+        next_y = geometry.y() + geometry.height() - 2 * WINDOW_MARGIN + SESSION_CARD_GAP
         for session_id in self.card_order:
             card = self.session_cards[session_id]
             if card.floating:
                 continue
-            card.dock_at(x, next_y)
-            _card_width, card_height = card.get_size()
-            next_y += card_height - 16 + SESSION_CARD_GAP
-
-    def layout_cards_once(self) -> bool:
-        self.layout_cards()
-        return False
+            card.dock_at(geometry.x(), next_y)
+            next_y += card.height() - 2 * WINDOW_MARGIN + SESSION_CARD_GAP
 
     def dock_card(self, session_id: str) -> None:
         card = self.session_cards.get(session_id)
@@ -2667,7 +2777,7 @@ class StatusWidget(Gtk.Window):
 
     def close_session_cards(self) -> None:
         for card in self.session_cards.values():
-            card.close()
+            card.close_card()
         self.session_cards = {}
         self.card_order = []
 
@@ -2726,12 +2836,12 @@ class StatusWidget(Gtk.Window):
                 if trigger:
                     self.request_sticker("limit", f"limit:{provider}")
 
-    def request_sticker(self, key: str, session_id: str, *, sticky: bool | None = None, debounce_ms: int = STICKER_DEBOUNCE_MS) -> None:
+    def request_sticker(self, key: str, session_id: str, *, sticky: bool | None = None,
+                        debounce_ms: int = STICKER_DEBOUNCE_MS) -> None:
         """Debounced: rapid status changes collapse into one sticker for the latest change."""
         if self.serious_mode or self.sticker_overlay is None:
             return
-        if self.sticker_debounce is not None:
-            GLib.source_remove(self.sticker_debounce)
+        source_remove(self.sticker_debounce)
         self.sticker_request += 1
         request = self.sticker_request
         is_sticky = key in stickers.STICKY_KEYS if sticky is None else sticky
@@ -2746,16 +2856,16 @@ class StatusWidget(Gtk.Window):
                 except Exception as error:  # never let a sticker take the widget down
                     log(f"sticker: pick failed: {error}")
                     choice = stickers.StickerChoice(key, None, "", "placeholder")
-                GLib.idle_add(self.show_sticker, request, session_id, choice, is_sticky)
+                idle_add(self.show_sticker, request, session_id, choice, is_sticky)
 
             threading.Thread(target=worker, daemon=True).start()
             return False
 
-        self.sticker_debounce = GLib.timeout_add(max(1, debounce_ms), pick_in_background)
+        self.sticker_debounce = timeout_add(max(1, debounce_ms), pick_in_background)
 
     def show_sticker(self, request: int, session_id: str, choice: stickers.StickerChoice, sticky: bool) -> bool:
         overlay = self.sticker_overlay
-        if overlay is None or request != self.sticker_request or self.serious_mode:
+        if overlay is None or request != self.sticker_request or self.serious_mode or self.closing:
             return False
         self.last_stickers[session_id] = choice
         self.sticker_owner = session_id
@@ -2768,53 +2878,39 @@ class StatusWidget(Gtk.Window):
     def position_sticker_overlay(self) -> None:
         if self.sticker_overlay is None:
             return
-        x, y = self.get_position()
-        width, _height = self.get_size()
+        geometry = self.geometry()
         # The card sits inside an 8 px transparent margin of the widget window.
-        self.sticker_overlay.place_for_card(x + width - 8, y + 8)
+        self.sticker_overlay.place_for_card(geometry.x() + geometry.width() - WINDOW_MARGIN,
+                                            geometry.y() + WINDOW_MARGIN)
 
-    def on_row_enter(self, _widget: Gtk.Widget, event: Gdk.EventCrossing, session_id: str) -> bool:
+    def on_row_enter(self, session_id: str) -> None:
         overlay = self.sticker_overlay
-        if overlay is None or self.serious_mode or event.detail == Gdk.NotifyType.INFERIOR:
-            return False
+        if overlay is None or self.serious_mode:
+            return
         choice = self.last_stickers.get(session_id)
         if choice is None:
-            return False
+            return
         if overlay.phase in ("in", "shown") and self.sticker_owner == session_id:
             self.sticker_hovered = session_id  # already showing this row's sticker: keep it
-            return False
+            return
         self.sticker_hovered = session_id
         self.sticker_owner = session_id
         self.position_sticker_overlay()
         overlay.present_sticker(choice, sticky=False, hold_ms=None)
-        return False
 
-    def on_row_leave(self, widget: Gtk.Widget, event: Gdk.EventCrossing, session_id: str) -> bool:
-        if event.detail == Gdk.NotifyType.INFERIOR:
-            return False
+    def on_row_leave(self, box: QWidget, session_id: str) -> None:
         if self.sticker_hovered != session_id:
-            return False
-        if self.pointer_inside(widget):
-            return False  # a spurious crossing (e.g. a window mapped above): still hovering
+            return
+        if self.pointer_inside(box):
+            return  # a spurious crossing (e.g. a window mapped above): still hovering
         self.sticker_hovered = None
         if self.sticker_overlay is not None:
             self.sticker_overlay.tuck()
-        return False
 
-    def pointer_inside(self, widget: Gtk.Widget) -> bool:
-        window = self.get_window()
-        display = self.get_display()
-        seat = display.get_default_seat() if display is not None else None
-        pointer = seat.get_pointer() if seat is not None else None
-        if window is None or pointer is None or not widget.get_mapped():
+    def pointer_inside(self, widget: QWidget) -> bool:
+        if not widget.isVisible():
             return False
-        _window, x, y, _mask = window.get_device_position(pointer)
-        origin = widget.translate_coordinates(self, 0, 0)
-        if origin is None:
-            return False
-        allocation = widget.get_allocation()
-        left, top = origin
-        return left <= x < left + allocation.width and top <= y < top + allocation.height
+        return widget.rect().contains(widget.mapFromGlobal(QCursor.pos()))
 
     def verify_hover(self) -> bool:
         session_id = self.sticker_hovered
@@ -2837,42 +2933,49 @@ class StatusWidget(Gtk.Window):
     def set_serious_mode(self, enabled: bool) -> None:
         self.update_setting("AI_STATUS_SERIOUS_MODE", "true" if enabled else "false")
         window = self.settings_window
-        if window is not None and window.serious_switch.get_active() != enabled:
-            window.serious_switch.set_active(enabled)
+        if window is not None and window.serious_switch.isChecked() != enabled:
+            window.serious_switch.setChecked(enabled)
 
-    def open_klipy_guide(self, parent: Gtk.Window | None = None) -> None:
+    def open_klipy_guide(self, _parent: QWidget | None = None) -> None:
         if self.klipy_guide is None:
-            self.klipy_guide = KlipyKeyGuide(self, parent or self.settings_window)
-            self.klipy_guide.connect("destroy", lambda _window: setattr(self, "klipy_guide", None))
-            self.klipy_guide.show_all()
-        self.klipy_guide.present()
+            self.klipy_guide = KlipyKeyGuide(self)
+            self.klipy_guide.show()
+            anchor = self.settings_window if self.settings_window is not None else self
+            self.place_beside(self.klipy_guide, anchor)
+        self.klipy_guide.raise_()
+        self.klipy_guide.activateWindow()
+
+    def on_klipy_guide_closed(self, window: KlipyKeyGuide) -> None:
+        if self.klipy_guide is window:
+            self.klipy_guide = None
 
     def open_settings(self) -> None:
         if self.settings_window is None:
             self.settings_window = SettingsWindow(self)
-            self.settings_window.connect("destroy", self.on_settings_closed)
-            self.settings_window.show_all()
-            self.place_beside(self.settings_window)
-        self.settings_window.present()
+            self.settings_window.show()
+            self.place_beside(self.settings_window, self)
+        self.settings_window.raise_()
+        self.settings_window.activateWindow()
 
-    def place_beside(self, window: Gtk.Window, gap: int = 12) -> None:
+    def place_beside(self, window: QWidget, anchor: QWidget, gap: int = 12) -> None:
         """Open a dialog next to the widget (right if it fits, else left) so changes stay visible."""
-        x, y = self.get_position()
-        width, _height = self.get_size()
-        dialog_width, dialog_height = window.get_size()
-        monitor = self.get_display().get_monitor_at_point(x, y) if self.get_display() else None
-        if monitor is None:
+        window.adjustSize()
+        geometry = anchor.frameGeometry()
+        screen = QGuiApplication.screenAt(geometry.topLeft()) or QGuiApplication.primaryScreen()
+        if screen is None:
             return
-        area = monitor.get_workarea()
-        target_x = x + width + gap
-        if target_x + dialog_width > area.x + area.width:
-            target_x = x - dialog_width - gap
-        target_x = max(area.x, min(target_x, area.x + area.width - dialog_width))
-        target_y = max(area.y, min(y, area.y + area.height - dialog_height))
-        window.move(target_x, target_y)
+        area = screen.availableGeometry()
+        size = window.frameGeometry().size()
+        window.move(*screen_geometry.place_beside(
+            screen_geometry.Rect(geometry.x(), geometry.y(), geometry.width(), geometry.height()),
+            (size.width(), size.height()),
+            screen_geometry.Rect(area.x(), area.y(), area.width(), area.height()),
+            gap,
+        ))
 
-    def on_settings_closed(self, _window: Gtk.Window) -> None:
-        self.settings_window = None
+    def on_settings_closed(self, window: SettingsWindow) -> None:
+        if self.settings_window is window:
+            self.settings_window = None
 
     def sync_settings_window(self) -> None:
         """Keep the open Settings window in step when agents change from the menu."""
@@ -2880,8 +2983,8 @@ class StatusWidget(Gtk.Window):
         if window is None:
             return
         for agent, check in window.agent_checks.items():
-            if check.get_active() != (agent in self.agents):
-                check.set_active(agent in self.agents)
+            if check.isChecked() != (agent in self.agents):
+                check.setChecked(agent in self.agents)
 
     def update_setting(self, key: str, value: str) -> None:
         """Apply one setting to the running widget and save it to the runtime .env."""
@@ -2890,9 +2993,8 @@ class StatusWidget(Gtk.Window):
         elif key == "AI_STATUS_SERIOUS_MODE":
             self.serious_mode = value == "true"
             if self.serious_mode:
-                if self.sticker_debounce is not None:
-                    GLib.source_remove(self.sticker_debounce)
-                    self.sticker_debounce = None
+                source_remove(self.sticker_debounce)
+                self.sticker_debounce = None
                 self.sticker_request += 1
                 if self.sticker_overlay is not None:
                     self.sticker_overlay.hide_now()
@@ -2931,15 +3033,17 @@ class StatusWidget(Gtk.Window):
         if not self.intro:
             self.refresh_status()
 
-    def build_agents_menu(self) -> Gtk.Menu:
-        submenu = Gtk.Menu()
-        group: Gtk.RadioMenuItem | None = None
+    def build_agents_menu(self, parent: QMenu) -> QMenu:
+        submenu = QMenu("Show agents", parent)
+        group = QActionGroup(submenu)
+        group.setExclusive(True)
         for label, agents in AGENT_FILTER_CHOICES:
-            item = Gtk.RadioMenuItem.new_with_label_from_widget(group, label)
-            group = group or item
-            item.set_active(agents == self.agents)
-            item.connect("toggled", lambda menu_item, choice=agents: menu_item.get_active() and self.set_agents(choice))
-            submenu.append(item)
+            action = QAction(label, submenu)
+            action.setCheckable(True)
+            action.setChecked(agents == self.agents)
+            action.triggered.connect(lambda _checked=False, choice=agents: self.set_agents(choice))
+            group.addAction(action)
+            submenu.addAction(action)
         return submenu
 
     def set_agents(self, agents: tuple[str, ...]) -> None:
@@ -2961,39 +3065,43 @@ class StatusWidget(Gtk.Window):
         """Kick off a one-shot background version check against GitHub.
 
         Runs in a daemon thread so the (networked, possibly slow) request never
-        blocks the GTK main loop; the result is delivered back via idle_add.
+        blocks the Qt main loop; the result is delivered back via idle_add.
         """
         def worker() -> None:
             version = updates.check_for_update()
             if version:
-                GLib.idle_add(self.on_update_result, version)
+                idle_add(self.on_update_result, version)
 
         threading.Thread(target=worker, daemon=True).start()
         return False  # one-shot timeout
 
     def on_update_result(self, version: str) -> bool:
+        if self.closing:
+            return False
         self.update_available = version
-        self.update_button.set_label(f"update {version} ↑")
-        self.update_button.set_visible(True)
+        self.update_button.setText(f"update {version} ↑")
+        self.update_button.show()
+        self.resize_to_content()
         log(f"update available: {version}")
         return False
 
-    def run_update(self, *_args) -> None:
+    def run_update(self, *_args: object) -> None:
         if self.updating:
             return
         if not UPDATE_SCRIPT.exists():
             log(f"update script not found: {UPDATE_SCRIPT}")
             return
         self.updating = True
-        self.update_button.set_label("updating…")
-        self.update_button.set_sensitive(False)
+        self.update_button.setText("updating…")
+        self.update_button.setEnabled(False)
         log("starting self-update")
         try:
-            # Detach into its own session so the updater (which stops and restarts
-            # this widget via install.sh) outlives the process it is replacing.
+            # Detach so the updater (which stops and restarts this widget via the
+            # installer) outlives the process it is replacing. It runs with the base
+            # interpreter, not the widget's venv.
             with open(LOG_FILE, "a", encoding="utf-8") as logfile:
                 subprocess.Popen(
-                    process_control.script_argv(UPDATE_SCRIPT),
+                    [process_control.base_interpreter(DATA_DIR), str(UPDATE_SCRIPT)],
                     stdin=subprocess.DEVNULL,
                     stdout=logfile,
                     stderr=logfile,
@@ -3001,54 +3109,25 @@ class StatusWidget(Gtk.Window):
                 )
         except OSError as error:
             self.updating = False
-            self.update_button.set_sensitive(True)
+            self.update_button.setEnabled(True)
             log(f"failed to start update: {error}")
 
     def open_logs_folder(self) -> None:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        if not platform_support.open_path(CACHE_DIR):
-            log(f"cannot open {CACHE_DIR}: no file manager opener available")
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(CACHE_DIR))):
+            if not platform_support.open_path(CACHE_DIR):
+                log(f"cannot open {CACHE_DIR}: no file manager opener available")
 
-    def monitor_workareas(self) -> list[Gdk.Rectangle]:
+    def monitor_workareas(self) -> list[screen_geometry.Rect]:
         """Work areas of the connected monitors, in virtual-screen coordinates."""
-        display = self.get_display()
-        if display is None:
-            return []
         areas = []
-        for index in range(display.get_n_monitors()):
-            monitor = display.get_monitor(index)
-            if monitor is not None:
-                areas.append(monitor.get_workarea())
+        for screen in QGuiApplication.screens():
+            area = screen.availableGeometry()
+            areas.append(screen_geometry.Rect(area.x(), area.y(), area.width(), area.height()))
         return areas
 
     def clamp_to_visible(self, x: int, y: int) -> tuple[int, int]:
-        """Pull a saved position back onto a monitor that still exists.
-
-        X11 packs every monitor into a single virtual screen, so a layout that is not
-        one plain rectangle leaves dead zones: coordinates the server accepts but no
-        physical panel ever draws. A position saved under an earlier monitor
-        arrangement can end up in such a zone, which leaves the widget running and
-        mapped yet completely invisible. Fall back to the nearest monitor instead.
-        """
-        areas = self.monitor_workareas()
-        if not areas:
-            return x, y
-        for area in areas:
-            if area.x <= x < area.x + area.width and area.y <= y < area.y + area.height:
-                return x, y
-
-        def squared_distance(area: Gdk.Rectangle) -> int:
-            dx = max(area.x - x, 0, x - (area.x + area.width - 1))
-            dy = max(area.y - y, 0, y - (area.y + area.height - 1))
-            return dx * dx + dy * dy
-
-        target = min(areas, key=squared_distance)
-        max_x = max(target.x, target.x + target.width - CARD_WIDTH - OFFSCREEN_MARGIN)
-        max_y = max(target.y, target.y + target.height - MIN_VISIBLE_HEIGHT)
-        clamped_x = min(max(x, target.x + OFFSCREEN_MARGIN), max_x)
-        clamped_y = min(max(y, target.y + OFFSCREEN_MARGIN), max_y)
-        log(f"saved position {x},{y} is off-screen, moved to {clamped_x},{clamped_y}")
-        return clamped_x, clamped_y
+        return screen_geometry.clamp_to_visible(x, y, self.monitor_workareas(), CARD_WIDTH, log)
 
     def restore_position(self) -> None:
         try:
@@ -3062,54 +3141,85 @@ class StatusWidget(Gtk.Window):
     def save_position(self) -> None:
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            x, y = self.get_position()
-            self.write_config({"x": x, "y": y})
+            self.write_config({"x": self.x(), "y": self.y()})
         except OSError as error:
             log(f"failed to save position: {error}")
 
-    def on_configure(self, _widget: Gtk.Widget, _event: Gdk.EventConfigure) -> bool:
+    def moveEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        super().moveEvent(event)
+        if self.closing or not self.isVisible():
+            return
         self.save_position()
         if self.sticker_overlay is not None and self.sticker_overlay.visible:
             self.position_sticker_overlay()
         self.layout_cards()
-        return False
 
-    def on_delete(self, *_args: object) -> bool:
-        self.save_position()
-        self.close_session_cards()
-        Gtk.main_quit()
-        return True
+    def resizeEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        if self.sticker_overlay is not None and self.sticker_overlay.visible:
+            self.position_sticker_overlay()
+        if not self.closing:
+            self.layout_cards()
 
-    def quit(self, *_args: object) -> None:
-        self.save_position()
+    def closeEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        self.quit()
+        super().closeEvent(event)
+
+    def shutdown(self) -> None:
+        """Stop timers and close every window this widget owns (without quitting Qt)."""
+        if self.closing:
+            return
+        self.closing = True
+        for timer in self.timers:
+            source_remove(timer)
+        self.timers = []
+        source_remove(self.sticker_debounce)
+        self.sticker_debounce = None
+        self.stop_usage_animation()
         if self.sticker_overlay is not None:
             self.sticker_overlay.hide_now()
         self.close_session_cards()
-        Gtk.main_quit()
+        for window in (self.settings_window, self.klipy_guide):
+            if window is not None:
+                window.close()
+        self.hide()
+        # Run the pending deleteLater()s now: once the event loop has ended, objects still
+        # waiting for deferred deletion are torn down during interpreter exit, which crashes.
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
-    def switch_to_session(self, project: str, cwd: str, client_pids: list[int]) -> None:
+    def quit(self, *_args: object) -> None:
+        if not self.closing and self.isVisible():
+            self.save_position()
+        self.shutdown()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
+    def switch_to_session(self, project: str, cwd: str, client_pids: list[int], console_window: int = 0) -> None:
         """Raise the terminal window of a session (see ai_agent_status_lib.window_switch)."""
-        window_switch.switch_to_session(project, cwd, client_pids, log=log)
+        window_switch.switch_to_session(project, cwd, client_pids, console_window=console_window, log=log)
 
     def own_window_id(self) -> str | None:
         """This widget's X11 window id as wmctrl expects it (hex), or None off X11."""
         return window_id_of(self)
 
     def apply_wmctrl_hints(self) -> bool:
-        # GTK-level hints first; cheap no-ops when the state already holds.
-        self.stick()
-        self.set_keep_above(True)
+        """X11 only: keep the widget and cards on every workspace, above, off the taskbar.
+
+        Qt has no "sticky" window flag, and Mutter/Muffin drop "above" now and then, so this
+        re-asserts the EWMH state with wmctrl every few seconds.
+        """
+        if self.closing or QGuiApplication.platformName() != "xcb":
+            return False
         wmctrl = shutil.which("wmctrl")
         if not wmctrl:
-            return False  # nothing to reinforce (e.g. pure Wayland); stop the timer
+            return False  # nothing to reinforce; stop the timer
         # Target our own window by id. Matching by title (`wmctrl -r TITLE`) hits the first
         # window whose title merely *contains* it, e.g. a terminal whose title mentions
         # "AI Agents Status", which then becomes sticky instead of the widget.
         window_id = self.own_window_id()
         targets = [["-i", "-r", window_id] if window_id else ["-r", TITLE]]
         for card in self.session_cards.values():
-            card.stick()
-            card.set_keep_above(True)
             card_id = window_id_of(card)
             if card_id:
                 targets.append(["-i", "-r", card_id])
@@ -3124,23 +3234,11 @@ class StatusWidget(Gtk.Window):
             except OSError as error:
                 log(f"wmctrl failed: {error}")
                 return False
-        return True  # repeat: re-assert above/sticky/skip_taskbar as Mutter drops them
-
-
-def window_id_of(widget: Gtk.Window) -> str | None:
-    """A window's X11 id as wmctrl expects it (hex), or None off X11 / before realize."""
-    window = widget.get_window()
-    get_xid = getattr(window, "get_xid", None)
-    if get_xid is None:
-        return None
-    try:
-        return hex(get_xid())
-    except Exception:
-        return None
+        return True  # repeat: re-assert above/sticky/skip_taskbar as the WM drops them
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Floating GTK widget for ai-cli-status-monitor.")
+    parser = argparse.ArgumentParser(description="Floating Qt widget for ai-cli-status-monitor.")
     parser.add_argument("--demo", action="store_true", help="cycle through demo states")
     parser.add_argument("--version", action="store_true", help="print the installed version and exit")
     parser.add_argument(
@@ -3163,8 +3261,17 @@ def main() -> int:
     for warning in CONFIG_WARNINGS:
         log(f"configuration: {warning}")
     PID_FILE.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    app = ensure_app()
     widget = StatusWidget(demo=args.demo)
-    widget.show_all()
+    widget.show()
+
+    # Quit cleanly (saving the position) on Ctrl+C / `kill`; Python only sees signals
+    # while it runs, so a cheap timer hands control back to the interpreter.
+    for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+        if signum is not None:
+            signal.signal(signum, lambda *_args: QTimer.singleShot(0, widget.quit))
+    timeout_add(500, lambda: True)
+
     if args.sticker:
         def show_debug_sticker() -> bool:
             if args.sticker == "all":
@@ -3175,12 +3282,12 @@ def main() -> int:
 
         def start_debug_stickers() -> bool:
             if show_debug_sticker():
-                GLib.timeout_add(5000, show_debug_sticker)
+                timeout_add(5000, show_debug_sticker)
             return False
 
-        GLib.timeout_add(3500, start_debug_stickers)
-    log("widget started" + (" in demo mode" if args.demo else ""))
-    Gtk.main()
+        timeout_add(3500, start_debug_stickers)
+    log(f"widget started ({QGuiApplication.platformName()})" + (" in demo mode" if args.demo else ""))
+    app.exec()
     log("widget stopped")
     try:
         PID_FILE.unlink()

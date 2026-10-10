@@ -190,6 +190,13 @@ def activate_window_win32(hwnd: int) -> bool:
         return False
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    if user32.SetForegroundWindow(hwnd):
+        return True
+    # Windows only lets the foreground process hand focus away. The session cards never
+    # take focus, so tap Alt (the documented way to unlock SetForegroundWindow) and retry.
+    vk_menu, keyup = 0x12, 0x0002
+    user32.keybd_event(vk_menu, 0, 0, 0)
+    user32.keybd_event(vk_menu, 0, keyup, 0)
     return bool(user32.SetForegroundWindow(hwnd))
 
 

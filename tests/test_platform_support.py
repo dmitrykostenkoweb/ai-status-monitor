@@ -99,6 +99,10 @@ class CommandTests(unittest.TestCase):
         self.assertIn("[Uri]'C:/it''s.mp3'", windows[0][1][-1])
         self.assertEqual(platform_support.sound_commands("/a.mp3", "linux")[0][0], "mpv")
 
+    def test_missing_linux_qt_packages(self) -> None:
+        self.assertEqual(platform_support.missing_linux_qt_packages(lambda _name: None), ["libxcb-cursor0"])
+        self.assertEqual(platform_support.missing_linux_qt_packages(lambda name: f"lib{name}.so.0"), [])
+
     def test_open_command(self) -> None:
         self.assertEqual(platform_support.open_command("/tmp", "macos"), ["open", "/tmp"])
         self.assertIsNone(platform_support.open_command("/tmp", "windows"))
@@ -233,6 +237,27 @@ class InstallerTests(unittest.TestCase):
             runtime, ROOT / ".env.default", self.root / "config", self.root, environ={}, report=self.messages.append,
         ))
         self.assertEqual(runtime.read_text(), "AI_STATUS_MAX_ROWS=3\n")
+
+    def test_widget_python_prefers_override_then_current_interpreter(self) -> None:
+        installer = self.installer
+        with mock.patch.object(installer, "can_import_qt", return_value=True):
+            self.assertEqual(installer.ensure_widget_python(self.root, {"AI_STATUS_WIDGET_PYTHON": "/opt/py"}), "/opt/py")
+            self.assertEqual(installer.ensure_widget_python(self.root, {}), sys.executable)
+        with mock.patch.object(installer, "can_import_qt", return_value=False), \
+                mock.patch.object(installer.subprocess, "run") as run:
+            self.assertIsNone(installer.ensure_widget_python(self.root, {"AI_STATUS_SKIP_PIP": "1"}))
+            run.assert_not_called()
+
+    def test_interpreters_are_recorded_for_the_launchers(self) -> None:
+        process_control.save_interpreters(self.root, sys.executable, sys.executable)
+        self.assertEqual(process_control.base_interpreter(self.root), sys.executable)
+        self.assertEqual(process_control.load_interpreters(self.root)["widget"], sys.executable)
+        (self.root / "interpreters.json").write_text('{"base": "/does/not/exist"}')
+        self.assertEqual(process_control.base_interpreter(self.root), sys.executable)
+        self.assertEqual(
+            process_control.widget_argv(Path("/b"), "/py", "--demo"),
+            ["/py", str(Path("/b") / "ai-agent-status-widget"), "--demo"],
+        )
 
     def test_launch_agent_plist_escapes_arguments(self) -> None:
         plist = self.installer.launch_agent_plist(["/usr/bin/python3", "/Users/a&b/widget"], Path("/tmp/w.log"))

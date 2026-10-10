@@ -9,11 +9,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ai_agent_status_lib.env_config import load_settings  # noqa: E402
 from ai_agent_status_lib.process_control import start_widget  # noqa: E402
+from ai_agent_status_lib.process_control import widget_interpreter  # noqa: E402
 
 
 def main() -> int:
     settings = load_settings()
-    _started, message = start_widget(Path(__file__).resolve().parent, settings.cache_dir, *sys.argv[1:])
+    _started, message = start_widget(
+        Path(__file__).resolve().parent,
+        settings.cache_dir,
+        *sys.argv[1:],
+        python=widget_interpreter(settings.data_dir),
+    )
     print(message)
     return 0
 

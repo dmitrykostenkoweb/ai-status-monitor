@@ -66,15 +66,24 @@ def has_hook(path: Path, command: str, events: tuple[str, ...]) -> bool:
     return True
 
 
-def gtk_available() -> bool:
+def widget_toolkit() -> tuple[bool, str]:
+    """Whether the recorded widget interpreter can import PySide6 (Qt)."""
+    python = process_control.widget_interpreter(SETTINGS.data_dir)
     try:
-        import gi
-
-        gi.require_version("Gtk", "3.0")
-        from gi.repository import Gtk  # noqa: F401
-        return True
-    except Exception:
-        return False
+        result = subprocess.run(
+            [python, "-c", "import PySide6.QtWidgets, PySide6; print(PySide6.__version__)"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=60,
+            check=False,
+            **platform_support.hidden_window_flags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, python
+    if result.returncode != 0:
+        return False, python
+    return True, f"{result.stdout.strip()} ({python})"
 
 
 def test_mode_writes_status() -> bool:
@@ -190,17 +199,21 @@ def main() -> int:
         warn("Codex hooks file not found")
 
     if PLATFORM == platform_support.LINUX:
+        missing = platform_support.missing_linux_qt_packages()
+        if missing:
+            warn(f"Qt X11 libraries missing: sudo apt install {' '.join(missing)}")
         if shutil.which("wmctrl"):
             ok("wmctrl available")
         else:
-            warn("wmctrl missing")
+            warn("wmctrl missing (always-on-top on every workspace and the → window switch need it)")
 
-    if gtk_available():
-        ok("GTK available")
-    elif PLATFORM == platform_support.LINUX:
-        warn("GTK missing: sudo apt install python3-gi gir1.2-gtk-3.0 wmctrl")
+    available, detail = widget_toolkit()
+    if available:
+        ok(f"PySide6 available: {detail}")
     else:
-        warn("Widget UI is not available on this OS yet")
+        warn(f"PySide6 missing for {detail}: re-run the installer (it sets up a private venv)")
+        if PLATFORM == platform_support.LINUX:
+            warn("Linux packages the installer and Qt need: sudo apt install python3-venv libxcb-cursor0 wmctrl")
 
     age = latest_status_age("codex")
     if age is None:

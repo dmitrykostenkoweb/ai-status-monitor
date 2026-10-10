@@ -7,6 +7,12 @@ runtime ``.env`` once (never overwrites it), merges the Claude Code / Codex hook
 into their JSON config (backing the files up first), installs autostart for the
 current OS and restarts the widget so an update takes effect.
 
+The widget UI needs PySide6 (Qt). When this interpreter cannot import it, the
+installer creates a private venv in ``<data dir>/venv`` and installs
+``PySide6-Essentials`` there (a one-time download); the hook and the helper
+scripts keep using this interpreter. Set ``AI_STATUS_WIDGET_PYTHON`` to use an
+interpreter of your own, or ``AI_STATUS_SKIP_PIP=1`` to skip the download.
+
 Run it with the Python interpreter that should run the widget and the hooks:
 ``python3 install.py`` (Linux/macOS, also what ``install.sh`` does) or
 ``py install.py`` / ``python install.py`` (Windows).
@@ -53,6 +59,8 @@ SCRIPTS = (
 )
 POSIX_ONLY_SCRIPTS = ("ai-agent-status-env",)  # Bash dotenv loader, kept for user scripts
 DATA_FILES = ("notification.mp3", "openai-logo.svg", "anthropic-logo.png")
+PYSIDE_REQUIREMENT = "PySide6-Essentials>=6.5"
+QT_PROBE = "import PySide6.QtWidgets"
 
 CLAUDE_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure")
 CODEX_EVENTS = ("UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "SubagentStop", "Stop")
@@ -270,7 +278,7 @@ def copy_data(data_dir: Path) -> None:
 
 # ----------------------------- autostart -----------------------------
 
-def install_linux_desktop(home: Path, bin_dir: Path) -> list[str]:
+def install_linux_desktop(home: Path, bin_dir: Path, python: str) -> list[str]:
     autostart_dir = home / ".config" / "autostart"
     applications_dir = home / ".local" / "share" / "applications"
     icons_dir = home / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps"
@@ -286,7 +294,7 @@ def install_linux_desktop(home: Path, bin_dir: Path) -> list[str]:
     autostart.write_text(
         "[Desktop Entry]\nType=Application\n"
         f"Name={APP_NAME}\nComment=Floating status widget for Claude Code and Codex CLI\n"
-        f"Exec={bin_dir}/ai-agent-status-widget\nIcon={icon}\nTerminal=false\n"
+        f'Exec="{python}" "{bin_dir}/ai-agent-status-widget"\nIcon={icon}\nTerminal=false\n'
         "X-GNOME-Autostart-enabled=true\n",
         encoding="utf-8",
     )
@@ -335,57 +343,109 @@ def launch_agent_plist(argv: list[str], log_file: Path) -> str:
 """
 
 
-def install_macos_launch_agent(home: Path, bin_dir: Path, cache_dir: Path) -> list[str]:
+def install_macos_launch_agent(home: Path, bin_dir: Path, cache_dir: Path, python: str) -> list[str]:
     """Start the widget at login. RunAtLoad only (no KeepAlive): quitting it stays quit."""
     agents_dir = home / "Library" / "LaunchAgents"
     agents_dir.mkdir(parents=True, exist_ok=True)
     plist = agents_dir / f"{LAUNCH_AGENT_LABEL}.plist"
-    argv = [sys.executable, str(bin_dir / "ai-agent-status-widget")]
+    argv = process_control.widget_argv(bin_dir, python)
     plist.write_text(launch_agent_plist(argv, cache_dir / "widget.log"), encoding="utf-8")
     return [f"Login item (LaunchAgent) installed:\n  {plist}"]
 
 
-def install_windows_run_key(bin_dir: Path) -> list[str]:
+def install_windows_run_key(bin_dir: Path, python: str) -> list[str]:
     """Start the widget at sign-in via HKCU\\...\\Run (pythonw, so no console window)."""
     import winreg  # type: ignore[import-not-found]
 
     command = platform_support.quote_command(
-        process_control.script_argv(bin_dir / "ai-agent-status-widget", gui=True), platform_support.WINDOWS
+        process_control.widget_argv(bin_dir, platform_support.gui_python(python)), platform_support.WINDOWS
     )
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
         winreg.SetValueEx(key, WINDOWS_RUN_VALUE, 0, winreg.REG_SZ, command)
     return [f"Sign-in autostart installed:\n  HKCU\\{WINDOWS_RUN_KEY}\\{WINDOWS_RUN_VALUE}"]
 
 
-def install_autostart(home: Path, bin_dir: Path, cache_dir: Path) -> list[str]:
+def install_autostart(home: Path, bin_dir: Path, cache_dir: Path, python: str) -> list[str]:
     try:
         if PLATFORM == platform_support.WINDOWS:
-            return install_windows_run_key(bin_dir)
+            return install_windows_run_key(bin_dir, python)
         if PLATFORM == platform_support.MACOS:
-            return install_macos_launch_agent(home, bin_dir, cache_dir)
-        return install_linux_desktop(home, bin_dir)
+            return install_macos_launch_agent(home, bin_dir, cache_dir, python)
+        return install_linux_desktop(home, bin_dir, python)
     except OSError as error:
         return [f"⚠️  Autostart not installed: {error}"]
 
 
 # ----------------------------- widget runtime -----------------------------
 
-def widget_toolkit_available() -> bool:
-    """Whether this interpreter can import the widget's GUI toolkit."""
-    probe = (
-        "import gi\n"
-        "gi.require_version('Gtk', '3.0')\n"
-        "from gi.repository import Gtk\n"
-    )
-    result = subprocess.run([sys.executable, "-c", probe], stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, check=False)
+def can_import_qt(python: str) -> bool:
+    try:
+        result = subprocess.run([python, "-c", QT_PROBE], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
     return result.returncode == 0
+
+
+def venv_python(venv: Path) -> Path:
+    if PLATFORM == platform_support.WINDOWS:
+        return venv / "Scripts" / "python.exe"
+    return venv / "bin" / "python"
+
+
+def ensure_widget_python(data_dir: Path, environ: dict[str, str] | None = None) -> str | None:
+    """An interpreter that can import PySide6, setting up ``<data>/venv`` when needed."""
+    env = os.environ if environ is None else environ
+    chosen = env.get("AI_STATUS_WIDGET_PYTHON", "").strip()
+    if chosen:
+        if can_import_qt(chosen):
+            return chosen
+        say(f"⚠️  AI_STATUS_WIDGET_PYTHON={chosen} cannot import PySide6.")
+        return None
+    if can_import_qt(sys.executable):
+        return sys.executable
+    venv = data_dir / "venv"
+    python = venv_python(venv)
+    if python.exists() and can_import_qt(str(python)):
+        return str(python)
+    if env.get("AI_STATUS_SKIP_PIP"):
+        say("AI_STATUS_SKIP_PIP is set: not installing PySide6.")
+        return None
+    pip = [str(python), "-m", "pip"]
+    if not python.exists():
+        say(f"Creating a private Python environment for the widget: {venv}")
+        result = subprocess.run([sys.executable, "-m", "venv", str(venv)], check=False)
+        if result.returncode != 0 or not python.exists():
+            # Debian/Ubuntu/Mint ship venv without ensurepip unless python3-venv is
+            # installed; a pip-less venv still works when this Python has pip itself.
+            shutil.rmtree(venv, ignore_errors=True)
+            result = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=False)
+            if result.returncode != 0 or not python.exists():
+                say("⚠️  Could not create the venv.")
+                return None
+    if subprocess.run([*pip, "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                      check=False).returncode != 0:
+        pip = [sys.executable, "-m", "pip", "--python", str(python)]
+    say(f"Installing {PYSIDE_REQUIREMENT} into it (one-time download, about 100 MB)…")
+    result = subprocess.run(
+        [*pip, "install", "--disable-pip-version-check", "--upgrade", PYSIDE_REQUIREMENT],
+        check=False,
+    )
+    if result.returncode != 0 or not can_import_qt(str(python)):
+        say("⚠️  PySide6 could not be installed.")
+        return None
+    return str(python)
 
 
 def toolkit_hint() -> str:
     if PLATFORM == platform_support.LINUX:
-        return "  sudo apt install python3-gi gir1.2-gtk-3.0 wmctrl"
-    return "  The widget UI is not available on this OS yet; hooks and status files work."
+        return (
+            "  sudo apt install python3-venv python3-pip libxcb-cursor0 wmctrl\n"
+            "  then run the installer again (or set AI_STATUS_WIDGET_PYTHON to a Python with PySide6)."
+        )
+    if PLATFORM == platform_support.MACOS:
+        return "  Install Python 3.9+ from python.org or Homebrew, then run the installer again."
+    return "  Install Python 3.9+ from python.org (tick \"Add python.exe to PATH\"), then run the installer again."
 
 
 def has_display() -> bool:
@@ -394,10 +454,10 @@ def has_display() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-def restart_widget(bin_dir: Path, cache_dir: Path) -> None:
+def restart_widget(bin_dir: Path, cache_dir: Path, python: str) -> None:
     """Restart so a reinstall/update picks up the new code."""
     process_control.stop_widget(cache_dir)
-    _started, message = process_control.start_widget(bin_dir, cache_dir)
+    _started, message = process_control.start_widget(bin_dir, cache_dir, python=platform_support.gui_python(python))
     say(message)
 
 
@@ -432,7 +492,9 @@ def main() -> int:
 
     copy_scripts(bin_dir)
     copy_data(data_dir)
-    notes = install_autostart(home, bin_dir, cache_dir)
+    widget_python = ensure_widget_python(data_dir)
+    process_control.save_interpreters(data_dir, sys.executable, widget_python)
+    notes = install_autostart(home, bin_dir, cache_dir, widget_python or sys.executable)
     install_environment_config(runtime_env, source_env, config_dir, home)
 
     add_hooks(home / ".claude" / "settings.json", process_control.hook_command(bin_dir, "claude"), CLAUDE_EVENTS)
@@ -442,7 +504,7 @@ def main() -> int:
         say("   Codex can load hooks from both config.toml and hooks.json, but may warn when both exist in one layer.")
     add_hooks(home / ".codex" / "hooks.json", process_control.hook_command(bin_dir, "codex"), CODEX_EVENTS, codex=True)
 
-    toolkit_ok = widget_toolkit_available()
+    toolkit_ok = widget_python is not None
     version = (PROJECT_DIR / "VERSION").read_text(encoding="utf-8").strip()
     suffix = ".cmd" if PLATFORM == platform_support.WINDOWS else ""
     say("")
@@ -455,8 +517,13 @@ def main() -> int:
         say(f"Add {bin_dir} to your PATH to run them by name.")
     say("")
     if not toolkit_ok:
-        say("Widget UI dependencies missing or incomplete:")
+        say("The widget UI needs PySide6 (Qt), which is not available yet:")
         say(toolkit_hint())
+        say("")
+    missing_libraries = platform_support.missing_linux_qt_packages() if PLATFORM == platform_support.LINUX else []
+    if missing_libraries:
+        say(f"⚠️  Qt needs {', '.join(missing_libraries)} to open windows on X11:")
+        say(f"  sudo apt install {' '.join(missing_libraries)}")
         say("")
     for note in notes:
         say(note)
@@ -466,12 +533,12 @@ def main() -> int:
     say(f"Run doctor:\n  {bin_dir / ('ai-agent-status-doctor' + suffix)}")
     say("")
 
-    if toolkit_ok and has_display():
-        restart_widget(bin_dir, cache_dir)
+    if widget_python is not None and has_display() and not missing_libraries:
+        restart_widget(bin_dir, cache_dir, widget_python)
     elif toolkit_ok:
         say("No display found, widget was not started now. It will start on desktop login.")
     else:
-        say("Widget UI toolkit is missing, widget was not started.")
+        say("PySide6 is missing, widget was not started. Hooks and status files work without it.")
     say("")
     say("For Codex CLI, open /hooks and trust the new hook if Codex asks for review.")
     return 0
