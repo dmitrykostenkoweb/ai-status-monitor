@@ -19,22 +19,21 @@ Codex: running command [ai-cli-status-monitor] 14:23
 
 ## 2. Appearance
 
-The widget looks like a small dark floating card / mini-player:
+The widget has a **comic-book** look: thick ink outlines, hard offset shadows, halftone dots and Bangers / Comic Neue / Space Mono type (bundled, SIL Open Font License). **Dark** is the default; a **light** theme is one switch away in Settings (`Light theme`, or `AI_STATUS_THEME=light`). The cards are drawn at 70 % of the design's size (294 px wide by default), while the GIF stickers keep their full size.
 
-- dark background with a subtle border and rounded corners
-- header: radar icon, `AI Agents Status`, a state badge (`● LIVE` / `▲ N ALERT` / `● IDLE`) and a `×` button
-- **session windows** (default) — every active session (run) gets its own small draggable window with its own GIF sticker; new windows dock in a column under the widget and follow it, a dragged window stays where you drop it (remembered per session, right-click → `Dock under the widget` to bring it back). Turn off in Settings (`Session windows`) for the classic list below
-- classic list: one row per active session (up to 5), each with: a glowing dot in the state color, an agent logo tile, the agent name, the status (monospace), and a `project · time` line
-- colors depend on the state (thinking, reading code, coding, running a command, analyzing output, waiting for approval, finished)
-- active states get an animated `...`; `done` sessions are dimmed, and any overflow is collapsed behind a `+N finished, hidden automatically` footer
-- each row has a clickable `→` on the right that activates the terminal window of that session; a `waiting for approval` row is additionally highlighted in red with a pulsing border
-- with session windows (default) the widget itself is just the header + usage limits: on startup and when nothing is running you see only the limits, and each agent run appears as its own window with a GIF
-- classic list only: when nothing is running an empty/idle state shows the "AI Status Monitor" lockup (radar logo + wordmark) with a rotating radar sweep and `no active agents`, and on startup the same lockup is shown for ~3 seconds as an intro splash
-- when a newer version is published on GitHub, a small `update ↑` pill appears in the header (see [Updates](#7b-updates))
-- a compact usage section groups Claude Code 5-hour/weekly and Codex weekly utilization beside centered, clickable provider logos
-- **Settings window** — click the `⚙` in the header (or right-click → `Settings…`): shown agents, notification sound, visible rows and timing; changes apply instantly and are saved to the runtime `.env`
-- **GIF stickers** — when an agent changes status, a tilted sticker with a GIF and a speech bubble pops out of the top-right corner for a few seconds (see [GIF stickers](#7d-gif-stickers))
-- right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Serious mode (no stickers)`, `Dock all session windows`, `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`
+- **Main card**: a halftone header with a slowly sweeping radar mark, `AI Agents Status!`, a tilted state badge (`● LIVE` / `▲ N ALERT!` / `● IDLE`), a `▴`/`▾` button that folds the usage limits away (the agents' cards and their GIFs stay), a `⚙` settings button and a red `X`. Below it are the usage limits: one inked block per provider (Anthropic, OpenAI) with its logo on a coloured disc and halftone quota bars. Bars are green below 75 %, orange from 75 % and red from 90 %. Click a provider disc to refresh its usage.
+- **Session windows** (default): every active session (run) gets its own draggable card, docked in a column under the widget. A card shows:
+  - a yellow `➜` button that jumps to that terminal;
+  - the agent's logo disc and its stroked name;
+  - a status chip: yellow while analyzing/reading, green while coding, red when it waits for you or hit an error;
+  - the `project · time` line.
+
+  A card waiting for you pulses its outline red. A dragged card stays where you drop it (remembered per session; right-click → `Dock under the widget` brings it back). Turn session windows off in Settings for the classic list below.
+- **Classic list**: the same rows inside the main card (up to 5), with a `+N finished, hidden automatically` footer. When nothing runs, and for ~3 s at startup, the "AI Status Monitor!" lockup shows instead.
+- **GIF stickers**: a tilted polaroid with a reaction GIF, a sound-effect caption (`HMMM…`, `CLACK!`, `AHEM!`) and a speech bubble pops out of each card's top-right corner (see [GIF stickers](#7d-gif-stickers)).
+- When a newer version is published on GitHub, a yellow `UPDATE ↑` button appears in the header (see [Updates](#7b-updates)).
+- **Settings window** (`⚙`, or right-click → `Settings…`): shown agents, notification sound, visible rows, session windows, light theme, usage limits on/off, **Start at login** (adds or removes the login entry; the installer respects your choice), stickers and timing. Changes apply instantly and are saved to the runtime `.env`.
+- Right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Serious mode (no stickers)`, `Dock all session windows`, `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`.
 
 By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
 
@@ -62,7 +61,7 @@ The installer itself is `install.py` (Python 3.9+, cross-platform); `install.sh`
 
 - Python 3.9+ (the hook and helpers use only the standard library).
 - The widget UI uses **PySide6** (Qt). If the Python running the installer cannot import it, the installer creates a private venv in the data directory (`<data dir>/venv`) and installs `PySide6-Essentials` there. This is a one-time download of about 100 MB. Set `AI_STATUS_WIDGET_PYTHON=/path/to/python` to use your own interpreter, or `AI_STATUS_SKIP_PIP=1` to skip the download (hooks and status files work without Qt).
-- Linux: `wmctrl` (always-on-top on every workspace, `→` window switch) and `libxcb-cursor0` (needed by Qt 6.5+ on X11). On Debian/Ubuntu/Mint, `python3-venv` lets the installer create the venv: `sudo apt install python3-venv libxcb-cursor0 wmctrl`.
+- Linux: `wmctrl` (the `→` window switch, and a fallback for always-on-top) and `libxcb-cursor0` (needed by Qt 6.5+ on X11). On Debian/Ubuntu/Mint, `python3-venv` lets the installer create the venv: `sudo apt install python3-venv libxcb-cursor0 wmctrl`.
 
 ### macOS and Windows
 
@@ -157,10 +156,12 @@ Most of these can also be changed from the widget's **Settings** window (`⚙` i
 Available variables:
 
 - `AI_STATUS_CACHE_DIR`, `AI_STATUS_CONFIG_DIR`, `AI_STATUS_DATA_DIR` — data directories
-- `AI_STATUS_TITLE`, `AI_STATUS_CARD_WIDTH`, `AI_STATUS_MAX_ROWS` — widget appearance
+- `AI_STATUS_TITLE` (default `AI Agents Status!`), `AI_STATUS_CARD_WIDTH` (default `294`), `AI_STATUS_MAX_ROWS` — widget appearance. Re-installing upgrades the previous defaults (`344` / `420`, `AI Agents Status`) to the new ones; values you changed are kept.
 - `AI_STATUS_SOUND_ENABLED` — `true`/`false`, `yes`/`no`, `on`/`off` or `1`/`0`
 - `AI_STATUS_STALE_AFTER_SECONDS`, `AI_STATUS_HIDE_DONE_AFTER_SECONDS`, `AI_STATUS_IDLE_AFTER_SECONDS`, `AI_STATUS_HIDE_STALE_AFTER_SECONDS` — timeouts
-- `AI_STATUS_THEME` — theme name
+- `AI_STATUS_THEME` — `dark` (default) or `light` comic theme
+- `AI_STATUS_SHOW_LIMITS` — `true` (default) shows the usage-limit bars; `false` folds them away and skips usage requests
+- `AI_STATUS_AUTOSTART` — `true` (default) starts the widget at login; `false` removes the login entry, and re-installing keeps it off
 - `AI_STATUS_AGENTS` — which agents the widget shows: `claude,codex` (default, also `all`), `claude` or `codex`. Hidden agents get no rows, no usage bars, no sounds and no usage requests. The right-click `Show agents` menu changes it live and saves the choice to the runtime `.env` (a value exported in the process still wins on the next start)
 - `AI_STATUS_SESSION_WINDOWS` — `true` (default): each session in its own draggable window; `false`: the classic list inside the widget
 - `AI_STATUS_STICKER_ROTATE_SECONDS` — how often a working session window swaps to a new GIF (default `120`, `0` = never)
@@ -371,10 +372,10 @@ The `claude.json` and `codex.json` files still point to the latest status of eac
 
 The widget plays `notification.mp3` only when entering a state that requires your interaction, e.g. waiting for approval or waiting for a reply. If you hear no sound, check `~/.cache/ai-cli-status-monitor/widget.log`; the widget uses whatever player is available: `afplay` on macOS, PowerShell (Windows Media Player engine) on Windows, and on Linux `mpv`, `ffplay`, `mpg123`, `gst-play-1.0` or `paplay`.
 
-If the widget is not above all windows on Linux, check:
+If the widget is not above all windows on Linux, check that it runs on X11 (`(xcb)` in the log). Full-screen windows (videos, presentations) still cover it, by design of the window manager.
 
 ```bash
-command -v wmctrl
+grep "widget started" ~/.cache/ai-cli-status-monitor/widget.log | tail -1
 ```
 
 If the widget does not start on Linux with `Could not load the Qt platform plugin "xcb"` (or the doctor reports it), install `libxcb-cursor0`.
@@ -386,7 +387,7 @@ If the widget does not start on Linux with `Could not load the Qt platform plugi
 - The `waiting for you` status depends on the available notification, stop and permission events.
 - Usage-limit integrations are best-effort and may temporarily show `Unavailable` if Claude or Codex changes its private local/API data shape.
 - Claude usage requires an active Claude Code OAuth login; API-key spend and billing limits are outside this widget's scope.
-- Always-on-top works on every OS. Staying visible on *every* workspace/desktop is enforced only on Linux/X11 (via `wmctrl`). On macOS and Windows the widget stays on the desktop/Space where it was opened.
+- Always-on-top works on every OS. Staying visible on *every* workspace/desktop is enforced only on Linux/X11, where the widget re-asserts "above" and "all workspaces" every second (Cinnamon/Muffin and GNOME/Mutter drop "above" now and then). On macOS and Windows the widget stays on the desktop/Space where it was opened.
 - On Wayland the widget runs through XWayland when `libxcb-cursor0` is installed, because Wayland does not let apps place their own windows (docked session windows, sticker overlay).
 - Each AI session has its own row. Session identity comes from `session_id` (Claude). When it is missing (Codex), it comes from the terminal: the POSIX session leader (the terminal's shell) on Linux/macOS, or the console window on Windows. So one session = one stable row, even without `session_id`.
 - The `→` switch matches a window by the terminal process PID:

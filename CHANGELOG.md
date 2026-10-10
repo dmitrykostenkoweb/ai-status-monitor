@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fold the usage limits away with the new `▴`/`▾` header button, Settings → `Usage limits`, the right-click menu or `AI_STATUS_SHOW_LIMITS=false`. The agents' session cards and their GIFs stay; hidden limits are not fetched.
+- Settings → `Start at login` turns the login entry (Linux `.desktop`, macOS LaunchAgent, Windows Run key) on or off. It is saved as `AI_STATUS_AUTOSTART`, and re-installing keeps it off.
+
+### Fixed
+
+- Linux: the Qt widget and session windows stay on top again (and on every workspace, off the taskbar). The widget now gives its X11 windows the same shape as the old GTK widget did, through libX11 directly instead of `wmctrl`: UTILITY window type, not transient for the application's group. It re-asserts "above" every second, because Muffin/Mutter drop it now and then. Before, the state was only re-asserted every 4 s through `wmctrl`, and never when `wmctrl` was missing.
+
 ### Changed
 
+- **Comic redesign.** The widget, session windows, stickers, Settings, the KLIPY guide and menus now use the comic-book look from the design handoff: thick ink outlines, hard offset shadows, halftone header and bars, a tilted LIVE/ALERT/IDLE badge, stroked Bangers titles and agent names, coloured status chips, a yellow `➜` jump button, and logo discs for agents and providers. Stickers are now tilted polaroids with a sound-effect caption ("HMMM…", "CLACK!", "AHEM!") and a comic speech bubble, and they pop in with the handoff's bounce. The fonts (Bangers, Comic Neue, Space Mono; SIL OFL) are bundled for offline use.
+- Dark comic theme by default, plus a light theme: Settings → `Light theme`, or `AI_STATUS_THEME=light`. It switches live. `AI_STATUS_THEME` now accepts only `dark` or `light`.
+- The comic cards are drawn at 70 % of the design's size; the GIF stickers keep their full size. The default card width is 294 px (was 344) and the default title is `AI Agents Status!`. Re-installing upgrades these old defaults in an existing `.env`; values you changed are kept. Docked session windows leave room for each card's sticker.
 - **The widget now runs on Linux, macOS and Windows.** It was rewritten from GTK3/PyGObject to Qt (PySide6) and keeps the same look and features: rows and session windows, GIF stickers with speech bubbles, usage limits, Settings, the KLIPY key guide, the `→` window switch, sounds and self-update. KLIPY media is still decoded from memory only (`QBuffer` → `QMovie`) and never written to disk.
 - The installer sets PySide6 up automatically. When the installing Python cannot import it, `install.py` creates `<data dir>/venv` and installs `PySide6-Essentials` there (one-time download). It records the interpreters in `<data dir>/interpreters.json`, which autostart and the start/update helpers use. Running `ai-agent-status-widget` with a Python that lacks PySide6 re-runs it under that interpreter. `AI_STATUS_WIDGET_PYTHON` picks your own interpreter, and `AI_STATUS_SKIP_PIP=1` skips the download.
 - Linux needs `libxcb-cursor0` (Qt 6.5+ on X11) instead of `python3-gi`/`gir1.2-gtk-3.0`; `wmctrl` is still used. The installer and doctor print the `apt` command. On Wayland the widget runs through XWayland so it can place its own windows.

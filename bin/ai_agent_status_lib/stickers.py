@@ -34,6 +34,17 @@ STICKER_COLORS = {
     "idle": "#8B93A1",
 }
 
+# Comic sound effect printed under the polaroid (one is picked at random per sticker).
+STICKER_SFX = {
+    "analyzing": ("HMMM…", "THINK!", "PONDER…", "AHA?"),
+    "coding": ("CLACK!", "TAP TAP!", "KA-CHUNK!", "CLICKETY!"),
+    "waiting": ("AHEM!", "PSST!", "KNOCK KNOCK!", "HEY!"),
+    "done": ("TA-DA!", "BOOM!", "DONE!", "KA-CHING!"),
+    "error": ("KABOOM!", "OOPS!", "CRASH!", "D'OH!"),
+    "limit": ("YIKES!", "UH-OH!", "WHEW…", "EEK!"),
+    "idle": ("ZZZ…", "YAWN…", "SNORE…"),
+}
+
 # Structured status kinds (see status_model.STATUS_KINDS) → sticker key. Kinds that are not
 # listed (neutral, stale) never pop a sticker.
 KIND_TO_STICKER = {

@@ -14,9 +14,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
 
+from ai_agent_status_lib import autostart  # noqa: E402
 from ai_agent_status_lib import platform_support  # noqa: E402
 from ai_agent_status_lib import process_control  # noqa: E402
 from ai_agent_status_lib import window_switch  # noqa: E402
+from ai_agent_status_lib import x11_hints  # noqa: E402
 from ai_agent_status_lib.env_config import DEFAULT_VALUES  # noqa: E402
 from ai_agent_status_lib.env_config import load_settings  # noqa: E402
 from ai_agent_status_lib.env_config import platform_default_values  # noqa: E402
@@ -173,6 +175,73 @@ class WindowSwitchTests(unittest.TestCase):
         self.assertTrue(logs)
 
 
+class FakeX11:
+    """Records the libX11 calls X11Hints makes."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.names: dict[int, str] = {}
+
+    def XDefaultRootWindow(self, _display):  # noqa: N802 - libX11 name
+        return 1
+
+    def XInternAtom(self, _display, name, _only_if_exists):  # noqa: N802
+        atom = 100 + len(self.names)
+        self.names[atom] = name.decode()
+        return atom
+
+    def XSendEvent(self, _display, root, _propagate, mask, event):  # noqa: N802
+        message = event._obj.xclient
+        self.calls.append(("send", root, mask, message.window, self.names[message.message_type],
+                           [self.names.get(value, value) for value in message.data]))
+
+    def XDeleteProperty(self, _display, window, prop):  # noqa: N802
+        self.calls.append(("delete", window, prop))
+
+    def XChangeProperty(self, _display, window, prop, kind, fmt, mode, data, count):  # noqa: N802
+        self.calls.append(("change", window, self.names[prop], [self.names[data[i]] for i in range(count)]))
+
+    def XFlush(self, _display):  # noqa: N802
+        self.calls.append(("flush",))
+
+    def XCloseDisplay(self, _display):  # noqa: N802
+        self.calls.append(("close",))
+
+
+class X11HintsTests(unittest.TestCase):
+    def test_apply_matches_gtk_window_shape_and_requests_states(self) -> None:
+        fake = FakeX11()
+        hints = x11_hints.X11Hints(fake, 7, lambda _m: None)
+        hints.apply(0x400007)
+        self.assertEqual(fake.calls[0], ("delete", 0x400007, x11_hints.XA_WM_TRANSIENT_FOR))
+        self.assertEqual(fake.calls[1], ("change", 0x400007, "_NET_WM_WINDOW_TYPE", ["_NET_WM_WINDOW_TYPE_UTILITY"]))
+        sends = [call for call in fake.calls if call[0] == "send"]
+        requested = {name for call in sends if call[4] == "_NET_WM_STATE" for name in call[5][1:3]}
+        self.assertEqual(requested, set(x11_hints.STATES))
+        self.assertTrue(all(call[1] == 1 and call[3] == 0x400007 for call in sends))
+        self.assertTrue(all(call[2] == x11_hints.SUBSTRUCTURE_REDIRECT_MASK | x11_hints.SUBSTRUCTURE_NOTIFY_MASK
+                            for call in sends))
+        desktop = [call for call in sends if call[4] == "_NET_WM_DESKTOP"]
+        self.assertEqual(desktop[0][5][0], ctypes_long(x11_hints.ALL_DESKTOPS))
+        self.assertEqual(fake.calls[-1], ("flush",))
+
+        # The window type is set once; the state requests repeat on every call.
+        fake.calls.clear()
+        hints.apply(0x400007)
+        self.assertNotIn("delete", [call[0] for call in fake.calls])
+        hints.forget(0x400007)
+        hints.apply(0x400007)
+        self.assertIn("delete", [call[0] for call in fake.calls])
+        hints.close()
+        self.assertEqual(fake.calls[-1], ("close",))
+
+
+def ctypes_long(value: int) -> int:
+    import ctypes
+
+    return ctypes.c_long(value).value
+
+
 class KeychainTests(unittest.TestCase):
     def test_reads_token_from_keychain_json(self) -> None:
         payload = json.dumps({"claudeAiOauth": {"accessToken": " tok "}})
@@ -262,14 +331,67 @@ class InstallerTests(unittest.TestCase):
             ["/py", str(Path("/b") / "ai-agent-status-widget"), "--demo"],
         )
 
+    def test_retired_defaults_are_upgraded_but_user_values_kept(self) -> None:
+        runtime = self.root / ".env"
+        runtime.write_text('AI_STATUS_CARD_WIDTH=344\nAI_STATUS_TITLE="AI Agents Status"\nAI_STATUS_MAX_ROWS=7\n')
+        upgraded = self.installer.upgrade_retired_defaults(runtime, {}, report=self.messages.append)
+        self.assertEqual(sorted(upgraded), ["AI_STATUS_CARD_WIDTH", "AI_STATUS_TITLE"])
+        text = runtime.read_text()
+        self.assertIn("AI_STATUS_CARD_WIDTH=294", text)
+        self.assertIn('AI_STATUS_TITLE="AI Agents Status!"', text)
+        self.assertIn("AI_STATUS_MAX_ROWS=7", text)
+
+        runtime.write_text("AI_STATUS_CARD_WIDTH=500\nAI_STATUS_TITLE=Mine\n")
+        self.assertEqual(self.installer.upgrade_retired_defaults(runtime, {}, report=self.messages.append), [])
+        runtime.write_text("AI_STATUS_CARD_WIDTH=344\n")
+        self.assertEqual(
+            self.installer.upgrade_retired_defaults(runtime, {"AI_STATUS_CARD_WIDTH": "344"},
+                                                    report=self.messages.append), [])
+        self.assertEqual(runtime.read_text(), "AI_STATUS_CARD_WIDTH=344\n")
+
+    def test_card_width_from_the_first_comic_build_is_also_upgraded(self) -> None:
+        runtime = self.root / ".env"
+        runtime.write_text("AI_STATUS_CARD_WIDTH=420\n")
+        self.assertEqual(self.installer.upgrade_retired_defaults(runtime, {}, report=self.messages.append),
+                         ["AI_STATUS_CARD_WIDTH"])
+        self.assertIn("AI_STATUS_CARD_WIDTH=294", runtime.read_text())
+
+    def test_autostart_entries_can_be_turned_off_and_on(self) -> None:
+        home = self.root / "home"
+        bin_dir = home / ".local" / "bin"
+        for system, entry in (("linux", autostart.linux_entry(home)), ("macos", autostart.macos_entry(home))):
+            with self.subTest(system=system):
+                autostart.set_enabled(True, home, bin_dir, self.root, "/py/python", platform=system)
+                self.assertTrue(autostart.is_enabled(home, platform=system))
+                text = entry.read_text()
+                self.assertIn("ai-agent-status-widget", text)
+                self.assertIn("/py/python", text)
+                autostart.set_enabled(False, home, bin_dir, self.root, "/py/python", platform=system)
+                self.assertFalse(entry.exists())
+                self.assertFalse(autostart.is_enabled(home, platform=system))
+                autostart.disable(home, platform=system)  # already off: no error
+
+    def test_installer_honours_autostart_off(self) -> None:
+        home = self.root / "home"
+        autostart.enable(home, home / "bin", self.root, "/py/python", platform="linux")
+        with mock.patch.object(self.installer, "PLATFORM", "macos"):
+            notes = self.installer.install_autostart(home, home / "bin", self.root, "/py/python", enabled=False)
+        self.assertTrue(any("Start at login is off" in note for note in notes))
+        self.assertFalse(autostart.macos_entry(home).exists())
+
+    def test_windows_autostart_command_uses_pythonw_quoted(self) -> None:
+        command = autostart.windows_command(Path("C:/Users/me/bin"), "C:/Py/python.exe")
+        self.assertTrue(command.startswith('"C:/Py/'))
+        self.assertIn('/ai-agent-status-widget"', command)
+
     def test_launch_agent_plist_escapes_arguments(self) -> None:
-        plist = self.installer.launch_agent_plist(["/usr/bin/python3", "/Users/a&b/widget"], Path("/tmp/w.log"))
+        plist = autostart.launch_agent_plist(["/usr/bin/python3", "/Users/a&b/widget"], Path("/tmp/w.log"))
         self.assertIn("<string>/Users/a&amp;b/widget</string>", plist)
         self.assertIn("<key>RunAtLoad</key>", plist)
         self.assertIn("<key>PATH</key>", plist)
 
     def test_launch_agent_path_adds_homebrew_and_keeps_user_path(self) -> None:
-        path = self.installer.launch_agent_path(os.pathsep.join(["/Users/a/.npm/bin", "/usr/bin"]))
+        path = autostart.launch_agent_path(os.pathsep.join(["/Users/a/.npm/bin", "/usr/bin"]))
         entries = path.split(os.pathsep)
         self.assertEqual(entries[:3], ["/opt/homebrew/bin", "/usr/local/bin", "/Users/a/.npm/bin"])
         self.assertEqual(entries.count("/usr/bin"), 1)

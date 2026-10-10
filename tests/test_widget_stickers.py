@@ -117,6 +117,16 @@ class WidgetStickerTests(unittest.TestCase):
             assert overlay.movie is not None and overlay.frame is not None
             assert from_klipy.label == "party-1"
 
+            # Polaroid geometry: its box ends 14 px right of the card and 4 px below its top.
+            overlay.place_for_card(500, 300)
+            box = overlay.polaroid_rect()
+            assert (overlay.x() + box.right(), overlay.y() + box.bottom()) == (514, 304)
+            scale, opacity = module["pop_transform"](0.0)
+            assert abs(scale - 0.6) < 1e-6 and opacity == 0.0
+            assert max(module["pop_transform"](step / 100)[0] for step in range(101)) > 1.0
+            assert module["pop_transform"](1.0) == (1.0, 1.0)
+            assert overlay.sfx in module["stickers"].STICKER_SFX["done"]
+
             widget.note_usage_limits({"providers": {"claude": [
                 {"window": "5h", "used_percent": 93.0, "resets_at": "2030-01-01T00:00:00+00:00"},
             ]}}, trigger=True)
@@ -175,12 +185,24 @@ class WidgetStickerTests(unittest.TestCase):
             # wmctrl must address this widget by window id, never by a title substring
             # that a terminal ("... AI Agents Status ...") could also match.
             calls = []
+            real_run = module["subprocess"].run
+            real_which = module["shutil"].which
             module["shutil"].which = lambda name: "/usr/bin/" + name
             module["subprocess"].run = lambda args, **kwargs: calls.append(args)
             assert widget.apply_wmctrl_hints() is True
             window_id = widget.own_window_id()
             assert window_id and window_id.startswith("0x"), window_id
             assert calls[-1][1:4] == ["-i", "-r", window_id], calls[-1]
+            module["subprocess"].run = real_run
+
+            # Without wmctrl, libX11 gives the window GTK's shape: UTILITY, not transient.
+            assert widget.apply_window_hints() is True
+            assert widget.x11 is not None
+            if real_which("xprop"):
+                props = real_run(["xprop", "-id", window_id, "WM_TRANSIENT_FOR", "_NET_WM_WINDOW_TYPE"],
+                                 capture_output=True, text=True).stdout
+                assert "WM_TRANSIENT_FOR:  not found" in props, props
+                assert "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_UTILITY" in props, props
 
             # Hover: a leave event while the pointer is still on the row must not tuck.
             overlay = widget.sticker_overlay
