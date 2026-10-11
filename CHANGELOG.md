@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-11
+
 ### Added
 
 - Fold the usage limits away with the new `▴`/`▾` header button, Settings → `Usage limits`, the right-click menu or `AI_STATUS_SHOW_LIMITS=false`. The agents' session cards and their GIFs stay; hidden limits are not fetched.
@@ -17,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linux: the Qt widget and session windows stay on top again (and on every workspace, off the taskbar). The widget now gives its X11 windows the same shape as the old GTK widget did, through libX11 directly instead of `wmctrl`: UTILITY window type, not transient for the application's group. It re-asserts "above" every second, because Muffin/Mutter drop it now and then. Before, the state was only re-asserted every 4 s through `wmctrl`, and never when `wmctrl` was missing.
 
 ### Changed
+
+- README rewritten as a user guide: screenshots (`docs/screenshots/`), per-OS install steps, a step-by-step free KLIPY key walkthrough, a settings overview, a configuration table, troubleshooting and manual uninstall notes.
 
 - **Comic redesign.** The widget, session windows, stickers, Settings, the KLIPY guide and menus now use the comic-book look from the design handoff: thick ink outlines, hard offset shadows, halftone header and bars, a tilted LIVE/ALERT/IDLE badge, stroked Bangers titles and agent names, coloured status chips, a yellow `➜` jump button, and logo discs for agents and providers. Stickers are now tilted polaroids with a sound-effect caption ("HMMM…", "CLACK!", "AHEM!") and a comic speech bubble, and they pop in with the handoff's bounce. The fonts (Bangers, Comic Neue, Space Mono; SIL OFL) are bundled for offline use.
 - Dark comic theme by default, plus a light theme: Settings → `Light theme`, or `AI_STATUS_THEME=light`. It switches live. `AI_STATUS_THEME` now accepts only `dark` or `light`.

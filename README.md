@@ -1,262 +1,319 @@
-# ai-cli-status-monitor
+# AI Status Monitor
 
-<img src="assets/lockup.gif" alt="AI Status Monitor lockup" width="100%" />
+<img src="assets/lockup.gif" alt="AI Status Monitor" width="100%" />
 
-A mini floating widget for **Linux, macOS and Windows** that shows the last known status of the Claude Code CLI and the Codex CLI.
+**A tiny comic-book widget that tells you what Claude Code and Codex are doing — and pings you when they need you.**
 
-It is a lightweight local tool: Python 3 and Qt (PySide6). No Electron, no web server and no Docker. Network access is limited to the documented update check and Claude Code usage lookup.
+Run several AI agents in different terminals, switch to your browser, and stop wondering whether one of them is quietly waiting for your approval. AI Status Monitor floats on top of your desktop, shows one card per agent session, plays a sound when an agent waits for you or finishes, and jumps straight to the right terminal with one click.
 
-## 1. What it is
+Works on **Linux, macOS and Windows**. Python 3 + Qt — no Electron, no web server, no background daemon.
 
-`ai-cli-status-monitor` hooks into the Claude Code and Codex CLIs, writes statuses to `~/.cache/ai-cli-status-monitor/`, and a small Qt widget reads the freshest entries and shows one or two lines of status.
+<p align="center">
+  <img src="docs/screenshots/hero.png" alt="Session windows (dark), classic list with an alert, and the light theme" width="100%" />
+</p>
 
-Example:
+---
 
-```text
-Claude: reading code [unitbox-front] 14:22
-Codex: running command [ai-cli-status-monitor] 14:23
-```
+## Contents
 
-## 2. Appearance
+- [Features](#features)
+- [Installation](#installation)
+  - [Linux](#linux)
+  - [macOS](#macos)
+  - [Windows](#windows)
+  - [After installing](#after-installing)
+- [Using the widget](#using-the-widget)
+- [Settings](#settings)
+- [GIF stickers and a free KLIPY key](#gif-stickers-and-a-free-klipy-key)
+- [Usage limits](#usage-limits)
+- [Updates](#updates)
+- [Configuration reference (`.env`)](#configuration-reference-env)
+- [Command-line tools](#command-line-tools)
+- [Troubleshooting](#troubleshooting)
+- [Uninstalling](#uninstalling)
+- [How it works](#how-it-works)
+- [Limitations](#limitations)
 
-The widget has a **comic-book** look: thick ink outlines, hard offset shadows, halftone dots and Bangers / Comic Neue / Space Mono type (bundled, SIL Open Font License). **Dark** is the default; a **light** theme is one switch away in Settings (`Light theme`, or `AI_STATUS_THEME=light`). The cards are drawn at 70 % of the design's size (294 px wide by default), while the GIF stickers keep their full size.
+---
 
-- **Main card**: a halftone header with a slowly sweeping radar mark, `AI Agents Status!`, a tilted state badge (`● LIVE` / `▲ N ALERT!` / `● IDLE`), a `▴`/`▾` button that folds the usage limits away (the agents' cards and their GIFs stay), a `⚙` settings button and a red `X`. Below it are the usage limits: one inked block per provider (Anthropic, OpenAI) with its logo on a coloured disc and halftone quota bars. Bars are green below 75 %, orange from 75 % and red from 90 %. Click a provider disc to refresh its usage.
-- **Session windows** (default): every active session (run) gets its own draggable card, docked in a column under the widget. A card shows:
-  - a yellow `➜` button that jumps to that terminal;
-  - the agent's logo disc and its stroked name;
-  - a status chip: yellow while analyzing/reading, green while coding, red when it waits for you or hit an error;
-  - the `project · time` line.
+## Features
 
-  A card waiting for you pulses its outline red. A dragged card stays where you drop it (remembered per session; right-click → `Dock under the widget` brings it back). Turn session windows off in Settings for the classic list below.
-- **Classic list**: the same rows inside the main card (up to 5), with a `+N finished, hidden automatically` footer. When nothing runs, and for ~3 s at startup, the "AI Status Monitor!" lockup shows instead.
-- **GIF stickers**: a tilted polaroid with a reaction GIF, a sound-effect caption (`HMMM…`, `CLACK!`, `AHEM!`) and a speech bubble pops out of each card's top-right corner (see [GIF stickers](#7d-gif-stickers)).
-- When a newer version is published on GitHub, a yellow `UPDATE ↑` button appears in the header (see [Updates](#7b-updates)).
-- **Settings window** (`⚙`, or right-click → `Settings…`): shown agents, notification sound, visible rows, session windows, light theme, usage limits on/off, **Start at login** (adds or removes the login entry; the installer respects your choice), stickers and timing. Changes apply instantly and are saved to the runtime `.env`.
-- Right-click menu: `Settings…`, `Show agents` (Claude Code + Codex / Claude Code only / Codex only), `Serious mode (no stickers)`, `Dock all session windows`, `Reload`, `Open logs folder`, `Check for updates` / `Update to …`, `Quit`.
+- 🟢 **Live status per session**: `thinking`, `reading code`, `coding`, `running command`, `waiting for approval`, `done`, `error`. Each Claude Code / Codex run gets its own card.
+- 🔔 **Notifications that matter**: a sound and a pulsing red outline when an agent waits for you, and a sound when it finishes.
+- ➜ **Jump to the terminal**: the yellow arrow on a card raises the terminal window where that agent runs.
+- 📊 **Usage limits at a glance**: Claude `5h` / `Weekly` / `Fable` and Codex `Weekly` bars. They turn orange at 75 % and red at 90 %, and fold away with one click.
+- 🎞️ **Reaction GIF stickers** (optional, for fun): polaroids with speech bubbles from a local pool or from KLIPY with a free key. **Serious mode** turns them off for meetings.
+- 🌗 **Dark and light comic themes**, always on top, visible on every workspace, never in the taskbar.
+- 🔄 **Self-updating** from GitHub, with an `UPDATE ↑` button in the header.
+- 🪶 **Lightweight and local**: the hooks write small JSON files, and the widget reads them once per second. No account, no telemetry.
 
-By default the widget is always-on-top, sticky across workspaces, and hidden from the taskbar.
+| Session windows (default) | Usage limits folded away | Classic list |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/dark-sessions.png" alt="Session windows" width="260" /> | <img src="docs/screenshots/dark-nolimits.png" alt="Limits folded" width="250" /> | <img src="docs/screenshots/dark-classic.png" alt="Classic list with an alert" width="260" /> |
 
-## 3. Installation
+---
 
-Quick install (clones into `~/.local/share/ai-cli-status-monitor/src` and runs the installer):
+## Installation
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/install.sh | bash
-```
+You need **Python 3.9+** and at least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or the [Codex CLI](https://github.com/openai/codex). The installer does all of this for you:
 
-Or from a local clone (lets you edit `.env` first):
+- copies the scripts;
+- wires up the hooks for both CLIs, backing up your config first;
+- installs the Qt UI library (PySide6) into a private folder;
+- adds the widget to autostart;
+- starts the widget.
 
-```bash
-git clone https://github.com/dmitrykostenkoweb/ai-status-monitor.git
-cd ai-status-monitor
-cp .env.default .env
-# optional: edit your local .env
-./install.sh
-```
+It never uses `sudo` and is safe to re-run.
 
-The installer itself is `install.py` (Python 3.9+, cross-platform); `install.sh` only adds the `curl | bash` bootstrap on Linux and macOS.
+### Linux
 
-### Requirements
-
-- Python 3.9+ (the hook and helpers use only the standard library).
-- The widget UI uses **PySide6** (Qt). If the Python running the installer cannot import it, the installer creates a private venv in the data directory (`<data dir>/venv`) and installs `PySide6-Essentials` there. This is a one-time download of about 100 MB. Set `AI_STATUS_WIDGET_PYTHON=/path/to/python` to use your own interpreter, or `AI_STATUS_SKIP_PIP=1` to skip the download (hooks and status files work without Qt).
-- Linux: `wmctrl` (the `→` window switch, and a fallback for always-on-top) and `libxcb-cursor0` (needed by Qt 6.5+ on X11). On Debian/Ubuntu/Mint, `python3-venv` lets the installer create the venv: `sudo apt install python3-venv libxcb-cursor0 wmctrl`.
-
-### macOS and Windows
-
-macOS uses the same commands and directories as Linux (`~/.local/bin`, `~/.cache`, `~/.config`, `~/.local/share`). Autostart is a LaunchAgent (`~/Library/LaunchAgents/com.github.ai-cli-status-monitor.widget.plist`), and Claude usage limits are read from the login Keychain (`Claude Code-credentials`).
-
-Windows (PowerShell; needs [Python 3.9+](https://www.python.org/downloads/) and, without a checkout, Git):
-
-```powershell
-irm https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/install.ps1 | iex
-# or, from a clone:
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
-
-On Windows the scripts go to `%LOCALAPPDATA%\ai-cli-status-monitor\bin` (with `.cmd` wrappers such as `ai-agent-status-doctor.cmd`). The cache and data directories are under `%LOCALAPPDATA%\ai-cli-status-monitor`, and the runtime `.env` is in `%APPDATA%\ai-cli-status-monitor`. Autostart uses the `HKCU\…\Run` registry key. The hooks are written as `"<python.exe>" "<bin>/ai-agent-status-hook" --agent claude|codex`.
-
-The installer is idempotent, so re-running it (or `ai-agent-status-update`) safely refreshes an existing install and restarts the widget.
-
-The installer tries to configure the hooks automatically:
-
-- Claude Code: `~/.claude/settings.json`
-- Codex CLI: `~/.codex/hooks.json`
-- autostart: `~/.config/autostart/ai-cli-status-widget.desktop` (Linux), a LaunchAgent (macOS), the `HKCU` Run key (Windows)
-- launcher in the Cinnamon menu (Linux): `AI CLI Status Widget`
-- launcher icon: `~/.local/share/pixmaps/ai-cli-status-widget.png`
-- notification sound: `~/.local/share/ai-cli-status-monitor/notification.mp3`
-- OpenAI/Codex logo: `~/.local/share/ai-cli-status-monitor/openai-logo.svg`
-- Anthropic/Claude logo: `~/.local/share/ai-cli-status-monitor/anthropic-logo.png`
-- runtime configuration: `~/.config/ai-cli-status-monitor/.env`
-- window position and legacy-config compatibility: `~/.config/ai-cli-status-monitor/widget.json`
-
-The installer never runs `sudo`. If something is missing on Linux, it prints the command:
+**1. Install the system packages** (Debian / Ubuntu / Mint; use your distro's equivalents elsewhere):
 
 ```bash
 sudo apt install python3-venv libxcb-cursor0 wmctrl
 ```
 
-## 4. Running the widget
+| Package | Why |
+|---|---|
+| `python3-venv` | lets the installer create a private Python environment for Qt |
+| `libxcb-cursor0` | required by Qt 6.5+ on X11 / XWayland |
+| `wmctrl` | the `➜` jump-to-terminal button (and a fallback for always-on-top) |
+
+**2. Run the installer:**
 
 ```bash
-~/.local/bin/ai-agent-status-widget
+curl -fsSL https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/install.sh | bash
 ```
 
-Appearance demo:
+The widget appears right away, and you can drag it anywhere by its header. It also gets a launcher called **AI CLI Status Widget** in your applications menu.
+
+### macOS
+
+Open **Terminal** and run:
 
 ```bash
-~/.local/bin/ai-agent-status-widget --demo
+curl -fsSL https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/install.sh | bash
 ```
 
-## 5. Start / stop
+That is all. macOS uses the same folders as Linux (`~/.local/bin`, `~/.cache`, `~/.config`, `~/.local/share`).
+
+The first time you press `➜`, macOS may ask to allow **Accessibility** access for your terminal or Python. The window switch needs it.
+
+### Windows
+
+1. Install [Python 3.9+](https://www.python.org/downloads/). Tick **"Add python.exe to PATH"** in the installer.
+2. Install [Git](https://git-scm.com/download/win). The one-line installer uses it to download the project.
+3. Open **PowerShell** and run:
+
+```powershell
+irm https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/install.ps1 | iex
+```
+
+The widget starts without a console window (`pythonw.exe`). The tools go to `%LOCALAPPDATA%\ai-cli-status-monitor\bin`, each with a `.cmd` wrapper such as `ai-agent-status-doctor.cmd`.
+
+### After installing
+
+1. **Restart your Claude Code / Codex sessions** so they pick up the new hooks.
+2. **Codex only:** type `/hooks` inside Codex and approve (trust) the new hooks.
+3. **Check that everything is green:**
+
+   ```bash
+   ~/.local/bin/ai-agent-status-doctor
+   ```
+
+   On Windows, run `%LOCALAPPDATA%\ai-cli-status-monitor\bin\ai-agent-status-doctor.cmd`.
+
+4. Send any prompt to Claude or Codex. A card should appear within a second.
+
+Just want to see it first? `~/.local/bin/ai-agent-status-widget --demo` shows rotating fake statuses, and no hooks are needed.
+
+<details>
+<summary><b>Install from a git clone</b> (to edit <code>.env</code> before installing, or to hack on it)</summary>
 
 ```bash
-~/.local/bin/ai-agent-status-widget-start
-~/.local/bin/ai-agent-status-widget-stop
+git clone https://github.com/dmitrykostenkoweb/ai-status-monitor.git
+cd ai-status-monitor
+cp .env.default .env      # optional: edit your local .env
+./install.sh              # Linux / macOS
+python install.py         # any OS
+# Windows from a clone: powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-After installation you can also launch it from the Cinnamon menu entry `AI CLI Status Widget`; right-click it to add it to the panel or the desktop.
+The real installer is `install.py` (cross-platform). `install.sh` and `install.ps1` only add the one-line bootstrap, which clones into `~/.local/share/ai-cli-status-monitor/src`.
 
-## 6. Doctor
+</details>
 
-```bash
-~/.local/bin/ai-agent-status-doctor
-```
+<details>
+<summary><b>What the installer changes</b></summary>
 
-It checks:
+**Hooks.** They are merged into your existing config. The file is backed up first as `*.bak.<timestamp>`, and hooks that are already present are skipped.
 
-- scripts in `~/.local/bin`
-- the cache dir
-- the autostart desktop file
-- Claude hooks
-- Codex hooks
-- `wmctrl` and `libxcb-cursor0` (Linux)
-- that the widget's interpreter can import PySide6
-- the hook's test mode
-- the installed version and whether an update is available
+- **Claude Code:** `~/.claude/settings.json`. Events: `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `StopFailure`.
+- **Codex CLI:** `~/.codex/hooks.json`. Events: `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `SubagentStop`, `Stop`.
+- **Manual examples:** [`examples/claude-settings-snippet.json`](examples/claude-settings-snippet.json) and [`examples/codex-hooks.json`](examples/codex-hooks.json).
+- **Hook command:** `~/.local/bin/ai-agent-status-hook --agent claude|codex` on Linux/macOS, and `"<python.exe>" "<bin>/ai-agent-status-hook" --agent claude|codex` on Windows.
 
-## 7. Autostart
+**Qt (PySide6).** If the installing Python cannot import PySide6, the installer creates `<data dir>/venv` and installs `PySide6-Essentials` there. This is a one-time download of about 100 MB.
 
-The installer creates:
+- `AI_STATUS_WIDGET_PYTHON=/path/to/python` uses your own interpreter instead.
+- `AI_STATUS_SKIP_PIP=1` skips the download. Hooks and status files still work without Qt.
 
-```text
-~/.config/autostart/ai-cli-status-widget.desktop
-```
+**Autostart.**
 
-The widget should start automatically after you log in. On macOS the installer adds a LaunchAgent (`~/Library/LaunchAgents/com.github.ai-cli-status-monitor.widget.plist`). On Windows it adds the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ai-cli-status-monitor` registry value, which starts the widget with `pythonw.exe`, so no console window appears.
+- Linux: `~/.config/autostart/ai-cli-status-widget.desktop`
+- macOS: `~/Library/LaunchAgents/com.github.ai-cli-status-monitor.widget.plist`
+- Windows: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ai-cli-status-monitor`
 
-## 7a. `.env` configuration
+If you turned **Start at login** off in Settings, re-installing keeps it off.
 
-Public defaults live in `.env.default`. Your local `.env` is ignored by Git. On the first install a private `~/.config/ai-cli-status-monitor/.env` is created with `0600` permissions; subsequent installs do not overwrite it.
+**Files.** Paths are for Linux/macOS. On Windows, cache, data and bin live under `%LOCALAPPDATA%\ai-cli-status-monitor`, and config lives under `%APPDATA%\ai-cli-status-monitor`.
 
-Most of these can also be changed from the widget's **Settings** window (`⚙` in the header), which rewrites only the changed keys in the runtime `.env`. Title, card width and directories still need a manual edit and a widget restart.
+| Path | What |
+|---|---|
+| `~/.local/bin/ai-agent-status-*` | the hook, the widget and the helper tools |
+| `~/.config/ai-cli-status-monitor/.env` | your settings (mode `0600`, never overwritten on reinstall) |
+| `~/.config/ai-cli-status-monitor/widget.json` | widget position (+ legacy settings) |
+| `~/.config/ai-cli-status-monitor/session_windows.json` | positions of session cards you dragged away |
+| `~/.cache/ai-cli-status-monitor/` | statuses, logs (`widget.log`), usage cache |
+| `~/.local/share/ai-cli-status-monitor/` | Qt venv, fonts, sound, logos, local GIFs, version, source clone |
+| `~/.local/share/applications/ai-cli-status-widget.desktop` | Linux app-menu launcher (icon in `~/.local/share/pixmaps/`) |
 
-Available variables:
+</details>
 
-- `AI_STATUS_CACHE_DIR`, `AI_STATUS_CONFIG_DIR`, `AI_STATUS_DATA_DIR` — data directories
-- `AI_STATUS_TITLE` (default `AI Agents Status!`), `AI_STATUS_CARD_WIDTH` (default `294`), `AI_STATUS_MAX_ROWS` — widget appearance. Re-installing upgrades the previous defaults (`344` / `420`, `AI Agents Status`) to the new ones; values you changed are kept.
-- `AI_STATUS_SOUND_ENABLED` — `true`/`false`, `yes`/`no`, `on`/`off` or `1`/`0`
-- `AI_STATUS_STALE_AFTER_SECONDS`, `AI_STATUS_HIDE_DONE_AFTER_SECONDS`, `AI_STATUS_IDLE_AFTER_SECONDS`, `AI_STATUS_HIDE_STALE_AFTER_SECONDS` — timeouts
-- `AI_STATUS_THEME` — `dark` (default) or `light` comic theme
-- `AI_STATUS_SHOW_LIMITS` — `true` (default) shows the usage-limit bars; `false` folds them away and skips usage requests
-- `AI_STATUS_AUTOSTART` — `true` (default) starts the widget at login; `false` removes the login entry, and re-installing keeps it off
-- `AI_STATUS_AGENTS` — which agents the widget shows: `claude,codex` (default, also `all`), `claude` or `codex`. Hidden agents get no rows, no usage bars, no sounds and no usage requests. The right-click `Show agents` menu changes it live and saves the choice to the runtime `.env` (a value exported in the process still wins on the next start)
-- `AI_STATUS_SESSION_WINDOWS` — `true` (default): each session in its own draggable window; `false`: the classic list inside the widget
-- `AI_STATUS_STICKER_ROTATE_SECONDS` — how often a working session window swaps to a new GIF (default `120`, `0` = never)
-- `AI_STATUS_SERIOUS_MODE` — `true` turns GIF stickers off (see [GIF stickers](#7d-gif-stickers))
-- `AI_STATUS_KLIPY_API_KEY` — optional KLIPY API key for random sticker GIFs; empty = local GIFs only
-- `AI_STATUS_ENV_FILE` — path to a different runtime file; this variable must be exported in the process, it is not read from `.env`
+---
 
-Example of a local override:
+## Using the widget
 
-```dotenv
-AI_STATUS_TITLE="Agent status"
-AI_STATUS_MAX_ROWS=8
-AI_STATUS_SOUND_ENABLED=false
-```
+### The main card
 
-Value precedence: a variable exported in the process → runtime `.env` → legacy value from `widget.json` → built-in value. `widget.json` still stores the window position (`x`/`y`); on the first install, existing widget settings are migrated into the runtime `.env`.
+<img src="docs/screenshots/dark-sessions.png" alt="Main card with session windows" width="300" align="right" />
 
-`.env` prevents accidental commits but does not encrypt secrets. If a credential ends up in Git or on GitHub, you must revoke and rotate it.
+- **Header**:
+  - the title `AI Agents Status!` and a state badge: `● LIVE` while agents work, `▲ N ALERT!` when someone waits for you, `● IDLE` when all is quiet;
+  - `▴` / `▾` folds the usage limits away (the agent cards and their GIFs stay);
+  - `⚙` opens Settings;
+  - the red `X` quits.
+- **Usage limits**: one block per provider. Click the Anthropic or OpenAI disc to refresh it now.
+- **Session cards**: every running session gets its own card, docked in a column under the widget. Each card shows:
+  - a yellow `➜` that jumps to the terminal;
+  - the agent and a coloured status chip: yellow while thinking or reading, green while coding, red while waiting or on an error;
+  - the project folder and the time of the last event.
+- **Move things around**: drag the widget by its header. Drag a session card away and it stays where you drop it. Right-click it → `Dock under the widget` brings it back.
+- **Right-click menu**: `Settings…`, `Show agents`, `Serious mode (no stickers)`, `Dock all session windows`, `Reload`, `Open logs folder`, `Check for updates`, `Quit`.
 
-Behavior:
+Prefer everything in one box? Turn **Session windows** off in Settings for the **classic list**. It shows up to 5 rows inside the main card, with a `+N finished, hidden automatically` footer, and the AI Status Monitor logo while nothing runs.
 
-- a fresh status is shown normally
-- after `stale_after_seconds` the line is dimmed and shows `no new events`
-- after `idle_after_seconds` the line transitions to `idle`
-- after `hide_stale_after_seconds` the old status is hidden
-- `done` disappears after `hide_done_after_seconds`, by default after 3 minutes
-- a `waiting` state turns on the red color, the red border/pulse and the sound, if `sound_enabled` is `true`
+<br clear="right" />
 
-## 7b. Updates
+### What happens over time
 
-The widget knows its own version (see `VERSION`) and can update itself from GitHub.
+| When | What you see |
+|---|---|
+| an event arrives | the card updates within a second |
+| the agent needs you (approval, a question) | red chip, pulsing red outline, `ALERT!` badge, notification sound |
+| the agent finishes | `done` + sound; the card disappears after 3 minutes |
+| no events for 3 min | the row dims and shows `no new events` |
+| no events for 10 min | `idle` |
+| no events for 15 min | the row is hidden |
 
-```bash
-# update now (pull latest source, reinstall, restart the widget)
-~/.local/bin/ai-agent-status-update
+All four times can be changed in **Settings → Timing**.
 
-# just check without changing anything
-~/.local/bin/ai-agent-status-update --check
+---
 
-# print the installed version
-~/.local/bin/ai-agent-status-widget --version
-```
+## Settings
 
-A few seconds after startup the widget makes a single, best-effort request to GitHub for the latest published `VERSION`. If it is newer, an `update ↑` pill appears in the header and an `Update to …` entry is added to the right-click menu — clicking either runs `ai-agent-status-update` for you. If you are offline the check silently does nothing.
+Open Settings with **`⚙`** in the header, or right-click → **`Settings…`**. Every change applies instantly and is saved to your `.env`.
 
-`ai-agent-status-update` pulls the source clone recorded at install time (`~/.local/share/ai-cli-status-monitor/install_source`), or clones a fresh copy into `~/.local/share/ai-cli-status-monitor/src` if none is found, then re-runs `install.py` (which restarts the widget).
+| Dark | Light |
+|:---:|:---:|
+| <img src="docs/screenshots/dark-settings.png" alt="Settings, dark theme" width="380" /> | <img src="docs/screenshots/light-settings.png" alt="Settings, light theme" width="380" /> |
 
-The repository is configurable for forks/mirrors via `AI_STATUS_UPDATE_REPO` (`owner/repo`) and `AI_STATUS_UPDATE_BRANCH`.
+- **Agents**: show Claude Code, Codex, or both. Hidden agents get no rows, sounds or usage requests.
+- **Display**:
+  - notification sound;
+  - visible rows;
+  - session windows on/off;
+  - **light theme**;
+  - **usage limits** on/off;
+  - **Start at login**: turn it off and the widget no longer starts with your computer.
+- **Stickers**:
+  - **Serious mode** (no GIFs at all);
+  - the **KLIPY API key** with a **Get a free key…** guide;
+  - how often a working session gets a new GIF;
+  - **Show test sticker**.
+- **Timing**: when rows turn grey, when finished rows disappear, and when silent sessions go idle or get hidden.
 
-## 7c. Usage limits
+---
 
-The widget refreshes both account limits automatically every two minutes. Click the Claude or Codex logo to refresh only that provider; the active logo spins until its refresh finishes. The controls remain temporarily disabled while a refresh is already running.
+## GIF stickers and a free KLIPY key
 
-Claude's `5h`, `Weekly` and `Fable` bars are stacked beside the Claude logo (the `Fable` bar appears only when the account has a separate weekly Fable allowance); Codex's `Weekly` bar sits beside the Codex logo. Progress fill is green below 60% utilization, orange from 60% through 84%, and red from 85% upward. The unused track remains neutral.
-
-- Claude Code: 5-hour and weekly utilization from Claude Code's authenticated usage endpoint
-- Codex: weekly utilization queried through the authenticated installed Codex CLI app-server; recent local `rate_limits` events under `~/.codex/sessions/` remain a compatibility fallback
-- cache: normalized, non-secret values in `~/.cache/ai-cli-status-monitor/usage_limits.json`
-
-The Claude request reuses the OAuth access token already stored by Claude Code in `~/.claude/.credentials.json`. The monitor reads it only in memory for the request; it does not copy the token into its cache or logs. Codex authentication remains owned by the installed CLI: the monitor neither reads nor copies its OAuth credential. API-key billing quotas are not supported.
-
-Provider failures are independent. When a refresh fails, an unexpired last-known value remains visible as `stale`; after its reset time passes it becomes `Unavailable`. The status widget and local Codex usage continue to work offline even if Claude usage cannot refresh.
-
-## 7d. GIF stickers
-
-**With session windows (default)** every session window carries its own sticker, sticking out of its top-right corner. It stays up while the session works or waits, gets a new GIF only when the sticker status changes (e.g. `coding` → `waiting`), and tucks away when the session is `done` or `idle`.
-
-**With the classic list**, a single sticker pops out of the widget's top-right corner when an agent's status changes, stays for 4 seconds and tucks away. `waiting` and `error` stickers stay until the status changes, because they need your attention. Hovering an agent row brings its last sticker back. The sticker lives in its own click-through window, so the widget never moves and clicks still reach the buttons underneath. It needs a compositing desktop (Cinnamon, GNOME, KDE, macOS and Windows have one by default).
+While an agent works, its card wears a tilted polaroid with a reaction GIF, a sound-effect caption (`HMMM…`, `CLACK!`, `AHEM!`) and a speech bubble. The sticker changes when the status changes:
 
 | Sticker | Shown for |
 |---|---|
 | `analyzing` | thinking, reading, analyzing |
 | `coding` | editing files, running commands |
-| `waiting` | waiting for approval / your answer |
+| `waiting` | waiting for approval / your answer (stays until you react) |
 | `done` | finished |
-| `error` | API or tool error |
-| `limit` | a usage bar reaches 90% (once per limit window) |
+| `error` | API or tool error (stays until the status changes) |
+| `limit` | a usage bar reaches 90 % (once per limit window) |
 | `idle` | a silent session turns idle |
 
-**Getting a free KLIPY key (≈2 minutes):** open **⚙ Settings → Stickers → Get a free key…** (or right-click the widget → `Get GIFs from KLIPY (free key)…`, shown while no key is set). The guide walks you through it:
+Out of the box the widget uses a small local GIF pool. For a fresh random GIF every time, add a **free KLIPY key**.
 
-1. **Open the KLIPY Partner Panel** (<https://partner.klipy.com>) and sign up.
-2. **Add your platform** — the guide has `Copy` buttons for the platform name (`AI Status Monitor`), website (this repository) and a ready-made description of the integration. Read and accept the KLIPY API Terms.
-3. **Create an API key** — key name `AI-Status-Monitor-Linux`, URL = this repository, leave **"Enable the Ads API" OFF**.
-4. **Paste the key and press `Test & save`** — the widget runs one test search and tells you whether the key works, was rejected, hit its hourly limit, or KLIPY could not be reached. Only a working key is saved.
+### Get a free KLIPY key (about 2 minutes)
 
-Free test keys allow 100 requests per hour; the widget stays under 60.
+The widget has a built-in step-by-step guide with **Copy** buttons for every value. Open it from **⚙ Settings → Stickers → `Get a free key…`**. While no key is set, it is also in the right-click menu → `Get GIFs from KLIPY (free key)…`.
 
-**Where the GIFs come from:**
+<p align="center">
+  <img src="docs/screenshots/dark-guide.png" alt="The built-in KLIPY key guide" width="460" />
+</p>
 
-1. **KLIPY (optional)** — paste a KLIPY API key (free test keys at <https://partner.klipy.com>) into **Settings → Stickers**. On each status change the widget searches KLIPY for a phrase that fits the status (e.g. `thinking`, `typing fast`, `victory dance`) and shows a random GIF. Following KLIPY's [integration requirements](https://docs.klipy.com/integration-requirements), each GIF is loaded directly from KLIPY's URL into memory and is **never stored on disk**; only the search result list (URLs) is reused for an hour to spare the API. Requests run in the background; offline or on any error the widget silently falls back to the local pool. Stickers showing a KLIPY GIF carry a small `KLIPY` mark ("Powered by KLIPY").
-2. **Local pool** — any `.gif`, `.webp`, `.png` or `.jpg` in `~/.local/share/ai-cli-status-monitor/gifs/<sticker>/`, e.g. `gifs/waiting/skeleton.gif`. The installer seeds `gifs/analyzing/` and never overwrites your files.
-3. **Placeholder** — with neither, the sticker shows stripes in the status colour.
+1. **Sign up.** Click **Open the KLIPY Partner Panel** (<https://partner.klipy.com>) and create a free account.
+2. **Add your platform.** In the Partner Panel, add a new platform with:
 
-**Variety:** the widget remembers the last 200 GIFs shown (across all stickers and windows) and never re-picks them, deals search phrases and bubble lines like a shuffled deck (each one once before any repeats), and asks KLIPY for 50 results on a random page 1–3 — so each phrase can yield ~150 GIFs. Every sticker has 14–22 bubble lines and 12–15 search phrases. While an agent keeps working, its session window swaps to a new GIF every 2 minutes (**Settings → Stickers → New GIF every**, `0` = never), and right-click on a session window → `Show another GIF` swaps it right away. New searches are capped at 60 per hour (the free KLIPY test key allows 100/hour); past that the widget picks from results it already has. A ready-made **Polish** set lives in [`examples/stickers.pl.json`](examples/stickers.pl.json) — copy it to `~/.config/ai-cli-status-monitor/stickers.json` and restart the widget. Bubble texts and KLIPY search phrases can be overridden per sticker in that file:
+   | Field | Value |
+   |---|---|
+   | Platform name | `AI Status Monitor` |
+   | Platform website | `https://github.com/dmitrykostenkoweb/ai-status-monitor` |
+   | About / integration | use the ready-made description from the guide's **Copy** button |
+
+   Read the **KLIPY API Terms**, tick the checkbox, and press **Add Platform**.
+3. **Create an API key.**
+
+   | Field | Value |
+   |---|---|
+   | Key name | `AI-Status-Monitor-Linux` (any name works) |
+   | URL | `https://github.com/dmitrykostenkoweb/ai-status-monitor` |
+   | Enable the Ads API | **leave it OFF** |
+
+   Press **Create** and copy the key.
+4. **Paste and test.** Paste the key into the guide's last field and press **`Test & save`**. The widget runs one test search and tells you one of four things:
+   - ✓ the key works;
+   - ✗ KLIPY rejected it;
+   - the key hit its hourly limit;
+   - KLIPY could not be reached.
+
+   Only a working key is saved.
+
+You can also put the key in your `.env` by hand: `AI_STATUS_KLIPY_API_KEY=your-key`.
+
+> **Privacy and limits.** The key is stored only in your runtime `.env` (mode `0600`) and is never written to logs. Free test keys allow 100 requests per hour. The widget makes at most 60 new searches per hour and reuses results it already has after that. Following KLIPY's [integration requirements](https://docs.klipy.com/integration-requirements), GIFs are loaded straight from KLIPY into memory and are **never saved to disk**. Stickers showing a KLIPY GIF carry a small `KLIPY` mark.
+
+<details>
+<summary><b>More about stickers</b>: your own GIFs, variety, custom texts, Polish set</summary>
+
+**Where GIFs come from**, in order:
+
+1. **KLIPY**, when a key is set. Each status change triggers a search for a fitting phrase (`thinking`, `typing fast`, `victory dance`, …) and shows one random result. Only the result list (URLs) is reused for an hour. Offline, or on any error, the widget silently falls back to the local pool.
+2. **Your local pool.** Any `.gif`, `.webp`, `.png` or `.jpg` in `~/.local/share/ai-cli-status-monitor/gifs/<sticker>/`, e.g. `gifs/waiting/skeleton.gif`. The installer seeds `gifs/analyzing/` and never overwrites your files.
+3. **A striped placeholder** in the status colour.
+
+**Variety.** The widget never repeats any of the last 200 GIFs. Phrases and bubble lines are dealt like a shuffled deck. Each KLIPY search asks for 50 results on a random page 1–3. A working session gets a new GIF every 2 minutes (**Settings → Stickers → New GIF every**, `0` = never). Right-click a session card → `Show another GIF` swaps it immediately.
+
+**Classic list.** One sticker pops out of the main card on each status change and tucks away after 4 seconds. `waiting` and `error` stay until the status changes. Hovering a row shows its last sticker again. Stickers need a compositing desktop; Cinnamon, GNOME, KDE, macOS and Windows have one by default.
+
+**Custom texts.** Override bubble lines and KLIPY search phrases per sticker in `~/.config/ai-cli-status-monitor/stickers.json`. A ready-made **Polish** set is in [`examples/stickers.pl.json`](examples/stickers.pl.json): copy it there and restart the widget.
 
 ```json
 {
@@ -265,134 +322,247 @@ Free test keys allow 100 requests per hour; the widget stays under 60.
 }
 ```
 
-**Serious mode** (Settings, right-click menu or `AI_STATUS_SERIOUS_MODE=true`) turns stickers off completely — no stickers and no KLIPY requests. To preview every sticker: **Settings → Show test sticker**, or `bin/ai-agent-status-widget --sticker all` (or `--sticker waiting`, …).
+**Preview.** **Settings → Show test sticker**, or `~/.local/bin/ai-agent-status-widget --sticker all` (or `--sticker waiting`, …).
 
-The KLIPY key is stored in the runtime `.env` (mode `0600`) and is never written to logs.
+**Serious mode** (Settings, right-click menu, or `AI_STATUS_SERIOUS_MODE=true`) turns stickers off completely, and with them all KLIPY requests.
 
-## 8. Claude Code hooks
+</details>
 
-The installer tries to safely merge the hooks into:
+---
 
-```text
-~/.claude/settings.json
+## Usage limits
+
+The main card shows how much of your plan you have used. It refreshes every two minutes; click a provider's disc to refresh just that one.
+
+| Provider | Bars | Source |
+|---|---|---|
+| Claude Code | `5h`, `Weekly`, and `Fable` (only if your account has a separate Fable allowance) | Claude Code's authenticated usage endpoint |
+| Codex | `Weekly` | the installed Codex CLI (app-server); recent local `rate_limits` events in `~/.codex/sessions/` as a fallback |
+
+Bars are **green** below 75 %, **orange** from 75 % and **red** from 90 %. Don't need them? Press `▴` in the header or turn off **Settings → Usage limits**. Hidden limits are not fetched at all.
+
+- **Your credentials stay where they are.**
+  - Claude: the widget reuses the OAuth token Claude Code already stores. It reads `~/.claude/.credentials.json`, or the `Claude Code-credentials` login Keychain item on macOS. The token is used only in memory for the request and is never copied to cache or logs.
+  - Codex: authentication stays inside the Codex CLI.
+- **Cache:** only normalized, non-secret numbers go to `~/.cache/ai-cli-status-monitor/usage_limits.json`.
+- **Failures:** each provider fails independently. A last-known value shows as `stale` until its reset time, then as `Unavailable`.
+- **Not supported:** API-key billing quotas.
+
+---
+
+## Updates
+
+A few seconds after it starts, the widget asks GitHub once for the latest version. If a newer one exists, a yellow **`UPDATE ↑`** button appears in the header and the right-click menu gets **`Update to …`**. Click either to update and restart. Offline, the check silently does nothing.
+
+From the terminal:
+
+```bash
+~/.local/bin/ai-agent-status-update            # update now (pull, reinstall, restart)
+~/.local/bin/ai-agent-status-update --check    # only check
+~/.local/bin/ai-agent-status-widget --version  # installed version
 ```
 
-If the file exists, it makes a backup:
+The updater pulls the source clone recorded at install time (`~/.local/share/ai-cli-status-monitor/install_source`). If that clone is missing, it clones into `~/.local/share/ai-cli-status-monitor/src`. Then it re-runs the installer. Forks and mirrors can set `AI_STATUS_UPDATE_REPO` (`owner/repo`) and `AI_STATUS_UPDATE_BRANCH`.
 
-```text
-~/.claude/settings.json.bak.<timestamp>
-```
+---
 
-Added events:
+## Configuration reference (`.env`)
 
-- `UserPromptSubmit`
-- `PreToolUse`
-- `PostToolUse`
-- `Notification`
-- `Stop`
-- `StopFailure`
+Most options are in **Settings**. Everything else lives in `~/.config/ai-cli-status-monitor/.env`; on Windows it is `%APPDATA%\ai-cli-status-monitor\.env`. The file is created on the first install with mode `0600`, and later installs never overwrite it. Public defaults are in [`.env.default`](.env.default).
 
-A manual example is in:
+| Variable | Default | Meaning |
+|---|---|---|
+| `AI_STATUS_AGENTS` | `claude,codex` | which agents to show: `claude,codex` (or `all`), `claude`, `codex` |
+| `AI_STATUS_THEME` | `dark` | `dark` or `light` |
+| `AI_STATUS_SESSION_WINDOWS` | `true` | one card per session; `false` = classic list |
+| `AI_STATUS_SHOW_LIMITS` | `true` | usage-limit bars; `false` hides them and skips usage requests |
+| `AI_STATUS_AUTOSTART` | `true` | start at login; `false` removes the login entry (reinstalls keep it off) |
+| `AI_STATUS_SOUND_ENABLED` | `true` | notification sound (`true`/`false`, `yes`/`no`, `on`/`off`, `1`/`0`) |
+| `AI_STATUS_MAX_ROWS` | `5` | rows shown at once |
+| `AI_STATUS_TITLE` | `AI Agents Status!` | header title *(restart needed)* |
+| `AI_STATUS_CARD_WIDTH` | `294` | card width in px *(restart needed)* |
+| `AI_STATUS_STALE_AFTER_SECONDS` | `180` | row dims, shows `no new events` |
+| `AI_STATUS_HIDE_DONE_AFTER_SECONDS` | `180` | finished rows disappear |
+| `AI_STATUS_IDLE_AFTER_SECONDS` | `600` | silent session turns `idle` |
+| `AI_STATUS_HIDE_STALE_AFTER_SECONDS` | `900` | silent row is hidden |
+| `AI_STATUS_SERIOUS_MODE` | `false` | `true` = no GIF stickers, no KLIPY requests |
+| `AI_STATUS_KLIPY_API_KEY` | *(empty)* | KLIPY key for random GIFs; empty = local GIFs only |
+| `AI_STATUS_STICKER_ROTATE_SECONDS` | `120` | new GIF for a working session every N s (`0` = never) |
+| `AI_STATUS_UPDATE_REPO` / `AI_STATUS_UPDATE_BRANCH` | `dmitrykostenkoweb/ai-status-monitor` / `main` | where updates come from |
+| `AI_STATUS_CACHE_DIR`, `AI_STATUS_CONFIG_DIR`, `AI_STATUS_DATA_DIR` | see [installer files](#installation) | directories *(restart needed)* |
+| `AI_STATUS_ENV_FILE` | — | use a different runtime file. It must be exported in the process; it is not read from `.env` |
 
-```text
-examples/claude-settings-snippet.json
-```
+**Precedence:** a variable exported in the process → runtime `.env` → legacy value in `widget.json` → built-in default. Re-installing upgrades values that still hold an old default (card width `344`/`420`, title `AI Agents Status`) to the new ones; values you changed are kept.
 
-## 9. Codex CLI hooks
+`.env` keeps secrets out of Git, but it does not encrypt them. If a key ever lands in a commit, revoke and rotate it.
 
-The installer tries to safely merge the hooks into:
+---
 
-```text
-~/.codex/hooks.json
-```
+## Command-line tools
 
-If the file exists, it makes a backup:
+All tools are in `~/.local/bin`. On Windows they are in `%LOCALAPPDATA%\ai-cli-status-monitor\bin`, as `.cmd` wrappers.
 
-```text
-~/.codex/hooks.json.bak.<timestamp>
-```
+| Command | What it does |
+|---|---|
+| `ai-agent-status-widget` | run the widget (`--demo` for fake statuses, `--sticker <key\|all>` to preview stickers, `--version`) |
+| `ai-agent-status-widget-start` / `-stop` | start or stop the background widget |
+| `ai-agent-status-doctor` | health check (details below) |
+| `ai-agent-status-update` | update from GitHub (`--check` to only check) |
+| `ai-agent-status-panel` | print the current combined status (debugging) |
+| `ai-agent-status-hook --agent claude\|codex --test` | send synthetic events through the whole pipeline |
 
-Added events:
+The doctor checks:
 
-- `UserPromptSubmit`
-- `PreToolUse`
-- `PermissionRequest`
-- `PostToolUse`
-- `SubagentStop`
-- `Stop`
+- the installed scripts and the cache folder;
+- autostart;
+- the Claude and Codex hooks;
+- that the widget's Python can import PySide6;
+- `wmctrl` and `libxcb-cursor0` (Linux);
+- the hook test mode;
+- the installed version and whether an update is available.
 
-For the Codex CLI you may still need to enter `/hooks` and approve the hooks.
+---
 
-A manual example is in:
+## Troubleshooting
 
-```text
-examples/codex-hooks.json
-```
-
-## 10. Troubleshooting
-
-Run the doctor:
+**Start here:**
 
 ```bash
 ~/.local/bin/ai-agent-status-doctor
 ```
 
-Check the panel output:
+<details>
+<summary><b>No cards appear when an agent works</b></summary>
+
+- Restart the Claude Code / Codex session after installing, because hooks load at startup.
+- **Codex:** type `/hooks` and approve or trust the new hooks.
+- Test the pipeline without any CLI:
+
+  ```bash
+  ~/.local/bin/ai-agent-status-hook --agent claude --test
+  ~/.local/bin/ai-agent-status-hook --agent codex --test
+  ~/.local/bin/ai-agent-status-panel
+  ```
+
+- Look at the raw files:
+
+  ```bash
+  ls -la ~/.cache/ai-cli-status-monitor/statuses/
+  ls -la ~/.cache/ai-cli-status-monitor/last_payloads/ ~/.cache/ai-cli-status-monitor/debug_payloads/
+  ```
+
+  Each console has its own file in `statuses/`. `claude.json` / `codex.json` hold the latest status of each agent, for older scripts.
+
+</details>
+
+<details>
+<summary><b>The widget does not start on Linux</b></summary>
+
+`Could not load the Qt platform plugin "xcb"` (in `~/.cache/ai-cli-status-monitor/widget.log` or in the doctor) means `libxcb-cursor0` is missing:
 
 ```bash
-~/.local/bin/ai-agent-status-panel
+sudo apt install libxcb-cursor0
 ```
 
-Check the files:
+If the installer could not create the Qt environment, install `python3-venv` and re-run the installer.
 
-```bash
-ls -la ~/.cache/ai-cli-status-monitor/
-ls -la ~/.cache/ai-cli-status-monitor/last_payloads/
-ls -la ~/.cache/ai-cli-status-monitor/debug_payloads/
-cat ~/.cache/ai-cli-status-monitor/usage_limits.json
-cat ~/.cache/ai-cli-status-monitor/widget.log
-```
+</details>
 
-Test the hooks:
+<details>
+<summary><b>The widget is not always on top (Linux)</b></summary>
 
-```bash
-~/.local/bin/ai-agent-status-hook --agent claude --test
-~/.local/bin/ai-agent-status-hook --agent codex --test
-```
-
-If Codex does not fire the hooks, enter `/hooks` and approve/trust the new hooks.
-
-With multiple consoles running, statuses are kept separately in:
-
-```text
-~/.cache/ai-cli-status-monitor/statuses/
-```
-
-The `claude.json` and `codex.json` files still point to the latest status of each agent, for compatibility with older scripts.
-
-The widget plays `notification.mp3` only when entering a state that requires your interaction, e.g. waiting for approval or waiting for a reply. If you hear no sound, check `~/.cache/ai-cli-status-monitor/widget.log`; the widget uses whatever player is available: `afplay` on macOS, PowerShell (Windows Media Player engine) on Windows, and on Linux `mpv`, `ffplay`, `mpg123`, `gst-play-1.0` or `paplay`.
-
-If the widget is not above all windows on Linux, check that it runs on X11 (`(xcb)` in the log). Full-screen windows (videos, presentations) still cover it, by design of the window manager.
+Check that it runs on X11 (`(xcb)` in the log):
 
 ```bash
 grep "widget started" ~/.cache/ai-cli-status-monitor/widget.log | tail -1
 ```
 
-If the widget does not start on Linux with `Could not load the Qt platform plugin "xcb"` (or the doctor reports it), install `libxcb-cursor0`.
+On Wayland the widget runs through XWayland when `libxcb-cursor0` is installed. Full-screen windows (videos, presentations) still cover it; that is how window managers work.
 
-## 11. Limitations
+</details>
 
-- The status is event-based; it is not a real view of the "model's thoughts".
-- The `thinking` status is inferred from prompts and tool events.
-- The `waiting for you` status depends on the available notification, stop and permission events.
-- Usage-limit integrations are best-effort and may temporarily show `Unavailable` if Claude or Codex changes its private local/API data shape.
-- Claude usage requires an active Claude Code OAuth login; API-key spend and billing limits are outside this widget's scope.
-- Always-on-top works on every OS. Staying visible on *every* workspace/desktop is enforced only on Linux/X11, where the widget re-asserts "above" and "all workspaces" every second (Cinnamon/Muffin and GNOME/Mutter drop "above" now and then). On macOS and Windows the widget stays on the desktop/Space where it was opened.
-- On Wayland the widget runs through XWayland when `libxcb-cursor0` is installed, because Wayland does not let apps place their own windows (docked session windows, sticker overlay).
-- Each AI session has its own row. Session identity comes from `session_id` (Claude). When it is missing (Codex), it comes from the terminal: the POSIX session leader (the terminal's shell) on Linux/macOS, or the console window on Windows. So one session = one stable row, even without `session_id`.
-- The `→` switch matches a window by the terminal process PID:
-  - Linux: `wmctrl`/X11. When one emulator process owns several windows (e.g. gnome-terminal), the window title disambiguates them. Full certainty comes from a one-process-per-window terminal (alacritty, kitty, xterm).
-  - macOS: System Events. It brings the terminal app to the front and raises the window whose title contains the project. Grant Accessibility access to your Python/terminal if it asks.
-  - Windows: Win32 `SetForegroundWindow`. It targets the Windows Terminal or console window.
+<details>
+<summary><b>No sound</b></summary>
 
-  No platform can switch to a specific tab. Under tmux, screen or ssh it may not hit the right window. A diagnostic entry lands in `widget.log`.
+The sound plays only when an agent starts waiting for you or finishes. The widget uses the first player it finds:
+
+- macOS: `afplay`;
+- Windows: PowerShell (Windows Media Player engine);
+- Linux: `mpv`, `ffplay`, `mpg123`, `gst-play-1.0` or `paplay`.
+
+Check `~/.cache/ai-cli-status-monitor/widget.log`, and make sure **Settings → Notification sound** is on.
+
+</details>
+
+<details>
+<summary><b>The ➜ button raises the wrong window (or none)</b></summary>
+
+- **Linux:** needs `wmctrl`. When one terminal process owns several windows (gnome-terminal), the window title (project folder) breaks the tie. One-process-per-window terminals such as alacritty, kitty and xterm always match exactly.
+- **macOS:** allow Accessibility access for your terminal / Python in System Settings → Privacy & Security.
+- **Windows:** targets the Windows Terminal or console window.
+- **Everywhere:** no platform can switch to a specific tab. Under tmux, screen or ssh the match may miss. A diagnostic line is written to `widget.log`.
+
+</details>
+
+<details>
+<summary><b>Usage bars say <code>Unavailable</code></b></summary>
+
+- Claude needs an active Claude Code OAuth login. API-key billing is not supported.
+- Codex needs the `codex` CLI on your `PATH`.
+
+Both integrations are best-effort and may break for a while if a provider changes its private data format. Inspect `~/.cache/ai-cli-status-monitor/usage_limits.json`.
+
+</details>
+
+---
+
+## Uninstalling
+
+There is no uninstaller yet. To remove everything by hand on Linux/macOS:
+
+1. **Stop the widget** and turn **Start at login** off in Settings. This removes the autostart entry.
+
+   ```bash
+   ~/.local/bin/ai-agent-status-widget-stop
+   ```
+
+2. **Remove the hooks.** Delete every hook entry whose command contains `ai-agent-status-hook` from `~/.claude/settings.json` and `~/.codex/hooks.json`. Backups from before the install sit next to them as `*.bak.<timestamp>`.
+3. **Delete the files:**
+
+   ```bash
+   rm -f ~/.local/bin/ai-agent-status-*
+   rm -rf ~/.local/bin/ai_agent_status_lib
+   rm -rf ~/.cache/ai-cli-status-monitor ~/.config/ai-cli-status-monitor ~/.local/share/ai-cli-status-monitor
+   rm -f ~/.local/share/applications/ai-cli-status-widget.desktop ~/.local/share/pixmaps/ai-cli-status-widget.png
+   ```
+
+On Windows, stop the widget, remove the hooks the same way, and delete `%LOCALAPPDATA%\ai-cli-status-monitor` and `%APPDATA%\ai-cli-status-monitor`.
+
+---
+
+## How it works
+
+```text
+Claude Code / Codex ──hook──▶ ai-agent-status-hook ──writes──▶ ~/.cache/ai-cli-status-monitor/statuses/<session>.json
+                                                                             │
+                                          ai-agent-status-widget ◀──reads once per second
+```
+
+- **The hook.** The CLIs run `ai-agent-status-hook` on each event (prompt, tool use, permission request, stop, …). It turns the event into a status (`kind` + text) and writes one small JSON file per session. It never crashes the CLI, even on bad input.
+- **The widget.** The Qt widget reads those files once per second, sorts sessions (waiting → working → done), and handles the timers, sounds and stickers.
+- **Networking.** The only network calls are:
+  - the one-off GitHub update check;
+  - the usage-limit lookups;
+  - KLIPY searches, only when you set a key.
+
+---
+
+## Limitations
+
+- **Status comes from events.** It is not a live view of the model's thoughts.
+  - `thinking` is inferred from prompts and tool events.
+  - `waiting for you` depends on the notification, stop and permission events each CLI sends.
+- **Usage limits are best-effort.** They need a Claude Code OAuth login; API-key spend and billing limits are out of scope.
+- **"On every workspace" is enforced only on Linux/X11.** There the widget re-asserts it every second, because Cinnamon/Muffin and GNOME/Mutter drop "above" now and then. On macOS and Windows it stays on the desktop/Space where it was opened. Always-on-top works everywhere.
+- **Wayland needs XWayland**, because Wayland does not let apps place their own windows (docked cards, stickers).
+- **One row per session, even without a session id.** Claude provides a `session_id`. For Codex, the session is identified by its terminal: the shell's POSIX session leader on Linux/macOS, or the console window on Windows.
