@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README rewritten as a user guide: screenshots (`docs/screenshots/`), per-OS install steps, a step-by-step free KLIPY key walkthrough, a settings overview, a configuration table, troubleshooting and manual uninstall notes.
+
 - **Comic redesign.** The widget, session windows, stickers, Settings, the KLIPY guide and menus now use the comic-book look from the design handoff: thick ink outlines, hard offset shadows, halftone header and bars, a tilted LIVE/ALERT/IDLE badge, stroked Bangers titles and agent names, coloured status chips, a yellow `➜` jump button, and logo discs for agents and providers. Stickers are now tilted polaroids with a sound-effect caption ("HMMM…", "CLACK!", "AHEM!") and a comic speech bubble, and they pop in with the handoff's bounce. The fonts (Bangers, Comic Neue, Space Mono; SIL OFL) are bundled for offline use.
 - Dark comic theme by default, plus a light theme: Settings → `Light theme`, or `AI_STATUS_THEME=light`. It switches live. `AI_STATUS_THEME` now accepts only `dark` or `light`.
 - The comic cards are drawn at 70 % of the design's size; the GIF stickers keep their full size. The default card width is 294 px (was 344) and the default title is `AI Agents Status!`. Re-installing upgrades these old defaults in an existing `.env`; values you changed are kept. Docked session windows leave room for each card's sticker.
