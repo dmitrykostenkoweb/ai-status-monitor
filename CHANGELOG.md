@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-11
+
 ### Added
 
 - Fold the usage limits away with the new `▴`/`▾` header button, Settings → `Usage limits`, the right-click menu or `AI_STATUS_SHOW_LIMITS=false`. The agents' session cards and their GIFs stay; hidden limits are not fetched.
