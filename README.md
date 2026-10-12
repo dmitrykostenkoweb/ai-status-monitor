@@ -297,14 +297,14 @@ The widget has a built-in step-by-step guide with **Copy** buttons for every val
    |---|---|
    | Platform name | `AI Status Monitor` |
    | Platform website | `https://github.com/dmitrykostenkoweb/ai-status-monitor` |
-   | About / integration | use the ready-made description from the guide's **Copy** button |
+   | Description | `Desktop AI agent status widget with KLIPY GIFs` (max 50 characters) |
 
    Read the **KLIPY API Terms**, tick the checkbox, and press **Add Platform**.
 3. **Create an API key.**
 
    | Field | Value |
    |---|---|
-   | Key name | `AI-Status-Monitor-Linux` (any name works) |
+   | Key name | `AI-Status-Monitor-Windows` / `-macOS` / `-Linux` for your OS (any name works) |
    | URL | `https://github.com/dmitrykostenkoweb/ai-status-monitor` |
    | Enable the Ads API | **leave it OFF** |
 
