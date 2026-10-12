@@ -16,8 +16,8 @@ DEFAULT_VALUES = {
     "AI_STATUS_CACHE_DIR": "$HOME/.cache/ai-cli-status-monitor",
     "AI_STATUS_CONFIG_DIR": "$HOME/.config/ai-cli-status-monitor",
     "AI_STATUS_DATA_DIR": "$HOME/.local/share/ai-cli-status-monitor",
-    "AI_STATUS_TITLE": "AI Agents Status!",
-    "AI_STATUS_CARD_WIDTH": "294",
+    "AI_STATUS_TITLE": "AI Agents Status",
+    "AI_STATUS_CARD_WIDTH": "340",
     "AI_STATUS_MAX_ROWS": "5",
     "AI_STATUS_SOUND_ENABLED": "true",
     "AI_STATUS_STALE_AFTER_SECONDS": "180",
@@ -25,6 +25,7 @@ DEFAULT_VALUES = {
     "AI_STATUS_IDLE_AFTER_SECONDS": "600",
     "AI_STATUS_HIDE_STALE_AFTER_SECONDS": "900",
     "AI_STATUS_THEME": "dark",
+    "AI_STATUS_SURFACE_OPACITY": "82",
     "AI_STATUS_AGENTS": "claude,codex",
     "AI_STATUS_SERIOUS_MODE": "false",
     "AI_STATUS_SESSION_WINDOWS": "true",
@@ -42,13 +43,14 @@ SUPPORTED_AGENTS = ("claude", "codex")
 KNOWN_KEYS = frozenset(DEFAULT_VALUES)
 
 THEMES = ("dark", "light")
+SURFACE_OPACITY_RANGE = (40, 95)  # percent; matches theme.MIN/MAX_SURFACE_OPACITY
 
 # Built-in defaults that changed. Installs write every default into the runtime .env,
 # so the installer upgrades a value that still equals an old default (never a
 # user's own choice): key → (old defaults, new default).
 RETIRED_DEFAULTS = {
-    "AI_STATUS_CARD_WIDTH": (("344", "420"), "294"),
-    "AI_STATUS_TITLE": (("AI Agents Status",), "AI Agents Status!"),
+    "AI_STATUS_CARD_WIDTH": (("344", "420", "294"), "340"),
+    "AI_STATUS_TITLE": (("AI Agents Status!",), "AI Agents Status"),
 }
 
 
@@ -92,6 +94,7 @@ class Settings:
     idle_after_seconds: int
     hide_stale_after_seconds: int
     theme: str
+    surface_opacity: int = 82
     agents: tuple[str, ...] = SUPPORTED_AGENTS
     serious_mode: bool = False
     session_windows: bool = True
@@ -125,6 +128,7 @@ class Settings:
             "AI_STATUS_IDLE_AFTER_SECONDS": str(self.idle_after_seconds),
             "AI_STATUS_HIDE_STALE_AFTER_SECONDS": str(self.hide_stale_after_seconds),
             "AI_STATUS_THEME": self.theme,
+            "AI_STATUS_SURFACE_OPACITY": str(self.surface_opacity),
             "AI_STATUS_AGENTS": format_agents(self.agents),
             "AI_STATUS_SERIOUS_MODE": "true" if self.serious_mode else "false",
             "AI_STATUS_SESSION_WINDOWS": "true" if self.session_windows else "false",
@@ -364,6 +368,14 @@ def load_settings(
             warn(f"invalid {key} from {source}; using next configuration source")
         raise AssertionError(f"missing valid default for {key}")
 
+    def resolve_range(key: str, bounds: tuple[int, int]) -> int:
+        for source, value in candidates(key, legacy_values):
+            parsed = _parse_int(value, bounds[0])
+            if parsed is not None and parsed <= bounds[1]:
+                return parsed
+            warn(f"invalid {key} from {source}; using next configuration source")
+        raise AssertionError(f"missing valid default for {key}")
+
     def resolve_agents(key: str) -> tuple[str, ...]:
         for source, value in candidates(key, legacy_values):
             parsed = parse_agents(value)
@@ -386,6 +398,7 @@ def load_settings(
         idle_after_seconds=resolve_int("AI_STATUS_IDLE_AFTER_SECONDS", 0),
         hide_stale_after_seconds=resolve_int("AI_STATUS_HIDE_STALE_AFTER_SECONDS", 0),
         theme=resolve_theme("AI_STATUS_THEME"),
+        surface_opacity=resolve_range("AI_STATUS_SURFACE_OPACITY", SURFACE_OPACITY_RANGE),
         agents=resolve_agents("AI_STATUS_AGENTS"),
         serious_mode=resolve_bool("AI_STATUS_SERIOUS_MODE"),
         session_windows=resolve_bool("AI_STATUS_SESSION_WINDOWS"),

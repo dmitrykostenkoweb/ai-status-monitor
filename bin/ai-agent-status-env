@@ -51,6 +51,9 @@ ai_status_valid_value() {
         esac
       done
       ;;
+    AI_STATUS_SURFACE_OPACITY)
+      [[ "$value" =~ ^[0-9]+$ ]] && (( 10#$value >= 40 && 10#$value <= 95 ))
+      ;;
     AI_STATUS_THEME)
       case "${value,,}" in
         dark|light) return 0 ;;
@@ -90,15 +93,15 @@ ai_status_load_env() {
     AI_STATUS_TITLE AI_STATUS_CARD_WIDTH AI_STATUS_MAX_ROWS
     AI_STATUS_SOUND_ENABLED AI_STATUS_STALE_AFTER_SECONDS
     AI_STATUS_HIDE_DONE_AFTER_SECONDS AI_STATUS_IDLE_AFTER_SECONDS
-    AI_STATUS_HIDE_STALE_AFTER_SECONDS AI_STATUS_THEME AI_STATUS_AGENTS
+    AI_STATUS_HIDE_STALE_AFTER_SECONDS AI_STATUS_THEME AI_STATUS_SURFACE_OPACITY AI_STATUS_AGENTS
     AI_STATUS_SERIOUS_MODE AI_STATUS_SESSION_WINDOWS AI_STATUS_SHOW_LIMITS AI_STATUS_AUTOSTART AI_STATUS_STICKER_ROTATE_SECONDS AI_STATUS_KLIPY_API_KEY
   )
   local -A defaults=(
     [AI_STATUS_CACHE_DIR]='$HOME/.cache/ai-cli-status-monitor'
     [AI_STATUS_CONFIG_DIR]='$HOME/.config/ai-cli-status-monitor'
     [AI_STATUS_DATA_DIR]='$HOME/.local/share/ai-cli-status-monitor'
-    [AI_STATUS_TITLE]='AI Agents Status!'
-    [AI_STATUS_CARD_WIDTH]='294'
+    [AI_STATUS_TITLE]='AI Agents Status'
+    [AI_STATUS_CARD_WIDTH]='340'
     [AI_STATUS_MAX_ROWS]='5'
     [AI_STATUS_SOUND_ENABLED]='true'
     [AI_STATUS_STALE_AFTER_SECONDS]='180'
@@ -106,6 +109,7 @@ ai_status_load_env() {
     [AI_STATUS_IDLE_AFTER_SECONDS]='600'
     [AI_STATUS_HIDE_STALE_AFTER_SECONDS]='900'
     [AI_STATUS_THEME]='dark'
+    [AI_STATUS_SURFACE_OPACITY]='82'
     [AI_STATUS_AGENTS]='claude,codex'
     [AI_STATUS_SERIOUS_MODE]='false'
     [AI_STATUS_SESSION_WINDOWS]='true'
