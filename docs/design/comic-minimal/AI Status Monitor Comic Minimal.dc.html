@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#16171C;}
+a{color:#FF9B7A;text-decoration:underline;}
+a:hover{color:#FFD23F;}
+@keyframes pop{0%{transform:scale(.7) rotate(var(--r));opacity:0}70%{transform:scale(1.05) rotate(var(--r))}100%{transform:scale(1) rotate(var(--r));opacity:1}}
+</style>
+</helmet>
+<div style="position:relative;min-height:100vh;display:flex;justify-content:center;padding:40px 20px 80px;box-sizing:border-box;background:#16171C;font-family:'Comic Neue',sans-serif;color:#F4EEDC;overflow:hidden;">
+  <!-- fake desktop content behind, to show transparency -->
+  <div style="position:absolute;inset:0;padding:28px 24px;display:flex;flex-direction:column;gap:7px;font-family:'Space Mono',monospace;font-size:12px;line-height:1.5;color:#5C6178;pointer-events:none;">
+    <div><span style="color:#7DD3FC;">~/unitbox-warehouse</span> <span style="color:#4ADE80;">main</span> $ claude</div>
+    <div>● Reading src/warehouse/stock.ts</div>
+    <div>● Reading src/warehouse/picking.ts</div>
+    <div style="color:#FF9B7A;">✻ Thinking about the reservation flow…</div>
+    <div>  ⎿ 14 files indexed</div>
+    <div>export function reserveStock(sku: string, qty: number) {</div>
+    <div>  const bin = findBin(sku);</div>
+    <div>  if (!bin || bin.available &lt; qty) throw new OutOfStock(sku);</div>
+    <div>  return lock(bin, qty);</div>
+    <div>}</div>
+    <div style="color:#FFD23F;">? Allow edit to src/warehouse/stock.ts (y/n)</div>
+  </div>
+
+  <div style="position:relative;width:100%;max-width:340px;display:flex;flex-direction:column;gap:14px;">
+
+    <!-- MAIN CARD -->
+    <div style="background:rgba(28,29,44,.58);backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);border:1.5px solid rgba(244,238,220,.9);border-radius:10px;box-shadow:3px 3px 0 rgba(0,0,0,.55);overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 10px 8px 12px;border-bottom:1.5px dashed rgba(244,238,220,.25);">
+        <div style="width:18px;height:18px;flex:none;border:1.5px solid #F4EEDC;border-radius:50%;position:relative;overflow:hidden;">
+          <div style="position:absolute;left:50%;top:50%;width:8px;height:1.5px;background:#FF9B7A;transform-origin:0 50%;transform:rotate(-40deg);"></div>
+          <div style="position:absolute;left:calc(50% - 2px);top:calc(50% - 2px);width:4px;height:4px;border-radius:50%;background:#F4EEDC;"></div>
+        </div>
+        <div style="flex:1;font-family:Bangers,cursive;font-size:18px;letter-spacing:1px;line-height:1;color:#FF9B7A;white-space:nowrap;">AI Agents Status</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border:1.5px solid {{ badge.color }};border-radius:999px;color:{{ badge.color }};white-space:nowrap;">{{ badge.label }}</div>
+        <div style="display:flex;gap:2px;">
+          <button style="width:24px;height:24px;border:none;border-radius:6px;background:transparent;color:#A9A6C0;font-size:13px;line-height:1;cursor:pointer;padding:0;" style-hover="background:rgba(244,238,220,.12);color:#F4EEDC;" title="Settings">⚙</button>
+          <button style="width:24px;height:24px;border:none;border-radius:6px;background:transparent;color:#A9A6C0;font-family:Bangers,cursive;font-size:15px;line-height:1;cursor:pointer;padding:0;" style-hover="background:#E63946;color:#fff;" title="Close">X</button>
+        </div>
+      </div>
+
+      <div style="padding:6px 12px 10px;display:flex;flex-direction:column;">
+        <sc-for list="{{ providers }}" as="p" hint-placeholder-count="2">
+          <div style="display:grid;grid-template-columns:22px minmax(0,1fr);gap:10px;align-items:start;padding:8px 0;border-top:{{ p.divider }};">
+            <div title="{{ p.name }}" style="width:20px;height:20px;margin-top:1px;border:1.5px solid {{ p.color }};border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:Bangers,cursive;font-size:11px;color:{{ p.color }};">{{ p.initial }}</div>
+            <div style="display:flex;flex-direction:column;gap:7px;">
+              <sc-for list="{{ p.bars }}" as="b" hint-placeholder-count="2">
+                <div style="display:flex;flex-direction:column;gap:3px;">
+                  <div style="display:flex;align-items:baseline;gap:8px;">
+                    <span style="font-family:Bangers,cursive;font-size:13px;letter-spacing:.8px;color:#F4EEDC;">{{ b.label }}</span>
+                    <span style="flex:1;font-family:'Space Mono',monospace;font-size:9.5px;color:#A9A6C0;">resets {{ b.reset }}</span>
+                    <span style="font-family:'Space Mono',monospace;font-size:11px;font-weight:700;color:{{ b.ink }};">{{ b.pctText }}</span>
+                  </div>
+                  <div style="height:6px;border:1.5px solid rgba(244,238,220,.7);border-radius:999px;background:rgba(0,0,0,.25);overflow:hidden;">
+                    <div style="height:100%;width:{{ b.width }};background:{{ b.color }};border-radius:999px;"></div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- SESSION CARDS -->
+    <sc-for list="{{ sessions }}" as="s" hint-placeholder-count="2">
+      <div style="position:relative;margin-top:{{ s.gap }};">
+        <sc-if value="{{ showStickers }}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;right:-6px;bottom:calc(100% - 14px);display:flex;align-items:center;gap:8px;z-index:2;pointer-events:none;">
+            <div style="position:relative;max-width:150px;padding:6px 10px 5px;background:{{ s.bubble }};border:1.5px solid #111;border-radius:14px;box-shadow:2px 2px 0 rgba(0,0,0,.55);font-family:Bangers,cursive;font-size:14px;letter-spacing:.6px;line-height:1.05;color:#111;transform:rotate(-3deg);">
+              {{ s.quip }}
+              <div style="position:absolute;right:-7px;top:calc(50% - 5px);width:10px;height:10px;background:{{ s.bubble }};border-right:1.5px solid #111;border-top:1.5px solid #111;transform:rotate(45deg);"></div>
+            </div>
+            <div style="--r:{{ s.tilt }};animation:pop .45s cubic-bezier(.3,1.6,.5,1) both;transform:rotate({{ s.tilt }});background:rgba(244,238,220,.92);border:1.5px solid #111;border-radius:3px;padding:5px 5px 16px;box-shadow:3px 3px 0 rgba(0,0,0,.5);position:relative;">
+              <div style="width:96px;height:72px;background:repeating-linear-gradient(45deg,#D9D2BC 0 5px,#CFC7AE 5px 10px);display:flex;align-items:center;justify-content:center;text-align:center;font-family:'Space Mono',monospace;font-size:8px;line-height:1.3;color:#555;">{{ s.gif }}</div>
+              <div style="position:absolute;left:0;right:0;bottom:2px;text-align:center;font-family:Bangers,cursive;font-size:11px;letter-spacing:.8px;color:#111;">{{ s.sfx }}</div>
+            </div>
+          </div>
+        </sc-if>
+        <div style="display:flex;align-items:center;gap:9px;padding:8px 12px 8px 8px;background:rgba(28,29,44,.58);backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);border:1.5px solid rgba(244,238,220,.9);border-radius:10px;box-shadow:3px 3px 0 rgba(0,0,0,.55);cursor:grab;">
+          <button style="width:26px;height:26px;flex:none;border:1.5px solid rgba(244,238,220,.5);border-radius:7px;background:transparent;color:#F4EEDC;font-size:13px;line-height:1;cursor:pointer;padding:0;" style-hover="background:#FFD23F;border-color:#FFD23F;color:#111;" title="Jump to terminal">➜</button>
+          <div style="width:8px;height:8px;flex:none;border-radius:50%;background:{{ s.dot }};box-shadow:0 0 0 3px {{ s.dotRing }};"></div>
+          <div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:1px;">
+            <div style="display:flex;align-items:baseline;gap:7px;">
+              <span style="font-family:Bangers,cursive;font-size:17px;letter-spacing:1px;line-height:1.1;color:{{ s.color }};">{{ s.agent }}</span>
+              <span style="font-size:13px;color:#F4EEDC;">{{ s.status }}</span>
+            </div>
+            <div style="font-family:'Space Mono',monospace;font-size:10px;color:#A9A6C0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ s.project }} · {{ s.time }}</div>
+          </div>
+        </div>
+      </div>
+    </sc-for>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;badgeState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;live&quot;,&quot;alert&quot;,&quot;idle&quot;],&quot;default&quot;:&quot;live&quot;,&quot;tsType&quot;:&quot;'live'|'alert'|'idle'&quot;},&quot;showStickers&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const tone = (pct) => pct >= 90 ? ['#F43F5E', '#FB7185'] : pct >= 75 ? ['#FB923C', '#FDBA74'] : ['#4ADE80', '#86EFAC'];
+    const bar = (label, pct, reset) => {
+      const [color, ink] = tone(pct);
+      return { label, pctText: pct + '%', width: pct + '%', color, ink, reset };
+    };
+    const providers = [
+      { name: 'Anthropic', initial: 'A', color: '#FF9B7A', divider: 'none', bars: [bar('Weekly', 5, 'czw 07:00'), bar('Fable', 0, 'czw 07:00')] },
+      { name: 'OpenAI', initial: 'O', color: '#7DD3FC', divider: '1.5px dashed rgba(244,238,220,.2)', bars: [bar('Weekly', 57, 'sob 10:29')] },
+    ];
+    const st = {
+      analyzing: { dot: '#FFD23F', bubble: '#FFD23F', quip: "it's all making sense now", gif: 'reaction gif\n"ponder"', sfx: 'PONDER…' },
+      waiting: { dot: '#E63946', bubble: '#FFB4BC', quip: 'psst! need your OK!', gif: 'reaction gif\n"waiting"', sfx: 'AHEM!' },
+      coding: { dot: '#4ADE80', bubble: '#A7F3D0', quip: 'tap tap — KA-CHUNK!', gif: 'reaction gif\n"coding"', sfx: 'CLACK!' },
+    };
+    const stickers = this.props.showStickers ?? true;
+    const mk = (agent, key, status, project, time, i) => ({
+      agent, status, project, time,
+      color: agent === 'Claude' ? '#FF9B7A' : '#7DD3FC',
+      dot: st[key].dot, dotRing: st[key].dot + '33',
+      bubble: st[key].bubble, quip: st[key].quip, gif: st[key].gif, sfx: st[key].sfx,
+      tilt: i % 2 ? '-4deg' : '4deg', gap: stickers ? '96px' : '0px',
+    });
+    const sessions = [
+      mk('Claude', 'analyzing', 'analyzing…', 'unitbox-warehouse', '09:41', 0),
+      mk('Codex', 'coding', 'coding…', 'api-gateway', '09:38', 1),
+    ];
+    const badges = {
+      live: { label: '● LIVE', color: '#4ADE80' },
+      alert: { label: '▲ 1 ALERT', color: '#FB7185' },
+      idle: { label: '● IDLE', color: '#A9A6C0' },
+    };
+    return { providers, sessions, badge: badges[this.props.badgeState ?? 'live'], showStickers: stickers };
+  }
+}
+</script>
+</body>
+</html>

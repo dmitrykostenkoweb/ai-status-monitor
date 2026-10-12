@@ -113,10 +113,20 @@ class WidgetAgentFilterTests(unittest.TestCase):
             assert window.light_switch.isChecked() is True
             window.light_switch.setChecked(False)
             assert module["T"]().name == "dark"
-            assert "#24263A" in module["QApplication"].instance().styleSheet()
+            assert "#1C1D2C" in module["QApplication"].instance().styleSheet()
             assert "AI_STATUS_THEME=dark" in env_file.read_text().splitlines()
             window.light_switch.setChecked(True)
             assert module["T"]().name == "light"
+
+            # Glass opacity applies live and is saved; "Show stickers" is the inverse of Serious mode.
+            window.opacity_spin.setValue(60)
+            assert abs(module["surface_color"]().alphaF() - 0.60) < 0.01
+            assert "AI_STATUS_SURFACE_OPACITY=60" in env_file.read_text().splitlines()
+            assert window.stickers_switch.isChecked() is (not widget.serious_mode)
+            window.stickers_switch.setChecked(False)
+            assert widget.serious_mode is True
+            window.stickers_switch.setChecked(True)
+            assert widget.serious_mode is False
 
             # Usage limits fold away (the header button too) and are not fetched while hidden.
             assert not widget.usage_panel.isHidden()

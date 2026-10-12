@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-12
+
+### Changed
+
+- **Comic minimal redesign on translucent glass** (design handoff in `docs/design/comic-minimal/`). The heavy comic skin (thick ink borders, halftone header and bars, big shadows, stroked titles, coloured status chips) is replaced by see-through cards with a thin cream outline, a small hard shadow and dashed dividers. The header has a thin radar mark (one sweep every ~4 s), a coral `AI Agents Status` title, an outline-only `● LIVE` / `▲ N ALERT` / `● IDLE` pill and flat ⚙ / X buttons. Usage rows show the real Anthropic/OpenAI marks in outline circles and slim pill bars. Session cards show an outlined `➜` jump button (yellow on hover), a status dot with a soft ring, the agent name and status on one line, and `project · time`. Stickers are smaller polaroids (96×72) with a speech bubble centred beside them; they pop in with the handoff's `pop` animation (scale .7 → 1.05 → 1).
+- Cards are now drawn at the design's own size. The default card width is 340 px (was 294) and the default title is `AI Agents Status` (was `AI Agents Status!`). Re-installing upgrades these old defaults in an existing `.env`; values you changed are kept.
+- Settings → `Serious mode` is now `Show stickers` (the same setting, inverted; still saved as `AI_STATUS_SERIOUS_MODE`).
+- The light theme follows the new look (cream glass, dark outline).
+
+### Added
+
+- Settings → `Card opacity` (40–95 %), saved as `AI_STATUS_SURFACE_OPACITY`, default 82 %. Qt cannot blur the desktop behind a window, so the default is more opaque than the design's blurred 58 %; lower it if you prefer more see-through cards.
+
 ## [0.4.0] - 2026-10-11
 
 ### Added

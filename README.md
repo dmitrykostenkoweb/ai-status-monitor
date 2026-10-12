@@ -42,7 +42,7 @@ Works on **Linux, macOS and Windows**. Python 3 + Qt — no Electron, no web ser
 - 🔔 **Notifications that matter**: a sound and a pulsing red outline when an agent waits for you, and a sound when it finishes.
 - ➜ **Jump to the terminal**: the yellow arrow on a card raises the terminal window where that agent runs.
 - 📊 **Usage limits at a glance**: Claude `5h` / `Weekly` / `Fable` and Codex `Weekly` bars. They turn orange at 75 % and red at 90 %, and fold away with one click.
-- 🎞️ **Reaction GIF stickers** (optional, for fun): polaroids with speech bubbles from a local pool or from KLIPY with a free key. **Serious mode** turns them off for meetings.
+- 🎞️ **Reaction GIF stickers** (optional, for fun): polaroids with speech bubbles from a local pool or from KLIPY with a free key. Turn **Show stickers** off (serious mode) for meetings.
 - 🌗 **Dark and light comic themes**, always on top, visible on every workspace, never in the taskbar.
 - 🔄 **Self-updating** from GitHub, with an `UPDATE ↑` button in the header.
 - 🪶 **Lightweight and local**: the hooks write small JSON files, and the widget reads them once per second. No account, no telemetry.
@@ -189,15 +189,16 @@ If you turned **Start at login** off in Settings, re-installing keeps it off.
 <img src="docs/screenshots/dark-sessions.png" alt="Main card with session windows" width="300" align="right" />
 
 - **Header**:
-  - the title `AI Agents Status!` and a state badge: `● LIVE` while agents work, `▲ N ALERT!` when someone waits for you, `● IDLE` when all is quiet;
+  - the title `AI Agents Status` and a state badge: `● LIVE` while agents work, `▲ N ALERT` when someone waits for you, `● IDLE` when all is quiet;
   - `▴` / `▾` folds the usage limits away (the agent cards and their GIFs stay);
   - `⚙` opens Settings;
-  - the red `X` quits.
-- **Usage limits**: one block per provider. Click the Anthropic or OpenAI disc to refresh it now.
-- **Session cards**: every running session gets its own card, docked in a column under the widget. Each card shows:
-  - a yellow `➜` that jumps to the terminal;
-  - the agent and a coloured status chip: yellow while thinking or reading, green while coding, red while waiting or on an error;
+  - `X` quits.
+- **Usage limits**: one row per provider. Click the Anthropic or OpenAI mark to refresh it now.
+- **Session cards**: every running session gets its own see-through card, docked in a column under the widget. Each card shows:
+  - a `➜` that jumps to the terminal;
+  - a status dot and the agent's status: yellow while thinking or reading, green while coding, red while waiting or on an error, blue when done;
   - the project folder and the time of the last event.
+- **Glass**: the cards are translucent so the terminal behind them stays visible. Settings → **Card opacity** makes them more or less see-through.
 - **Move things around**: drag the widget by its header. Drag a session card away and it stays where you drop it. Right-click it → `Dock under the widget` brings it back.
 - **Right-click menu**: `Settings…`, `Show agents`, `Serious mode (no stickers)`, `Dock all session windows`, `Reload`, `Open logs folder`, `Check for updates`, `Quit`.
 
@@ -210,7 +211,7 @@ Prefer everything in one box? Turn **Session windows** off in Settings for the *
 | When | What you see |
 |---|---|
 | an event arrives | the card updates within a second |
-| the agent needs you (approval, a question) | red chip, pulsing red outline, `ALERT!` badge, notification sound |
+| the agent needs you (approval, a question) | red dot, pulsing red outline, `ALERT` badge, notification sound |
 | the agent finishes | `done` + sound; the card disappears after 3 minutes |
 | no events for 3 min | the row dims and shows `no new events` |
 | no events for 10 min | `idle` |
@@ -234,10 +235,11 @@ Open Settings with **`⚙`** in the header, or right-click → **`Settings…`**
   - visible rows;
   - session windows on/off;
   - **light theme**;
+  - **card opacity** (40–95 %);
   - **usage limits** on/off;
   - **Start at login**: turn it off and the widget no longer starts with your computer.
 - **Stickers**:
-  - **Serious mode** (no GIFs at all);
+  - **Show stickers** (off = serious mode, no GIFs at all);
   - the **KLIPY API key** with a **Get a free key…** guide;
   - how often a working session gets a new GIF;
   - **Show test sticker**.
@@ -324,7 +326,7 @@ You can also put the key in your `.env` by hand: `AI_STATUS_KLIPY_API_KEY=your-k
 
 **Preview.** **Settings → Show test sticker**, or `~/.local/bin/ai-agent-status-widget --sticker all` (or `--sticker waiting`, …).
 
-**Serious mode** (Settings, right-click menu, or `AI_STATUS_SERIOUS_MODE=true`) turns stickers off completely, and with them all KLIPY requests.
+**Serious mode** (Settings → `Show stickers` off, the right-click menu, or `AI_STATUS_SERIOUS_MODE=true`) turns stickers off completely, and with them all KLIPY requests.
 
 </details>
 
@@ -374,13 +376,14 @@ Most options are in **Settings**. Everything else lives in `~/.config/ai-cli-sta
 |---|---|---|
 | `AI_STATUS_AGENTS` | `claude,codex` | which agents to show: `claude,codex` (or `all`), `claude`, `codex` |
 | `AI_STATUS_THEME` | `dark` | `dark` or `light` |
+| `AI_STATUS_SURFACE_OPACITY` | `82` | opacity of the glass cards in percent, 40–95 |
 | `AI_STATUS_SESSION_WINDOWS` | `true` | one card per session; `false` = classic list |
 | `AI_STATUS_SHOW_LIMITS` | `true` | usage-limit bars; `false` hides them and skips usage requests |
 | `AI_STATUS_AUTOSTART` | `true` | start at login; `false` removes the login entry (reinstalls keep it off) |
 | `AI_STATUS_SOUND_ENABLED` | `true` | notification sound (`true`/`false`, `yes`/`no`, `on`/`off`, `1`/`0`) |
 | `AI_STATUS_MAX_ROWS` | `5` | rows shown at once |
-| `AI_STATUS_TITLE` | `AI Agents Status!` | header title *(restart needed)* |
-| `AI_STATUS_CARD_WIDTH` | `294` | card width in px *(restart needed)* |
+| `AI_STATUS_TITLE` | `AI Agents Status` | header title *(restart needed)* |
+| `AI_STATUS_CARD_WIDTH` | `340` | card width in px *(restart needed)* |
 | `AI_STATUS_STALE_AFTER_SECONDS` | `180` | row dims, shows `no new events` |
 | `AI_STATUS_HIDE_DONE_AFTER_SECONDS` | `180` | finished rows disappear |
 | `AI_STATUS_IDLE_AFTER_SECONDS` | `600` | silent session turns `idle` |
