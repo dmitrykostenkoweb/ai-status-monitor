@@ -50,11 +50,10 @@ class ThemeTokenTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             theme.rgba("teal")
 
-    def test_every_sticker_has_a_bubble_fill_and_sound_effects(self) -> None:
+    def test_every_sticker_has_a_bubble_fill(self) -> None:
         for key in stickers.STICKER_KEYS:
             with self.subTest(key=key):
                 self.assertTrue(theme.bubble_fill(key).startswith("#"))
-                self.assertTrue(stickers.STICKER_SFX[key])
 
 
 class ThemeSettingTests(unittest.TestCase):

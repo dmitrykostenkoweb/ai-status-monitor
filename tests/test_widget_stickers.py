@@ -125,7 +125,7 @@ class WidgetStickerTests(unittest.TestCase):
             assert abs(scale - 0.7) < 1e-6 and opacity == 0.0
             assert max(module["pop_transform"](step / 100)[0] for step in range(101)) > 1.0
             assert module["pop_transform"](1.0) == (1.0, 1.0)
-            assert overlay.sfx in module["stickers"].STICKER_SFX["done"]
+            assert not hasattr(overlay, "sfx")  # no caption under the polaroid
 
             widget.note_usage_limits({"providers": {"claude": [
                 {"window": "5h", "used_percent": 93.0, "resets_at": "2030-01-01T00:00:00+00:00"},
