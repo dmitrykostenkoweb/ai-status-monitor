@@ -43,6 +43,7 @@ sys.path.insert(0, str(PROJECT_DIR / "bin"))
 from ai_agent_status_lib import autostart  # noqa: E402
 from ai_agent_status_lib import platform_support  # noqa: E402
 from ai_agent_status_lib import process_control  # noqa: E402
+from ai_agent_status_lib import windows_app  # noqa: E402
 from ai_agent_status_lib.env_config import DEFAULT_VALUES  # noqa: E402
 from ai_agent_status_lib.env_config import LEGACY_KEYS  # noqa: E402
 from ai_agent_status_lib.env_config import load_settings  # noqa: E402
@@ -64,9 +65,10 @@ SCRIPTS = (
     "ai-agent-status-widget-stop",
     "ai-agent-status-doctor",
     "ai-agent-status-update",
+    "ai-agent-status-uninstall",
 )
 POSIX_ONLY_SCRIPTS = ("ai-agent-status-env",)  # Bash dotenv loader, kept for user scripts
-DATA_FILES = ("notification.mp3", "openai-logo.svg", "anthropic-logo.png")
+DATA_FILES = ("notification.mp3", "openai-logo.svg", "anthropic-logo.png", "ai-cli-status-widget.ico")
 PYSIDE_REQUIREMENT = "PySide6-Essentials>=6.5"
 QT_PROBE = "import PySide6.QtWidgets"
 
@@ -282,6 +284,10 @@ def write_windows_shims(bin_dir: Path, widget_python: str | None) -> None:
         (bin_dir / f"{name}.cmd").write_text(
             f'@echo off\r\n"{interpreter}" "%~dp0{name}" %*\r\n', encoding="utf-8"
         )
+
+
+def read_version() -> str:
+    return (PROJECT_DIR / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def copy_data(data_dir: Path) -> None:
@@ -572,6 +578,8 @@ def main(argv: list[str] | None = None) -> int:
         notes: list[str] = []
     else:
         notes = install_autostart(home, bin_dir, cache_dir, widget_python or sys.executable, settings.autostart)
+        if PLATFORM == platform_support.WINDOWS:
+            notes.extend(windows_app.install(bin_dir, data_dir, sys.executable, read_version()))
     if windows_cache is not None:
         point_cache_at(runtime_env, windows_cache)
     install_environment_config(runtime_env, source_env, config_dir, home)
@@ -584,13 +592,13 @@ def main(argv: list[str] | None = None) -> int:
     add_hooks(home / ".codex" / "hooks.json", process_control.hook_command(bin_dir, "codex"), CODEX_EVENTS, codex=True)
 
     toolkit_ok = widget_python is not None
-    version = (PROJECT_DIR / "VERSION").read_text(encoding="utf-8").strip()
+    version = read_version()
     suffix = ".cmd" if PLATFORM == platform_support.WINDOWS else ""
     say("")
     say(f"Installed ai-cli-status-monitor {version} ({PLATFORM}).")
     say("")
     say("Commands:")
-    commands = ("ai-agent-status-doctor", "ai-agent-status-panel", "ai-agent-status-update")
+    commands = ("ai-agent-status-doctor", "ai-agent-status-panel", "ai-agent-status-update", "ai-agent-status-uninstall")
     for name in commands if hooks_only else ("ai-agent-status-widget", *commands):
         say(f"  {bin_dir / (name + suffix)}")
     if PLATFORM == platform_support.WINDOWS:

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-12
+
+### Added
+
+- **Windows: the widget is now a regular app.** The installer adds an **AI Status Monitor** shortcut with the app icon to the Start menu and the desktop. It opens the widget without a console window and can be pinned to the taskbar. Before this, a closed widget could only be reopened from a console. The app is also listed under **Settings → Apps → Installed apps**, with a working **Uninstall** button.
+- `ai-agent-status-uninstall` (all platforms) removes the widget, its login entry, shortcuts, its own hooks (other hooks stay, configs are backed up), scripts, data and cache. Your settings are kept unless you pass `--purge`. A WSL install that feeds the Windows widget never deletes the Windows cache.
+
 ## [0.5.1] - 2026-10-12
 
 ### Added

@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Uninstall ai-cli-status-monitor: widget, login entry, shortcuts, hooks, scripts and data.
+
+Your settings (the runtime .env and window positions) are kept unless --purge is given.
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from ai_agent_status_lib import platform_support  # noqa: E402
+from ai_agent_status_lib import uninstaller  # noqa: E402
+from ai_agent_status_lib.env_config import load_settings  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Uninstall ai-cli-status-monitor.")
+    parser.add_argument("--yes", "-y", action="store_true", help="do not ask for confirmation")
+    parser.add_argument("--purge", action="store_true", help="also delete your settings (runtime .env)")
+    args = parser.parse_args()
+
+    settings = load_settings()
+    home = platform_support.home_dir()
+    bin_dir = Path(__file__).resolve().parent
+    targets = uninstaller.plan(home, bin_dir, settings.cache_dir, settings.config_dir, settings.data_dir, args.purge)
+    print("This removes the AI Status Monitor widget, its login entry and shortcuts, its hooks in")
+    print("~/.claude/settings.json and ~/.codex/hooks.json (other hooks stay), and:")
+    for path in targets:
+        print(f"  {path}")
+    if not args.yes:
+        try:
+            answer = input("Continue? [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Nothing removed.")
+            return 1
+    uninstaller.run(home, bin_dir, settings.cache_dir, settings.config_dir, settings.data_dir, args.purge)
+    print("AI Status Monitor is uninstalled. Restart your Claude Code / Codex sessions.")
+    if platform_support.PLATFORM == platform_support.WINDOWS and not args.yes:
+        try:
+            input("Press Enter to close.")
+        except EOFError:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
