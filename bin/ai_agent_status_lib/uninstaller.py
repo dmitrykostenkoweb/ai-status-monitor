@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -89,13 +88,8 @@ def installed_files(bin_dir: Path) -> list[Path]:
 
 
 def stop_widget(cache_dir: Path, report: Say) -> None:
-    pid = process_control.running_widget_pid(cache_dir)
-    _stopped, message = process_control.stop_widget(cache_dir)
+    _stopped, message = process_control.stop_widget(cache_dir)  # waits until it is gone
     report(message)
-    # Windows keeps a running interpreter's files locked; wait before deleting its venv.
-    deadline = time.monotonic() + 5
-    while pid is not None and platform_support.pid_alive(pid) and time.monotonic() < deadline:
-        time.sleep(0.2)
 
 
 def remove_path(path: Path, report: Say) -> None:

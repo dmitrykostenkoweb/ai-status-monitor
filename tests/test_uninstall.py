@@ -71,7 +71,9 @@ class UninstallRunTests(unittest.TestCase):
         self.temp.cleanup()
 
     def run_uninstall(self, purge: bool = False, cache: Path | None = None) -> None:
-        with mock.patch.object(uninstaller.platform_support, "PLATFORM", "linux"):
+        # Never look for (or stop) real widget processes from a test.
+        with mock.patch.object(uninstaller.platform_support, "PLATFORM", "linux"), \
+                mock.patch.object(uninstaller.process_control, "widget_pids", return_value=[]):
             uninstaller.run(self.home, self.bin, cache or self.cache, self.config, self.data,
                             purge=purge, report=self.messages.append)
 

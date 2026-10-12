@@ -33,6 +33,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -266,8 +267,14 @@ def copy_scripts(bin_dir: Path) -> None:
         if PLATFORM != platform_support.WINDOWS:
             target.chmod(0o755)
     library = bin_dir / "ai_agent_status_lib"
-    shutil.rmtree(library, ignore_errors=True)
-    shutil.copytree(PROJECT_DIR / "bin" / "ai_agent_status_lib", library,
+    # Windows: a file another process holds (antivirus scan, an old widget) can survive
+    # rmtree; copy over whatever is left instead of failing on the existing directory.
+    for _attempt in range(3):
+        shutil.rmtree(library, ignore_errors=True)
+        if not library.exists():
+            break
+        time.sleep(0.5)
+    shutil.copytree(PROJECT_DIR / "bin" / "ai_agent_status_lib", library, dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     # Remove the retired toggle script from earlier installs.
     (bin_dir / "ai-agent-status-widget-toggle").unlink(missing_ok=True)
@@ -564,83 +571,103 @@ def main(argv: list[str] | None = None) -> int:
     for directory in (cache_dir / "last_payloads", cache_dir / "debug_payloads", config_dir, data_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    copy_scripts(bin_dir)
-    copy_data(data_dir)
-    widget_python = None if hooks_only else ensure_widget_python(data_dir)
-    process_control.save_interpreters(data_dir, sys.executable, widget_python)
-    if PLATFORM == platform_support.WINDOWS:
-        write_windows_shims(bin_dir, widget_python)
-    if hooks_only:
-        try:
-            autostart.disable(home)  # a hooks-only install never starts a widget
-        except OSError:
-            pass
-        notes: list[str] = []
-    else:
-        notes = install_autostart(home, bin_dir, cache_dir, widget_python or sys.executable, settings.autostart)
+    # Stop the widget before replacing its files: Windows keeps a running interpreter's
+    # files locked, and a half-replaced install would leave the old widget stuck on
+    # "updating…". If anything below fails, the previous widget is started again.
+    widget_was_running = False
+    if not hooks_only:
+        widget_was_running, _message = process_control.stop_widget(cache_dir)
+        if widget_was_running:
+            say("Stopped the running widget while its files are replaced.")
+
+    def finish() -> int:
+        copy_scripts(bin_dir)
+        copy_data(data_dir)
+        widget_python = None if hooks_only else ensure_widget_python(data_dir)
+        process_control.save_interpreters(data_dir, sys.executable, widget_python)
         if PLATFORM == platform_support.WINDOWS:
-            notes.extend(windows_app.install(bin_dir, data_dir, sys.executable, read_version()))
-    if windows_cache is not None:
-        point_cache_at(runtime_env, windows_cache)
-    install_environment_config(runtime_env, source_env, config_dir, home)
+            write_windows_shims(bin_dir, widget_python)
+        if hooks_only:
+            try:
+                autostart.disable(home)  # a hooks-only install never starts a widget
+            except OSError:
+                pass
+            notes: list[str] = []
+        else:
+            notes = install_autostart(home, bin_dir, cache_dir, widget_python or sys.executable, settings.autostart)
+            if PLATFORM == platform_support.WINDOWS:
+                notes.extend(windows_app.install(bin_dir, data_dir, sys.executable, read_version()))
+        if windows_cache is not None:
+            point_cache_at(runtime_env, windows_cache)
+        install_environment_config(runtime_env, source_env, config_dir, home)
 
-    add_hooks(home / ".claude" / "settings.json", process_control.hook_command(bin_dir, "claude"), CLAUDE_EVENTS)
-    codex_config_toml = home / ".codex" / "config.toml"
-    if codex_config_toml.exists() and "[hooks" in codex_config_toml.read_text(encoding="utf-8", errors="ignore"):
-        say("⚠️  ~/.codex/config.toml already contains inline hooks.")
-        say("   Codex can load hooks from both config.toml and hooks.json, but may warn when both exist in one layer.")
-    add_hooks(home / ".codex" / "hooks.json", process_control.hook_command(bin_dir, "codex"), CODEX_EVENTS, codex=True)
+        add_hooks(home / ".claude" / "settings.json", process_control.hook_command(bin_dir, "claude"), CLAUDE_EVENTS)
+        codex_config_toml = home / ".codex" / "config.toml"
+        if codex_config_toml.exists() and "[hooks" in codex_config_toml.read_text(encoding="utf-8", errors="ignore"):
+            say("⚠️  ~/.codex/config.toml already contains inline hooks.")
+            say("   Codex can load hooks from both config.toml and hooks.json, but may warn when both exist in one layer.")
+        add_hooks(home / ".codex" / "hooks.json", process_control.hook_command(bin_dir, "codex"), CODEX_EVENTS, codex=True)
 
-    toolkit_ok = widget_python is not None
-    version = read_version()
-    suffix = ".cmd" if PLATFORM == platform_support.WINDOWS else ""
-    say("")
-    say(f"Installed ai-cli-status-monitor {version} ({PLATFORM}).")
-    say("")
-    say("Commands:")
-    commands = ("ai-agent-status-doctor", "ai-agent-status-panel", "ai-agent-status-update", "ai-agent-status-uninstall")
-    for name in commands if hooks_only else ("ai-agent-status-widget", *commands):
-        say(f"  {bin_dir / (name + suffix)}")
-    if PLATFORM == platform_support.WINDOWS:
-        say(f"Add {bin_dir} to your PATH to run them by name.")
-    say("")
-    if hooks_only:
-        pass
-    elif not toolkit_ok:
-        say("The widget UI needs PySide6 (Qt), which is not available yet:")
-        say(toolkit_hint())
+        toolkit_ok = widget_python is not None
+        version = read_version()
+        suffix = ".cmd" if PLATFORM == platform_support.WINDOWS else ""
         say("")
-    linux_widget = PLATFORM == platform_support.LINUX and not hooks_only
-    missing_libraries = platform_support.missing_linux_qt_packages() if linux_widget else []
-    if missing_libraries:
-        say(f"⚠️  Qt needs {', '.join(missing_libraries)} to open windows on X11:")
-        say(f"  sudo apt install {' '.join(missing_libraries)}")
+        say(f"Installed ai-cli-status-monitor {version} ({PLATFORM}).")
         say("")
-    for note in notes:
-        say(note)
-    say(f"Notification sound installed:\n  {data_dir / 'notification.mp3'}")
-    say(f"Environment config:\n  {runtime_env}")
-    say("")
-    say(f"Run doctor:\n  {bin_dir / ('ai-agent-status-doctor' + suffix)}")
-    say("")
+        say("Commands:")
+        commands = ("ai-agent-status-doctor", "ai-agent-status-panel", "ai-agent-status-update", "ai-agent-status-uninstall")
+        for name in commands if hooks_only else ("ai-agent-status-widget", *commands):
+            say(f"  {bin_dir / (name + suffix)}")
+        if PLATFORM == platform_support.WINDOWS:
+            say(f"Add {bin_dir} to your PATH to run them by name.")
+        say("")
+        if hooks_only:
+            pass
+        elif not toolkit_ok:
+            say("The widget UI needs PySide6 (Qt), which is not available yet:")
+            say(toolkit_hint())
+            say("")
+        linux_widget = PLATFORM == platform_support.LINUX and not hooks_only
+        missing_libraries = platform_support.missing_linux_qt_packages() if linux_widget else []
+        if missing_libraries:
+            say(f"⚠️  Qt needs {', '.join(missing_libraries)} to open windows on X11:")
+            say(f"  sudo apt install {' '.join(missing_libraries)}")
+            say("")
+        for note in notes:
+            say(note)
+        say(f"Notification sound installed:\n  {data_dir / 'notification.mp3'}")
+        say(f"Environment config:\n  {runtime_env}")
+        say("")
+        say(f"Run doctor:\n  {bin_dir / ('ai-agent-status-doctor' + suffix)}")
+        say("")
 
-    if windows_cache is not None:
-        say("Hooks only (WSL → Windows widget): statuses are written to")
-        say(f"  {windows_cache}")
-        say("Restart the Claude Code / Codex sessions in WSL so they load the hooks.")
-        say("The ➜ button can only find these sessions' terminal by window title.")
-    elif hooks_only:
-        say("Hooks only: the widget was not installed or started.")
-    elif widget_python is not None and has_display() and not missing_libraries:
-        restart_widget(bin_dir, cache_dir, widget_python)
-    elif toolkit_ok:
-        say("No display found, widget was not started now. It will start on desktop login.")
-    else:
-        say("PySide6 is missing, widget was not started. Hooks and status files work without it.")
-    say("")
-    say("For Codex CLI, open /hooks and trust the new hook if Codex asks for review.")
-    return 0
+        if windows_cache is not None:
+            say("Hooks only (WSL → Windows widget): statuses are written to")
+            say(f"  {windows_cache}")
+            say("Restart the Claude Code / Codex sessions in WSL so they load the hooks.")
+            say("The ➜ button can only find these sessions' terminal by window title.")
+        elif hooks_only:
+            say("Hooks only: the widget was not installed or started.")
+        elif widget_python is not None and has_display() and not missing_libraries:
+            restart_widget(bin_dir, cache_dir, widget_python)
+        elif toolkit_ok:
+            say("No display found, widget was not started now. It will start on desktop login.")
+        else:
+            say("PySide6 is missing, widget was not started. Hooks and status files work without it.")
+        say("")
+        say("For Codex CLI, open /hooks and trust the new hook if Codex asks for review.")
+        return 0
 
+
+    try:
+        return finish()
+    except Exception as error:
+        say(f"⚠️  Install failed: {error!r}")
+        if widget_was_running:
+            _started, message = process_control.start_widget(
+                bin_dir, cache_dir, python=process_control.widget_interpreter(data_dir))
+            say(f"Restarted the previous widget: {message}")
+        raise
 
 if __name__ == "__main__":
     raise SystemExit(main())

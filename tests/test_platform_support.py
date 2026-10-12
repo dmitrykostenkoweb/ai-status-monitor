@@ -517,5 +517,66 @@ class WslBridgeTests(unittest.TestCase):
         self.assertIsNotNone(datetime.fromisoformat(bridged["timestamp_iso"]).tzinfo)
 
 
+class WidgetProcessTests(unittest.TestCase):
+    COMMANDS = {
+        '"C:\\Users\\John Doe\\venv\\Scripts\\pythonw.exe" "C:/Users/John Doe/bin/ai-agent-status-widget"': True,
+        'C:\\Python312\\pythonw.exe "C:\\x\\bin\\ai-agent-status-widget" --demo': True,
+        "/home/u/.local/share/ai-cli-status-monitor/venv/bin/python /home/u/.local/bin/ai-agent-status-widget": True,
+        "/usr/bin/python3.12 bin/ai-agent-status-widget --demo": True,
+        '"C:\\Python\\pythonw.exe" "C:\\bin\\ai-agent-status-widget-start"': False,
+        "python3 /home/u/.local/bin/ai-agent-status-update": False,
+        "vim /home/u/.local/bin/ai-agent-status-widget": False,
+        "grep ai-agent-status-widget x": False,
+        "bash -c python3 /home/u/.local/bin/ai-agent-status-widget": False,
+        "/usr/bin/python3 -m unittest # python3 /x/ai-agent-status-widget": False,
+    }
+
+    def test_recognises_only_the_widget_itself(self) -> None:
+        for command, expected in self.COMMANDS.items():
+            with self.subTest(command=command):
+                self.assertEqual(process_control.is_widget_command(command), expected)
+
+    def test_widget_pids_skips_this_process(self) -> None:
+        widget = "python3 /x/ai-agent-status-widget"
+        table = [(11, widget), (12, "python3 /x/ai-agent-status-update"), (os.getpid(), widget), (13, widget)]
+        self.assertEqual(process_control.widget_pids(table), [11, 13])
+
+    def test_list_processes_parses_windows_and_macos_output(self) -> None:
+        def windows(command, **_kwargs):
+            self.assertEqual(command[:1], ["powershell.exe"])
+            self.assertIn("-EncodedCommand", command)
+            return subprocess.CompletedProcess(command, 0, stdout='42\t"C:/py/pythonw.exe" "C:/b/ai-agent-status-widget"\r\n\r\n')
+
+        self.assertEqual(platform_support.list_processes("windows", windows),
+                         [(42, '"C:/py/pythonw.exe" "C:/b/ai-agent-status-widget"')])
+
+        def macos(command, **_kwargs):
+            return subprocess.CompletedProcess(command, 0, stdout="  7 /usr/bin/python3 /b/ai-agent-status-widget\n  8 -zsh\n")
+
+        self.assertEqual(platform_support.list_processes("macos", macos),
+                         [(7, "/usr/bin/python3 /b/ai-agent-status-widget"), (8, "-zsh")])
+
+        def broken(command, **_kwargs):
+            raise OSError("no powershell")
+
+        self.assertEqual(platform_support.list_processes("windows", broken), [])
+
+    def test_stop_widget_stops_the_recorded_and_every_other_widget(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cache = Path(temp)
+            (cache / "widget.pid").write_text("21\n")
+            killed: list[int] = []
+            with mock.patch.object(process_control, "running_widget_pid", return_value=21), \
+                    mock.patch.object(process_control, "widget_pids", return_value=[21, 22]), \
+                    mock.patch.object(platform_support, "terminate_pid", side_effect=killed.append), \
+                    mock.patch.object(platform_support, "pid_alive", return_value=False):
+                self.assertEqual(process_control.stop_widget(cache), (True, "ai-agent-status-widget stopped"))
+            self.assertEqual(killed, [21, 22])
+            self.assertFalse((cache / "widget.pid").exists())
+            with mock.patch.object(process_control, "running_widget_pid", return_value=None), \
+                    mock.patch.object(process_control, "widget_pids", return_value=[]):
+                self.assertFalse(process_control.stop_widget(cache)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

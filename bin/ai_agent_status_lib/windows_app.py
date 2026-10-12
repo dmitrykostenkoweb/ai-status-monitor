@@ -18,7 +18,6 @@ the shortcut, not the install.
 
 from __future__ import annotations
 
-import base64
 import os
 import subprocess
 from pathlib import Path
@@ -67,10 +66,9 @@ def _powershell(script: str, values: Mapping[str, str], runner: Runner) -> list[
     """Run ``script`` with ``values`` in its environment; the non-empty output lines."""
     env = dict(os.environ)
     env.update(values)
-    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")  # no command-line quoting at all
     try:
         result = runner(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+            platform_support.powershell_argv(script),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60, check=False, env=env,
             **platform_support.hidden_window_flags(),
         )
