@@ -30,6 +30,8 @@ STATUS_DIR = CACHE_DIR / "statuses"
 HOOK_CLAUDE = process_control.hook_command(BIN, "claude")
 HOOK_CODEX = process_control.hook_command(BIN, "codex")
 STALE_AFTER = timedelta(seconds=SETTINGS.stale_after_seconds)
+# Hooks-only install inside WSL feeding the widget on Windows (see install.py --windows-widget).
+WSL_BRIDGE = PLATFORM == platform_support.LINUX and platform_support.is_windows_mount(CACHE_DIR)
 
 
 def ok(label: str) -> None:
@@ -114,7 +116,8 @@ def status_age(path: Path) -> timedelta | None:
         timestamp_iso = data.get("timestamp_iso") if isinstance(data, dict) else None
         if not isinstance(timestamp_iso, str):
             return None
-        return datetime.now() - datetime.fromisoformat(timestamp_iso)
+        timestamp = datetime.fromisoformat(timestamp_iso)
+        return datetime.now(timestamp.tzinfo) - timestamp
     except Exception:
         return None
 
@@ -171,8 +174,11 @@ def main() -> int:
     else:
         warn("Cache dir missing")
 
-    installed, label = autostart_installed()
-    (ok if installed else warn)(label)
+    if WSL_BRIDGE:
+        ok("WSL hooks-only install: statuses go to the Windows widget's cache dir (no Linux widget)")
+    else:
+        installed, label = autostart_installed()
+        (ok if installed else warn)(label)
 
     claude_events = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure")
     if CLAUDE_SETTINGS.exists() and has_hook(CLAUDE_SETTINGS, HOOK_CLAUDE, claude_events):
@@ -190,7 +196,7 @@ def main() -> int:
     else:
         warn("Codex hooks file not found")
 
-    if PLATFORM == platform_support.LINUX:
+    if PLATFORM == platform_support.LINUX and not WSL_BRIDGE:
         missing = platform_support.missing_linux_qt_packages()
         if missing:
             warn(f"Qt X11 libraries missing: sudo apt install {' '.join(missing)}")
@@ -199,13 +205,14 @@ def main() -> int:
         else:
             warn("wmctrl missing (always-on-top on every workspace and the → window switch need it)")
 
-    available, detail = widget_toolkit()
-    if available:
-        ok(f"PySide6 available: {detail}")
-    else:
-        warn(f"PySide6 missing for {detail}: re-run the installer (it sets up a private venv)")
-        if PLATFORM == platform_support.LINUX:
-            warn("Linux packages the installer and Qt need: sudo apt install python3-venv libxcb-cursor0 wmctrl")
+    if not WSL_BRIDGE:
+        available, detail = widget_toolkit()
+        if available:
+            ok(f"PySide6 available: {detail}")
+        else:
+            warn(f"PySide6 missing for {detail}: re-run the installer (it sets up a private venv)")
+            if PLATFORM == platform_support.LINUX:
+                warn("Linux packages the installer and Qt need: sudo apt install python3-venv libxcb-cursor0 wmctrl")
 
     age = latest_status_age("codex")
     if age is None:

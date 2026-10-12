@@ -2281,6 +2281,17 @@ def display_path(path: Path) -> str:
     return "~/" + relative.as_posix()
 
 
+def local_hhmm(timestamp_iso: object) -> str:
+    """``HH:MM`` in this machine's zone for an offset-aware time (written by a WSL hook), else ``""``."""
+    if not isinstance(timestamp_iso, str):
+        return ""
+    try:
+        timestamp = datetime.fromisoformat(timestamp_iso)
+    except ValueError:
+        return ""
+    return timestamp.astimezone().strftime("%H:%M") if timestamp.tzinfo else ""
+
+
 class StatusWidget(QWidget):
     def __init__(self, demo: bool = False) -> None:
         ensure_app()
@@ -2545,7 +2556,7 @@ class StatusWidget(QWidget):
                 continue
             status = str(data.get("status") or "")
             project = str(data.get("project") or "")
-            hhmm = str(data.get("timestamp_hhmm") or "")
+            hhmm = local_hhmm(data.get("timestamp_iso")) or str(data.get("timestamp_hhmm") or "")
             agent = str(data.get("agent") or path.stem).lower()
             cwd = str(data.get("cwd") or "")
             source_kind = normalize_kind(data.get("kind"), status)
@@ -2635,7 +2646,9 @@ class StatusWidget(QWidget):
             timestamp = datetime.fromisoformat(timestamp_iso)
         except ValueError:
             return None
-        return datetime.now() - timestamp
+        # A WSL hook feeding this widget writes an offset-aware time (its clock zone may differ).
+        now = datetime.now(timestamp.tzinfo) if timestamp.tzinfo else datetime.now()
+        return now - timestamp
 
     def should_hide_status(self, kind: StatusKind, _status: str, age: timedelta) -> bool:
         # Legacy text has already been normalized into `kind` by the loader.

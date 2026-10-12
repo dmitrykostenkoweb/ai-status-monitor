@@ -21,6 +21,7 @@ Works on **Linux, macOS and Windows**. Python 3 + Qt — no Electron, no web ser
   - [Linux](#linux)
   - [macOS](#macos)
   - [Windows](#windows)
+  - [Windows + WSL](#windows--wsl)
   - [After installing](#after-installing)
 - [Using the widget](#using-the-widget)
 - [Settings](#settings)
@@ -110,6 +111,24 @@ irm https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/i
 ```
 
 The widget starts without a console window (`pythonw.exe`). The tools go to `%LOCALAPPDATA%\ai-cli-status-monitor\bin`, each with a `.cmd` wrapper such as `ai-agent-status-doctor.cmd`.
+
+### Windows + WSL
+
+Claude Code or Codex running **inside WSL** cannot see the hooks installed on Windows, so the Windows widget gets no events from them and shows no cards. Install the hooks inside WSL too; they write straight into the Windows widget's folder:
+
+1. Install the widget on Windows first (above).
+2. In your WSL shell, run the Linux installer:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/install.sh | bash
+   ```
+
+   Inside WSL, when it finds the Windows widget, the installer does a **hooks-only** install: no Qt, no autostart, no Linux widget. It sets `AI_STATUS_CACHE_DIR` in WSL's `~/.config/ai-cli-status-monitor/.env` to the Windows cache dir (`/mnt/c/Users/<you>/AppData/Local/ai-cli-status-monitor/cache`) and merges the hooks into WSL's `~/.claude/settings.json` / `~/.codex/hooks.json` (backing them up first). `ai-agent-status-update` keeps it that way.
+3. Restart the Claude Code / Codex sessions in WSL so they load the hooks.
+
+Statuses, sounds and GIF stickers work as for Windows sessions. The `➜` button cannot use Linux process IDs, so for WSL sessions it can only find the terminal by its window title (the project name).
+
+Options: `--windows-widget` forces this mode (e.g. on a WSL install that already has the Linux widget), `--no-windows-widget` installs the Linux widget instead (for WSLg), and `--hooks-only` skips the widget anywhere. With `curl … | bash -s -- --windows-widget` or `./install.sh --windows-widget`. Both the WSL hooks and the Windows widget need version 0.5.1 or newer.
 
 ### After installing
 
@@ -568,4 +587,5 @@ Claude Code / Codex ──hook──▶ ai-agent-status-hook ──writes──�
 - **Usage limits are best-effort.** They need a Claude Code OAuth login; API-key spend and billing limits are out of scope.
 - **"On every workspace" is enforced only on Linux/X11.** There the widget re-asserts it every second, because Cinnamon/Muffin and GNOME/Mutter drop "above" now and then. On macOS and Windows it stays on the desktop/Space where it was opened. Always-on-top works everywhere.
 - **Wayland needs XWayland**, because Wayland does not let apps place their own windows (docked cards, stickers).
+- **WSL sessions shown on the Windows widget** can be raised by `➜` only through a window-title match, because the widget cannot see Linux process IDs.
 - **One row per session, even without a session id.** Claude provides a `session_id`. For Codex, the session is identified by its terminal: the shell's POSIX session leader on Linux/macOS, or the console window on Windows.

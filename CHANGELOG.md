@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-12
+
+### Added
+
+- **Agents running in WSL now show up on the Windows widget.** Run the Linux installer inside WSL: when it finds the widget installed on Windows, it installs only the hooks (no Qt, no autostart) and points `AI_STATUS_CACHE_DIR` at the Windows widget's cache dir under `/mnt/c/…`, backing up the existing `.env` and `~/.claude/settings.json` first. `--windows-widget` forces this, `--no-windows-widget` keeps the Linux widget, and the new `--hooks-only` installs only the hooks on any OS. `ai-agent-status-doctor` recognises such an install.
+
+### Fixed
+
+- Status times from a WSL hook are written with their UTC offset, so a WSL clock zone that differs from Windows' no longer makes sessions look stale or show the wrong time. WSL hooks no longer record Linux PIDs that the Windows `➜` button could mistake for Windows processes.
+
 ## [0.5.0] - 2026-10-12
 
 ### Changed

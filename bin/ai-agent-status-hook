@@ -114,8 +114,15 @@ def parse_payload(raw: str, agent: str) -> tuple[dict[str, Any], Path]:
     return parsed, last_payload_path
 
 
+def writes_for_windows_widget() -> bool:
+    """WSL hook feeding the Windows widget (cache dir on /mnt/<drive>): Linux PIDs mean nothing there."""
+    return platform_support.PLATFORM == platform_support.LINUX and platform_support.is_windows_mount(CACHE_DIR)
+
+
 def ancestor_pids() -> list[int]:
     """Walk the process tree up from this hook so the widget can match the terminal window by PID."""
+    if writes_for_windows_widget():
+        return []  # the widget falls back to matching the window title
     return platform_support.ancestor_pids()
 
 
@@ -132,7 +139,8 @@ def console_window() -> int:
 
 
 def build_status(agent: str, payload: dict[str, Any], raw_payload_path: Path) -> dict[str, Any]:
-    now = datetime.now()
+    # Offset-aware for the Windows widget: WSL's time zone can differ from Windows'.
+    now = datetime.now().astimezone() if writes_for_windows_widget() else datetime.now()
     event = first_string(payload, ("hook_event_name", "event", "type"), "unknown")
     tool = detected_tool_name(payload)
     cwd = first_string(payload, ("cwd",), os.getcwd())
