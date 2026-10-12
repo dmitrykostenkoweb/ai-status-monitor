@@ -273,7 +273,7 @@ Open Settings with **`⚙`** in the header, or right-click → **`Settings…`**
 
 ## GIF stickers and a free KLIPY key
 
-While an agent works, its card wears a tilted polaroid with a reaction GIF, a sound-effect caption (`HMMM…`, `CLACK!`, `AHEM!`) and a speech bubble. The sticker changes when the status changes:
+While an agent works, its card wears a tilted polaroid with a reaction GIF and a speech bubble. The sticker changes when the status changes:
 
 | Sticker | Shown for |
 |---|---|

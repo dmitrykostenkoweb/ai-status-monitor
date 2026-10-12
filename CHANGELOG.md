@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-12
+
+### Removed
+
+- The sound-effect caption under the GIF sticker (`HMMM…`, `CLACK!`, …). The polaroid frame is now even on all sides, with no empty strip at the bottom.
+
 ## [0.5.3] - 2026-10-12
 
 ### Changed

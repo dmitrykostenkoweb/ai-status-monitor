@@ -7,7 +7,6 @@ import html
 import json
 import math
 import os
-import random
 import shutil
 import signal
 import subprocess
@@ -1226,7 +1225,7 @@ class HoverBox(QWidget):
         super().leaveEvent(event)
 
 
-# ---- GIF sticker: a tilted polaroid with a sound-effect caption, plus a speech bubble ----
+# ---- GIF sticker: a tilted polaroid (no caption), plus a speech bubble ----
 # Geometry follows the comic minimal handoff: the sticker block (bubble left, polaroid right,
 # vertically centred) has its right edge 6 px outside the card and its bottom 14 px below
 # the card's top edge. STICKER_SCALE enlarges the handoff's sticker (96×72 photo) by 30 %,
@@ -1240,7 +1239,7 @@ def ss(value: float) -> float:
 
 
 POLAROID_IMAGE = (round(ss(96)), round(ss(72)))
-POLAROID_PADDING = (ss(5), ss(5), ss(16))  # sides, top, bottom
+POLAROID_PADDING = (ss(5), ss(5), ss(5))  # sides, top, bottom (no caption strip)
 POLAROID_BORDER = 1.5
 POLAROID_RADIUS = ss(3)
 POLAROID_WIDTH = POLAROID_IMAGE[0] + 2 * POLAROID_PADDING[0] + 2 * POLAROID_BORDER
@@ -1258,7 +1257,6 @@ BUBBLE_SHADOW_COLOR = "rgba(0,0,0,0.55)"
 BUBBLE_TAIL = ss(10)  # side of the square tail, rotated 45° on the bubble's right edge
 BUBBLE_GAP = ss(8)
 BUBBLE_FONT_PX = ss(14)
-CAPTION_FONT_PX = ss(11)
 STICKER_RIGHT_OVERHANG = 6
 STICKER_BOTTOM_BELOW_CARD_TOP = 14
 OVERLAY_PAD = 20
@@ -1338,7 +1336,6 @@ class StickerOverlay(QWidget):
         self.tilt = tilt
         self.choice: stickers.StickerChoice | None = None
         self.color = theme.bubble_fill("idle")
-        self.sfx = ""
         self.frame: QImage | None = None
         self.movie: QMovie | None = None
         self.buffer: QBuffer | None = None
@@ -1416,7 +1413,6 @@ class StickerOverlay(QWidget):
         self.hold_source = None
         self.choice = choice
         self.color = theme.bubble_fill(choice.key)
-        self.sfx = random.choice(stickers.STICKER_SFX.get(choice.key, ("!",)))
         self.sticky = sticky
         self.load_image(choice)
         self.phase = "in"
@@ -1534,13 +1530,6 @@ class StickerOverlay(QWidget):
             self.draw_klipy_mark(painter, image)
         painter.restore()
 
-        if self.sfx:
-            font = display_font(CAPTION_FONT_PX, 0.8)
-            painter.setFont(font)
-            painter.setPen(qc(theme.INK_ON_COLOUR))
-            caption_h = ss(14)
-            caption = QRectF(frame.left(), frame.bottom() - POLAROID_BORDER - 2 - caption_h, frame.width(), caption_h)
-            painter.drawText(caption, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, self.sfx)
         painter.restore()
 
     def draw_klipy_mark(self, painter: QPainter, image: QRectF) -> None:
