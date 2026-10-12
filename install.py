@@ -69,7 +69,8 @@ SCRIPTS = (
     "ai-agent-status-uninstall",
 )
 POSIX_ONLY_SCRIPTS = ("ai-agent-status-env",)  # Bash dotenv loader, kept for user scripts
-DATA_FILES = ("notification.mp3", "openai-logo.svg", "anthropic-logo.png", "ai-cli-status-widget.ico")
+DATA_FILES = ("notification.mp3", "openai-logo.svg", "anthropic-logo.png", "ai-cli-status-widget.ico",
+              "ai-cli-status-widget.png")
 PYSIDE_REQUIREMENT = "PySide6-Essentials>=6.5"
 QT_PROBE = "import PySide6.QtWidgets"
 
@@ -327,12 +328,16 @@ def copy_data(data_dir: Path) -> None:
 def install_linux_launcher(home: Path, bin_dir: Path) -> list[str]:
     """Menu launcher and icons (the login entry itself is handled by ``autostart``)."""
     applications_dir = home / ".local" / "share" / "applications"
-    icons_dir = home / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps"
     icon = autostart.linux_icon(home)
-    for directory in (applications_dir, icons_dir, icon.parent):
+    for directory in (applications_dir, icon.parent):
         directory.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(PROJECT_DIR / "assets" / f"{APP_ID}.png", icons_dir / f"{APP_ID}.png")
     shutil.copyfile(PROJECT_DIR / "assets" / f"{APP_ID}.png", icon)
+    # The app icon in the user's hicolor theme: one PNG per size plus the scalable SVG.
+    for target, source in autostart.linux_theme_icons(home).items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(PROJECT_DIR / "assets" / "icons" / source, target)
+    for stale in autostart.legacy_linux_icons(home):
+        stale.unlink(missing_ok=True)
     launcher = applications_dir / f"{APP_ID}.desktop"
     launcher.write_text(
         "[Desktop Entry]\nType=Application\n"

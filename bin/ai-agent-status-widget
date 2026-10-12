@@ -63,6 +63,7 @@ SESSION_WINDOWS_FILE = CONFIG_DIR / "session_windows.json"
 SESSION_WINDOW_POSITION_TTL_SECONDS = 14 * 24 * 60 * 60
 OPENAI_LOGO = DATA_DIR / "openai-logo.svg"
 ANTHROPIC_LOGO = DATA_DIR / "anthropic-logo.png"
+APP_ICON = DATA_DIR / "ai-cli-status-widget.png"  # the coral radar app icon
 TITLE = SETTINGS.title
 CARD_WIDTH = SETTINGS.card_width
 MAX_ROWS = SETTINGS.max_rows
@@ -151,6 +152,7 @@ try:
     from PySide6.QtGui import QPolygonF
     from PySide6.QtGui import QFont
     from PySide6.QtGui import QGuiApplication
+    from PySide6.QtGui import QIcon
     from PySide6.QtGui import QImage
     from PySide6.QtGui import QImageReader
     from PySide6.QtGui import QMovie
@@ -243,6 +245,8 @@ def ensure_app() -> QApplication:
         prefer_x11()
         app = QApplication(sys.argv[:1])
         app.setApplicationName("AI Status Monitor")
+        if APP_ICON.is_file():
+            app.setWindowIcon(QIcon(str(APP_ICON)))  # dialogs / Alt-Tab, instead of Python's icon
         app.setQuitOnLastWindowClosed(False)
         app.setStyle("Fusion")
         load_fonts()

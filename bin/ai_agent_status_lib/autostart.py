@@ -35,6 +35,22 @@ def linux_icon(home: Path) -> Path:
     return home / ".local" / "share" / "pixmaps" / f"{APP_ID}.png"
 
 
+ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
+
+
+def linux_theme_icons(home: Path) -> dict[Path, str]:
+    """hicolor theme icon → its source under ``assets/icons`` (sized PNGs plus the scalable SVG)."""
+    hicolor = home / ".local" / "share" / "icons" / "hicolor"
+    icons = {hicolor / f"{size}x{size}" / "apps" / f"{APP_ID}.png": f"{APP_ID}-{size}.png" for size in ICON_SIZES}
+    icons[hicolor / "scalable" / "apps" / f"{APP_ID}.svg"] = f"{APP_ID}.svg"
+    return icons
+
+
+def legacy_linux_icons(home: Path) -> list[Path]:
+    """Icons earlier installs wrote that the current one no longer does (a PNG under scalable/)."""
+    return [home / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps" / f"{APP_ID}.png"]
+
+
 def macos_entry(home: Path) -> Path:
     return home / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
 
