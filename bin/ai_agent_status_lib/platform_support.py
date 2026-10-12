@@ -442,6 +442,63 @@ def process_command_line(pid: int, platform: str | None = None) -> str:
         return ""
 
 
+def powershell_argv(script: str) -> list[str]:
+    """argv running ``script`` in Windows PowerShell, base64-encoded so nothing needs quoting."""
+    import base64
+
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-EncodedCommand", encoded]
+
+
+WINDOWS_PROCESS_QUERY = (
+    "Get-CimInstance Win32_Process -Filter \"CommandLine LIKE '%ai-agent-status-%'\" | "
+    "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
+)
+
+
+def list_processes(platform: str | None = None,
+                   runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> list[tuple[int, str]]:
+    """``(pid, command line)`` of running processes (on Windows only ours, by a cheap filter).
+
+    Best effort: an empty list when the process table cannot be read.
+    """
+    system = platform or PLATFORM
+    processes: list[tuple[int, str]] = []
+    try:
+        if system == LINUX:
+            for entry in Path("/proc").iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    raw = (entry / "cmdline").read_bytes()
+                except OSError:
+                    continue
+                if raw:
+                    processes.append((int(entry.name), raw.rstrip(b"\0").replace(b"\0", b" ").decode("utf-8", "replace")))
+            return processes
+        if system == MACOS:
+            command = ["ps", "-A", "-o", "pid=", "-o", "args="]
+            separator = None
+        else:
+            command = powershell_argv(WINDOWS_PROCESS_QUERY)
+            separator = "\t"
+        result = runner(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=15,
+                        check=False, **hidden_window_flags(system))
+        for line in result.stdout.splitlines():
+            pid, _sep, args = line.strip().partition(separator) if separator else _split_ps(line)
+            if pid.strip().isdigit():
+                processes.append((int(pid), args.strip()))
+    except Exception:
+        return []
+    return processes
+
+
+def _split_ps(line: str) -> tuple[str, str, str]:
+    parts = line.strip().split(None, 1)
+    return (parts[0], " ", parts[1]) if len(parts) == 2 else (line, "", "")
+
+
 def terminate_pid(pid: int, platform: str | None = None) -> bool:
     if (platform or PLATFORM) == WINDOWS:
         try:

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-12
+
+### Added
+
+- **Windows: the widget is now a regular app.** The installer adds an **AI Status Monitor** shortcut with the app icon to the Start menu and the desktop. It opens the widget without a console window and can be pinned to the taskbar. Before this, a closed widget could only be reopened from a console. The app is also listed under **Settings → Apps → Installed apps**, with a working **Uninstall** button.
+- `ai-agent-status-uninstall` (all platforms) removes the widget, its login entry, shortcuts, its own hooks (other hooks stay, configs are backed up), scripts, data and cache. Your settings are kept unless you pass `--purge`. A WSL install that feeds the Windows widget never deletes the Windows cache.
+
+### Fixed
+
+- **Updating from the widget could leave it stuck on "updating…"**, especially on Windows.
+  - The installer now stops the widget *before* it replaces any files. Windows keeps a running interpreter's files locked, so replacing them while the widget ran could fail.
+  - Stopping the widget now finds every widget process by its command line, not only the one recorded in `widget.pid`. Before, an outdated PID left the old widget running next to the new one.
+  - Replacing the scripts' library folder now tolerates files that something (for example an antivirus scan) still holds.
+  - If the install still fails, the previous widget is started again.
+  - If an update has not restarted the widget within 5 minutes, the button shows `update failed ↻` so you can try again.
+
 ## [0.5.1] - 2026-10-12
 
 ### Added

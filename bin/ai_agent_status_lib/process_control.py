@@ -14,8 +14,11 @@ The widget needs PySide6, which the installer may have put into a private venv
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from ai_agent_status_lib import platform_support
@@ -121,14 +124,51 @@ def start_widget(bin_dir: Path, cache_dir: Path, *extra_args: str, python: str |
     return True, "ai-agent-status-widget started"
 
 
-def stop_widget(cache_dir: Path) -> tuple[bool, str]:
-    """Stop the widget recorded in ``widget.pid``. Returns ``(stopped, message)``."""
-    pid = running_widget_pid(cache_dir)
+# A Python interpreter running the widget script itself: the command line must START with the
+# interpreter (``[…/]python[w][3.x][.exe]``, quoted or not) and continue with the widget script,
+# so ``-start``/``-stop``, editors, grep, or a shell whose ``-c`` text merely mentions the
+# script never match.
+_PYTHON = r'pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?'
+WIDGET_COMMAND = re.compile(
+    r'^\s*(?:"(?:[^"]*[\\/])?' + _PYTHON + r'"|(?:[^\s"]*[\\/])?' + _PYTHON + r')\s+'
+    r'(?:"(?:[^"]*[\\/])?' + re.escape(WIDGET_SCRIPT) + r'"|(?:[^\s"]*[\\/])?' + re.escape(WIDGET_SCRIPT) + r')'
+    r'(?=\s|$)',
+    re.IGNORECASE,
+)
+
+
+def is_widget_command(command: str) -> bool:
+    return bool(WIDGET_COMMAND.search(command))
+
+
+def widget_pids(processes: list[tuple[int, str]] | None = None) -> list[int]:
+    """Every running widget process, found by its command line (not only the one in ``widget.pid``)."""
+    table = platform_support.list_processes() if processes is None else processes
+    own = os.getpid()
+    return [pid for pid, command in table if pid != own and is_widget_command(command)]
+
+
+def stop_widget(cache_dir: Path, wait_seconds: float = 5.0) -> tuple[bool, str]:
+    """Stop the widget: the one in ``widget.pid`` and any other widget process still running
+    (a re-exec wrapper, a duplicate). Waits until they are gone so the caller may replace
+    their files (Windows keeps a running interpreter's files locked). Returns ``(stopped, message)``.
+    """
+    pids = []
+    recorded = running_widget_pid(cache_dir)
+    if recorded is not None:
+        pids.append(recorded)
+    pids.extend(pid for pid in widget_pids() if pid not in pids)
     try:
         pid_file(cache_dir).unlink()
     except OSError:
         pass
-    if pid is None:
+    if not pids:
         return False, "ai-agent-status-widget is not running"
-    platform_support.terminate_pid(pid)
+    for pid in pids:
+        platform_support.terminate_pid(pid)
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline and any(platform_support.pid_alive(pid) for pid in pids):
+        time.sleep(0.1)
     return True, "ai-agent-status-widget stopped"
+
+

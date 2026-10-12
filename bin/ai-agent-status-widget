@@ -70,6 +70,7 @@ MAX_ROWS = SETTINGS.max_rows
 # Sibling scripts (e.g. the self-updater) live next to this one once installed.
 WIDGET_DIR = Path(__file__).resolve().parent
 UPDATE_SCRIPT = WIDGET_DIR / "ai-agent-status-update"
+UPDATE_TIMEOUT_SECONDS = 300
 USAGE_ANIMATION_INTERVAL_MS = 33
 USAGE_ROTATION_RADIANS_PER_TICK = 0.36 * USAGE_ANIMATION_INTERVAL_MS / 200
 # Transparent margin around every card window (room for the card's rounded border).
@@ -3610,6 +3611,21 @@ class StatusWidget(QWidget):
             self.updating = False
             self.update_button.setEnabled(True)
             log(f"failed to start update: {error}")
+            return
+        # A successful update stops this process and starts the new widget. Still here
+        # after a few minutes means it failed: say so instead of "updating…" forever.
+        timeout_add_seconds(UPDATE_TIMEOUT_SECONDS, self.on_update_timeout)
+
+    def on_update_timeout(self) -> bool:
+        if self.closing or not self.updating:
+            return False
+        self.updating = False
+        self.update_button.setText("update failed ↻")
+        self.update_button.setEnabled(True)
+        self.resize_to_content()
+        log(f"self-update did not restart the widget within {UPDATE_TIMEOUT_SECONDS} s; "
+            f"see the installer output above, or run ai-agent-status-update in a terminal")
+        return False
 
     def open_logs_folder(self) -> None:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)

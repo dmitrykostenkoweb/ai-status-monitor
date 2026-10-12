@@ -110,7 +110,12 @@ The first time you press `➜`, macOS may ask to allow **Accessibility** access 
 irm https://raw.githubusercontent.com/dmitrykostenkoweb/ai-status-monitor/main/install.ps1 | iex
 ```
 
-The widget starts without a console window (`pythonw.exe`). The tools go to `%LOCALAPPDATA%\ai-cli-status-monitor\bin`, each with a `.cmd` wrapper such as `ai-agent-status-doctor.cmd`.
+The widget starts without a console window (`pythonw.exe`). The installer also makes it a regular Windows app:
+
+- an **AI Status Monitor** shortcut in the **Start menu** and on the **desktop** opens the widget again after you close it. Right-click it → **Pin to taskbar** for a taskbar button;
+- **Settings → Apps → Installed apps** lists **AI Status Monitor**, and its **Uninstall** button removes it.
+
+The widget's own windows stay out of the taskbar on purpose. The tools go to `%LOCALAPPDATA%\ai-cli-status-monitor\bin`, each with a `.cmd` wrapper such as `ai-agent-status-doctor.cmd`.
 
 ### Windows + WSL
 
@@ -431,6 +436,7 @@ All tools are in `~/.local/bin`. On Windows they are in `%LOCALAPPDATA%\ai-cli-s
 | `ai-agent-status-doctor` | health check (details below) |
 | `ai-agent-status-update` | update from GitHub (`--check` to only check) |
 | `ai-agent-status-panel` | print the current combined status (debugging) |
+| `ai-agent-status-uninstall` | remove the app (`--yes` to skip the question, `--purge` to delete your settings too) |
 | `ai-agent-status-hook --agent claude\|codex --test` | send synthetic events through the whole pipeline |
 
 The doctor checks:
@@ -540,25 +546,22 @@ Both integrations are best-effort and may break for a while if a provider change
 
 ## Uninstalling
 
-There is no uninstaller yet. To remove everything by hand on Linux/macOS:
+Run the uninstaller:
 
-1. **Stop the widget** and turn **Start at login** off in Settings. This removes the autostart entry.
+```bash
+~/.local/bin/ai-agent-status-uninstall
+```
 
-   ```bash
-   ~/.local/bin/ai-agent-status-widget-stop
-   ```
+On Windows, use **Settings → Apps → Installed apps → AI Status Monitor → Uninstall**, or run `%LOCALAPPDATA%\ai-cli-status-monitor\bin\ai-agent-status-uninstall.cmd`.
 
-2. **Remove the hooks.** Delete every hook entry whose command contains `ai-agent-status-hook` from `~/.claude/settings.json` and `~/.codex/hooks.json`. Backups from before the install sit next to them as `*.bak.<timestamp>`.
-3. **Delete the files:**
+It shows what it will delete and asks first. Then it removes:
 
-   ```bash
-   rm -f ~/.local/bin/ai-agent-status-*
-   rm -rf ~/.local/bin/ai_agent_status_lib
-   rm -rf ~/.cache/ai-cli-status-monitor ~/.config/ai-cli-status-monitor ~/.local/share/ai-cli-status-monitor
-   rm -f ~/.local/share/applications/ai-cli-status-widget.desktop ~/.local/share/pixmaps/ai-cli-status-widget.png
-   ```
+- the widget and its login entry;
+- the menu, Start-menu and desktop shortcuts;
+- its own hooks from `~/.claude/settings.json` and `~/.codex/hooks.json`. Your other hooks stay, and each file is backed up first as `*.bak.<timestamp>`;
+- the scripts, and the data and cache folders.
 
-On Windows, stop the widget, remove the hooks the same way, and delete `%LOCALAPPDATA%\ai-cli-status-monitor` and `%APPDATA%\ai-cli-status-monitor`.
+Your settings folder (`~/.config/ai-cli-status-monitor`, on Windows `%APPDATA%\ai-cli-status-monitor`) is kept. Add `--purge` to delete it too. Restart your Claude Code / Codex sessions afterwards.
 
 ---
 
