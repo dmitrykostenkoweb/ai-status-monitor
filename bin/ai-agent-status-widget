@@ -565,7 +565,6 @@ def style_sheet(t: theme.Theme) -> str:
 QLabel#text {{ color: {t.text}; }}
 QLabel#secondary {{ color: {t.text_secondary}; }}
 QLabel#title {{ color: {t.title}; }}
-QWidget#settingsWindow {{ background: {t.dialog}; }}
 QMenu {{
   background: {t.dialog}; color: {t.text}; border: 1px solid {outline}; padding: 4px;
   font-family: "Comic Neue", "Comic Sans MS", sans-serif; font-size: 13px; font-weight: 700;
@@ -1926,28 +1925,44 @@ def minutes_spin(maximum: float, value: float) -> QDoubleSpinBox:
 
 
 class DialogWindow(QWidget):
-    """Always-on-top dialog shell shared by Settings and the KLIPY guide."""
+    """Always-on-top dialog shell shared by Settings and the KLIPY guide.
+
+    Drawn like the widget itself: a frameless, translucent window holding one glass
+    ``ComicFrame`` card (same fill, outline, opacity and hard shadow). It is dragged by
+    its header and closed with the header ✕, the footer CLOSE button or Esc.
+    """
 
     def __init__(self, title: str, heading: str) -> None:
-        super().__init__(None, Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
+        super().__init__(None, tool_window_flags())
         self.setWindowTitle(title)
         self.setObjectName("settingsWindow")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        prepare_floating_window(self)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        window_layout = QVBoxLayout(self)
+        window_layout.setContentsMargins(0, 0, 0, 0)
+        window_layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+        self.card = ComicFrame(radius=CARD_RADIUS, border=CARD_BORDER, shadow=MAIN_CARD_SHADOW)
+        window_layout.addWidget(self.card)
+        outer = QVBoxLayout(self.card)
         outer.setSpacing(0)
-        outer.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
         self.outer = outer
 
         header = QWidget()
+        header.setCursor(Qt.CursorShape.SizeAllCursor)
+        header.setToolTip("Drag to move")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 12, 16, 10)
+        header_layout.setContentsMargins(16, 12, 12, 10)
         header_layout.setSpacing(10)
         header_layout.addWidget(RadarLogo(22), 0, Qt.AlignmentFlag.AlignVCenter)
         header_layout.addWidget(ComicText(heading, display_font(24, 1.0), fill="title"), 0,
                                 Qt.AlignmentFlag.AlignVCenter)
         header_layout.addStretch(1)
+        close_x = flat_button("✕", body_font(14), "Close", danger=True)
+        close_x.setCursor(Qt.CursorShape.ArrowCursor)
+        close_x.clicked.connect(self.close)
+        header_layout.addWidget(close_x, 0, Qt.AlignmentFlag.AlignVCenter)
+        header.installEventFilter(self)
+        self.header = header
         outer.addWidget(header)
         outer.addWidget(DashedRule("divider"))
 
@@ -1964,12 +1979,26 @@ class DialogWindow(QWidget):
         self.footer_frame = footer
 
     def finish(self, note: QLabel) -> None:
-        self.footer.addWidget(note, 1)
+        # The note keeps its own width (a wrapped label would otherwise shrink to a narrow
+        # column); the stretch pins CLOSE to the right edge.
+        note.setMinimumWidth(min(note.maximumWidth(), 300))
+        self.footer.addWidget(note, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.footer.addStretch(1)
         close = outline_button("CLOSE", font=display_font(16, 1.0), padding=(2, 14))
         close.clicked.connect(self.close)
-        self.footer.addWidget(close, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.footer.addWidget(close, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.close_button = close
         self.outer.addWidget(DashedRule("divider"))
         self.outer.addWidget(self.footer_frame)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt API
+        if (watched is self.header and event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton):
+            handle = self.windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+            return True
+        return super().eventFilter(watched, event)
 
     def keyPressEvent(self, event: object) -> None:  # noqa: N802 - Qt API
         if event.key() == Qt.Key.Key_Escape:
