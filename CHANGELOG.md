@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-10-12
+
+### Changed
+
+- **Settings and the KLIPY key guide now look like the widget.**
+  - Both are translucent glass cards with the same outline, shadow and **Card opacity**, instead of opaque windows with a system title bar.
+  - Drag them by the header, and close them with the new header ✕, the **CLOSE** button or Esc.
+  - **CLOSE** now sits at the footer's right edge.
+
 ## [0.5.2] - 2026-10-12
 
 ### Added
