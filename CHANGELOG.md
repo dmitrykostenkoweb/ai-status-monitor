@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-10-12
+
+### Changed
+
+- **New app icon: the coral radar** (`assets/icons/`).
+  - On Windows it appears on the Start-menu and desktop shortcuts and in Installed apps.
+  - On Linux it appears in the application menu and the autostart entry.
+  - The widget's own windows now use it too, instead of Python's icon.
+- Linux installs the icon into the hicolor theme properly: a PNG for each size from 16 to 512 px and an SVG under `scalable/`. The PNG that earlier installs put under `scalable/` is removed, and the uninstaller removes all of them.
+
 ## [0.5.4] - 2026-10-12
 
 ### Removed

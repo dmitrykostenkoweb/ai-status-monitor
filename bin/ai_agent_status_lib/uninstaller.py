@@ -135,9 +135,8 @@ def run(home: Path, bin_dir: Path, cache_dir: Path, config_dir: Path, data_dir: 
             report(f"✅ Removed {removed}")
     elif platform_support.PLATFORM == platform_support.LINUX:
         share = home / ".local" / "share"
-        for path in (share / "applications" / f"{autostart.APP_ID}.desktop",
-                     share / "icons" / "hicolor" / "scalable" / "apps" / f"{autostart.APP_ID}.png",
-                     autostart.linux_icon(home)):
+        for path in (share / "applications" / f"{autostart.APP_ID}.desktop", autostart.linux_icon(home),
+                     *autostart.linux_theme_icons(home), *autostart.legacy_linux_icons(home)):
             remove_path(path, report)
     remove_hooks(home / ".claude" / "settings.json", report)
     remove_hooks(home / ".codex" / "hooks.json", report)
