@@ -40,6 +40,56 @@ def current_platform(value: str | None = None) -> str:
 PLATFORM = current_platform()
 
 
+# ----------------------------- WSL bridge -----------------------------
+#
+# Agents running inside WSL can feed a widget running on Windows: the hook (installed
+# in WSL, hooks only) writes its status files into the Windows widget's cache dir
+# through the /mnt/<drive> mount. Linux PIDs mean nothing to the Windows widget, so
+# such a hook records no process ancestry (the ➜ button falls back to the title match).
+
+def is_wsl(environ: Mapping[str, str] | None = None, osrelease: Path = Path("/proc/sys/kernel/osrelease")) -> bool:
+    """Whether this Linux runs under Windows Subsystem for Linux."""
+    env = os.environ if environ is None else environ
+    if env.get("WSL_DISTRO_NAME") or env.get("WSL_INTEROP"):
+        return True
+    try:
+        return "microsoft" in osrelease.read_text(encoding="utf-8").lower()
+    except OSError:
+        return False
+
+
+def is_windows_mount(path: Path | str) -> bool:
+    """Whether ``path`` lives on a Windows drive mounted into WSL (``/mnt/c/…``)."""
+    parts = Path(path).parts
+    return len(parts) >= 3 and parts[0] == "/" and parts[1] == "mnt" and len(parts[2]) == 1 and parts[2].isalpha()
+
+
+def wsl_windows_profile(runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> Path | None:
+    """The Windows user profile (``%USERPROFILE%``) as a WSL path, or ``None``."""
+    try:
+        result = runner(
+            ["cmd.exe", "/d", "/c", "echo %USERPROFILE%"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=10, check=False,
+            cwd="/mnt/c" if os.path.isdir("/mnt/c") else None,  # cmd.exe warns on a UNC cwd
+        )
+        windows_path = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
+        if result.returncode != 0 or not windows_path or "%" in windows_path:
+            return None
+        converted = runner(
+            ["wslpath", "-u", windows_path],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=10, check=False,
+        )
+        path = converted.stdout.strip()
+        return Path(path) if converted.returncode == 0 and path else None
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return None
+
+
+def wsl_windows_cache_dir(profile: Path) -> Path:
+    """The Windows widget's default cache dir, seen from WSL."""
+    return profile / "AppData" / "Local" / APP_DIR_NAME / "cache"
+
+
 # ----------------------------- runtime directories -----------------------------
 
 def default_dir_values(platform: str | None = None) -> dict[str, str]:

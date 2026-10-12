@@ -16,10 +16,18 @@ interpreter of your own, or ``AI_STATUS_SKIP_PIP=1`` to skip the download.
 Run it with the Python interpreter that should run the widget and the hooks:
 ``python3 install.py`` (Linux/macOS, also what ``install.sh`` does) or
 ``py install.py`` / ``python install.py`` (Windows).
+
+``--hooks-only`` installs the scripts and hooks without the widget (no PySide6, no
+autostart, nothing started). Inside WSL, when the Windows widget is installed, this
+is the default: the hooks write their status files into the Windows widget's cache
+dir (``/mnt/c/Users/<you>/AppData/Local/ai-cli-status-monitor/cache``) so agents run
+in WSL show up on the Windows desktop. ``--windows-widget`` forces that bridge,
+``--no-windows-widget`` turns it off.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -448,12 +456,81 @@ def restart_widget(bin_dir: Path, cache_dir: Path, python: str) -> None:
     say(message)
 
 
+# ----------------------------- WSL → Windows widget -----------------------------
+
+def resolve_windows_bridge(
+    cache_dir: Path,
+    mode: str = "auto",
+    fresh: bool = True,
+    environ: dict[str, str] | None = None,
+    wsl: bool | None = None,
+    profile_lookup: Callable[[], Path | None] = platform_support.wsl_windows_profile,
+    report: Say = say,
+) -> Path | None:
+    """The Windows widget's cache dir the WSL hooks should write to, or ``None``.
+
+    ``mode`` is ``auto`` (bridge a ``fresh`` install when the Windows widget is installed),
+    ``on`` or ``off``. A cache dir that already points at a Windows drive (an earlier bridge
+    install, or the user's own choice) is kept, so the updater's plain re-run stays a bridge
+    install; an existing install with a Linux cache dir stays a Linux-widget install.
+    """
+    env = os.environ if environ is None else environ
+    if mode == "off" or PLATFORM != platform_support.LINUX:
+        return None
+    if not (platform_support.is_wsl(env) if wsl is None else wsl):
+        if mode == "on":
+            report("⚠️  --windows-widget only applies inside WSL; ignoring it.")
+        return None
+    if "AI_STATUS_CACHE_DIR" in env or platform_support.is_windows_mount(cache_dir):
+        return cache_dir if platform_support.is_windows_mount(cache_dir) else None
+    if mode == "auto" and not fresh:
+        return None
+    profile = profile_lookup()
+    if profile is None:
+        if mode == "on":
+            report("⚠️  Could not find the Windows user profile (cmd.exe / wslpath); "
+                   "set AI_STATUS_CACHE_DIR=/mnt/c/Users/<you>/AppData/Local/ai-cli-status-monitor/cache instead.")
+        return None
+    candidate = platform_support.wsl_windows_cache_dir(profile)
+    if mode == "on" or candidate.parent.is_dir():
+        return candidate
+    report(f"WSL detected, but no Windows widget found under {candidate.parent}; installing the Linux widget.")
+    report("   Install the widget on Windows first, then re-run this installer to feed it from WSL.")
+    return None
+
+
+def point_cache_at(runtime_env: Path, cache_dir: Path, report: Say = say) -> None:
+    """Make the hooks write to ``cache_dir`` (WSL bridge), backing up an existing ``.env``."""
+    if not runtime_env.exists():
+        os.environ["AI_STATUS_CACHE_DIR"] = str(cache_dir)  # install_environment_config honours it
+        return
+    if load_settings(env_path=runtime_env).cache_dir == cache_dir:
+        return
+    saved = backup(runtime_env)
+    write_env_value(runtime_env, "AI_STATUS_CACHE_DIR", str(cache_dir))
+    report(f"✅ AI_STATUS_CACHE_DIR set to the Windows widget's cache: {cache_dir}"
+           + (f" (backup: {saved})" if saved else ""))
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Install or update ai-cli-status-monitor.")
+    parser.add_argument("--hooks-only", action="store_true",
+                        help="install the hooks and helper scripts only: no widget, PySide6 or autostart")
+    bridge = parser.add_mutually_exclusive_group()
+    bridge.add_argument("--windows-widget", dest="windows_widget", action="store_const", const="on", default="auto",
+                        help="WSL: write statuses to the Windows widget's cache dir (implies --hooks-only)")
+    bridge.add_argument("--no-windows-widget", dest="windows_widget", action="store_const", const="off",
+                        help="WSL: never write to the Windows widget, install the Linux widget instead")
+    return parser.parse_args(argv)
+
+
 # ----------------------------- main -----------------------------
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     if sys.version_info < (3, 9):
         say("Python 3.9 or newer is required.")
         return 1
+    args = parse_args(argv)
     home = platform_support.home_dir()
     runtime_raw = os.environ.get("AI_STATUS_ENV_FILE", "").strip()
     runtime_env = Path(os.path.expanduser(runtime_raw)) if runtime_raw else platform_support.default_env_file(home)
@@ -474,16 +551,29 @@ def main() -> int:
 
     bin_dir = platform_support.default_bin_dir(home)
     cache_dir, config_dir, data_dir = settings.cache_dir, settings.config_dir, settings.data_dir
+    windows_cache = resolve_windows_bridge(cache_dir, args.windows_widget, fresh=not runtime_env.exists())
+    if windows_cache is not None:
+        cache_dir = windows_cache
+    hooks_only = args.hooks_only or windows_cache is not None
     for directory in (cache_dir / "last_payloads", cache_dir / "debug_payloads", config_dir, data_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
     copy_scripts(bin_dir)
     copy_data(data_dir)
-    widget_python = ensure_widget_python(data_dir)
+    widget_python = None if hooks_only else ensure_widget_python(data_dir)
     process_control.save_interpreters(data_dir, sys.executable, widget_python)
     if PLATFORM == platform_support.WINDOWS:
         write_windows_shims(bin_dir, widget_python)
-    notes = install_autostart(home, bin_dir, cache_dir, widget_python or sys.executable, settings.autostart)
+    if hooks_only:
+        try:
+            autostart.disable(home)  # a hooks-only install never starts a widget
+        except OSError:
+            pass
+        notes: list[str] = []
+    else:
+        notes = install_autostart(home, bin_dir, cache_dir, widget_python or sys.executable, settings.autostart)
+    if windows_cache is not None:
+        point_cache_at(runtime_env, windows_cache)
     install_environment_config(runtime_env, source_env, config_dir, home)
 
     add_hooks(home / ".claude" / "settings.json", process_control.hook_command(bin_dir, "claude"), CLAUDE_EVENTS)
@@ -500,16 +590,20 @@ def main() -> int:
     say(f"Installed ai-cli-status-monitor {version} ({PLATFORM}).")
     say("")
     say("Commands:")
-    for name in ("ai-agent-status-widget", "ai-agent-status-doctor", "ai-agent-status-panel", "ai-agent-status-update"):
+    commands = ("ai-agent-status-doctor", "ai-agent-status-panel", "ai-agent-status-update")
+    for name in commands if hooks_only else ("ai-agent-status-widget", *commands):
         say(f"  {bin_dir / (name + suffix)}")
     if PLATFORM == platform_support.WINDOWS:
         say(f"Add {bin_dir} to your PATH to run them by name.")
     say("")
-    if not toolkit_ok:
+    if hooks_only:
+        pass
+    elif not toolkit_ok:
         say("The widget UI needs PySide6 (Qt), which is not available yet:")
         say(toolkit_hint())
         say("")
-    missing_libraries = platform_support.missing_linux_qt_packages() if PLATFORM == platform_support.LINUX else []
+    linux_widget = PLATFORM == platform_support.LINUX and not hooks_only
+    missing_libraries = platform_support.missing_linux_qt_packages() if linux_widget else []
     if missing_libraries:
         say(f"⚠️  Qt needs {', '.join(missing_libraries)} to open windows on X11:")
         say(f"  sudo apt install {' '.join(missing_libraries)}")
@@ -522,7 +616,14 @@ def main() -> int:
     say(f"Run doctor:\n  {bin_dir / ('ai-agent-status-doctor' + suffix)}")
     say("")
 
-    if widget_python is not None and has_display() and not missing_libraries:
+    if windows_cache is not None:
+        say("Hooks only (WSL → Windows widget): statuses are written to")
+        say(f"  {windows_cache}")
+        say("Restart the Claude Code / Codex sessions in WSL so they load the hooks.")
+        say("The ➜ button can only find these sessions' terminal by window title.")
+    elif hooks_only:
+        say("Hooks only: the widget was not installed or started.")
+    elif widget_python is not None and has_display() and not missing_libraries:
         restart_widget(bin_dir, cache_dir, widget_python)
     elif toolkit_ok:
         say("No display found, widget was not started now. It will start on desktop login.")

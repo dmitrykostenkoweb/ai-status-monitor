@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from ai_agent_status_lib import platform_support
+
 
 # Sticker keys from the design spec, in the order the debug cycle shows them.
 STICKER_KEYS = ("analyzing", "coding", "waiting", "done", "error", "limit", "idle")
@@ -458,16 +460,19 @@ class KlipyClient:
 KLIPY_PARTNER_URL = "https://partner.klipy.com"
 KLIPY_GUIDE_PLATFORM_NAME = "AI Status Monitor"
 KLIPY_GUIDE_WEBSITE = "https://github.com/dmitrykostenkoweb/ai-status-monitor"
-KLIPY_GUIDE_KEY_NAME = "AI-Status-Monitor-Linux"
-KLIPY_GUIDE_DESCRIPTION = (
-    "AI Status Monitor is an open-source desktop widget for Linux (Python + GTK) that shows "
-    "the live status of AI coding agents (Claude Code, Codex CLI) running in the user's terminals. "
-    "When an agent's status changes (thinking, coding, waiting, done, error) the widget shows a small "
-    "sticker with a GIF next to that agent. The app calls the GIF Search API directly from the "
-    "user's machine with a status-related query, picks one result and loads it straight from the "
-    "KLIPY URL into memory - no server, no proxy, no media caching. Content filter: high. "
-    "Stickers with KLIPY content carry a KLIPY mark."
-)
+KLIPY_GUIDE_PLATFORM_LABELS = {"linux": "Linux", "macos": "macOS", "windows": "Windows"}
+
+
+def klipy_guide_key_name(platform: str | None = None) -> str:
+    """Suggested key name, named after the OS the widget runs on."""
+    system = platform or platform_support.PLATFORM
+    return f"AI-Status-Monitor-{KLIPY_GUIDE_PLATFORM_LABELS.get(system, 'Desktop')}"
+
+
+KLIPY_GUIDE_KEY_NAME = klipy_guide_key_name()
+# KLIPY's platform form accepts at most 50 characters here.
+KLIPY_GUIDE_DESCRIPTION_MAX = 50
+KLIPY_GUIDE_DESCRIPTION = "Desktop AI agent status widget with KLIPY GIFs"
 
 KLIPY_KEY_STATUS_MESSAGES = {
     "ok": "✓ The key works. Stickers now use GIFs from KLIPY.",

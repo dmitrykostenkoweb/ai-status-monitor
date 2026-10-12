@@ -1229,25 +1229,36 @@ class HoverBox(QWidget):
 # ---- GIF sticker: a tilted polaroid with a sound-effect caption, plus a speech bubble ----
 # Geometry follows the comic minimal handoff: the sticker block (bubble left, polaroid right,
 # vertically centred) has its right edge 6 px outside the card and its bottom 14 px below
-# the card's top edge.
-POLAROID_IMAGE = (96, 72)
-POLAROID_PADDING = (5, 5, 16)  # sides, top, bottom
+# the card's top edge. STICKER_SCALE enlarges the handoff's sticker (96×72 photo) by 30 %,
+# which was too small to make out on a real desktop.
+STICKER_SCALE = 1.3
+
+
+def ss(value: float) -> float:
+    """A handoff sticker size, enlarged by STICKER_SCALE."""
+    return value * STICKER_SCALE
+
+
+POLAROID_IMAGE = (round(ss(96)), round(ss(72)))
+POLAROID_PADDING = (ss(5), ss(5), ss(16))  # sides, top, bottom
 POLAROID_BORDER = 1.5
-POLAROID_RADIUS = 3
+POLAROID_RADIUS = ss(3)
 POLAROID_WIDTH = POLAROID_IMAGE[0] + 2 * POLAROID_PADDING[0] + 2 * POLAROID_BORDER
 POLAROID_HEIGHT = POLAROID_IMAGE[1] + POLAROID_PADDING[1] + POLAROID_PADDING[2] + 2 * POLAROID_BORDER
 POLAROID_SHADOW = 3
 POLAROID_SHADOW_COLOR = "rgba(0,0,0,0.5)"
 POLAROID_TILT_DEG = 4.0
-BUBBLE_TEXT_WIDTH = 150
-BUBBLE_PADDING = (6, 10, 5)  # top, sides, bottom
+BUBBLE_TEXT_WIDTH = ss(150)
+BUBBLE_PADDING = (ss(6), ss(10), ss(5))  # top, sides, bottom
 BUBBLE_BORDER = 1.5
-BUBBLE_RADIUS = 14
+BUBBLE_RADIUS = ss(14)
 BUBBLE_TILT_DEG = -3.0
 BUBBLE_SHADOW = 2
 BUBBLE_SHADOW_COLOR = "rgba(0,0,0,0.55)"
-BUBBLE_TAIL = 10      # side of the square tail, rotated 45° on the bubble's right edge
-BUBBLE_GAP = 8
+BUBBLE_TAIL = ss(10)  # side of the square tail, rotated 45° on the bubble's right edge
+BUBBLE_GAP = ss(8)
+BUBBLE_FONT_PX = ss(14)
+CAPTION_FONT_PX = ss(11)
 STICKER_RIGHT_OVERHANG = 6
 STICKER_BOTTOM_BELOW_CARD_TOP = 14
 OVERLAY_PAD = 20
@@ -1524,16 +1535,17 @@ class StickerOverlay(QWidget):
         painter.restore()
 
         if self.sfx:
-            font = display_font(11, 0.8)
+            font = display_font(CAPTION_FONT_PX, 0.8)
             painter.setFont(font)
             painter.setPen(qc(theme.INK_ON_COLOUR))
-            caption = QRectF(frame.left(), frame.bottom() - POLAROID_BORDER - 2 - 14, frame.width(), 14)
+            caption_h = ss(14)
+            caption = QRectF(frame.left(), frame.bottom() - POLAROID_BORDER - 2 - caption_h, frame.width(), caption_h)
             painter.drawText(caption, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, self.sfx)
         painter.restore()
 
     def draw_klipy_mark(self, painter: QPainter, image: QRectF) -> None:
         """Small "KLIPY" attribution mark in the image's bottom-right corner."""
-        font = comic_font(MONO_FAMILIES, 6, QFont.Weight.Bold)
+        font = comic_font(MONO_FAMILIES, round(ss(6)), QFont.Weight.Bold)
         metrics = QFontMetricsF(font)
         text_w, text_h = metrics.horizontalAdvance("KLIPY"), metrics.height()
         x = image.right() - text_w - 5
@@ -1561,8 +1573,8 @@ class StickerOverlay(QWidget):
         scale, opacity, dy = self.transform(delay_ms=BUBBLE_DELAY_MS if self.phase == "in" else 0.0)
         if opacity <= 0 or self.choice is None:
             return
-        font = display_font(14, 0.6)
-        layout, text_w, text_h = text_block(self.choice.bubble, font, BUBBLE_TEXT_WIDTH, line_height=14 * 1.05)
+        font = display_font(BUBBLE_FONT_PX, 0.6)
+        layout, text_w, text_h = text_block(self.choice.bubble, font, BUBBLE_TEXT_WIDTH, line_height=BUBBLE_FONT_PX * 1.05)
         pad_top, pad_side, pad_bottom = BUBBLE_PADDING
         width = text_w + 2 * (pad_side + BUBBLE_BORDER)
         height = text_h + pad_top + pad_bottom + 2 * BUBBLE_BORDER
@@ -1577,7 +1589,7 @@ class StickerOverlay(QWidget):
         body = QRectF(-width / 2, -height / 2, width, height)
         radius = min(BUBBLE_RADIUS, height / 2)
         # Tail: a 10 px square rotated 45° on the right edge at mid height (CSS right: -7px).
-        tail_center = QPointF(body.right() - BUBBLE_BORDER - BUBBLE_TAIL / 2 + 7, 0)
+        tail_center = QPointF(body.right() - BUBBLE_BORDER - BUBBLE_TAIL / 2 + ss(7), 0)
         diagonal = BUBBLE_TAIL / math.sqrt(2)
         tail = QPolygonF([tail_center + QPointF(0, -diagonal), tail_center + QPointF(diagonal, 0),
                           tail_center + QPointF(0, diagonal), tail_center + QPointF(-diagonal, 0)])
@@ -1604,10 +1616,10 @@ class StickerOverlay(QWidget):
         painter.restore()
 
 
-# Docked session windows stack under the widget: 14 px apart, plus the handoff's 96 px of
-# room for the sticker that stands on each card's top edge while stickers are on.
+# Docked session windows stack under the widget: 14 px apart, plus room (the handoff's 96 px,
+# scaled with the sticker) for the sticker that stands on each card's top edge while stickers are on.
 SESSION_CARD_SPACING = sci(14)
-SESSION_CARD_STICKER_ROOM = 96
+SESSION_CARD_STICKER_ROOM = round(ss(96))
 SESSION_CARD_TITLE = "AI agent session"
 MAIN_CARD_SHADOW = sci(3)
 SESSION_CARD_SHADOW = sci(3)
@@ -2165,10 +2177,9 @@ class KlipyKeyGuide(DialogWindow):
         for row, (label, value) in enumerate((
             ("Platform name", stickers.KLIPY_GUIDE_PLATFORM_NAME),
             ("Platform website", stickers.KLIPY_GUIDE_WEBSITE),
-            ("About / integration", "a ready-made description"),
+            ("Description", stickers.KLIPY_GUIDE_DESCRIPTION),
         )):
-            text = stickers.KLIPY_GUIDE_DESCRIPTION if row == 2 else value
-            self.attach_copy_row(grid, row, label, value, text)
+            self.attach_copy_row(grid, row, label, value, value)
         content.addLayout(grid)
         content.addWidget(self.hint("Then tick the KLIPY API Terms checkbox (read them first) and press Add Platform."))
 
@@ -2279,6 +2290,17 @@ def display_path(path: Path) -> str:
     except ValueError:
         return str(path)
     return "~/" + relative.as_posix()
+
+
+def local_hhmm(timestamp_iso: object) -> str:
+    """``HH:MM`` in this machine's zone for an offset-aware time (written by a WSL hook), else ``""``."""
+    if not isinstance(timestamp_iso, str):
+        return ""
+    try:
+        timestamp = datetime.fromisoformat(timestamp_iso)
+    except ValueError:
+        return ""
+    return timestamp.astimezone().strftime("%H:%M") if timestamp.tzinfo else ""
 
 
 class StatusWidget(QWidget):
@@ -2545,7 +2567,7 @@ class StatusWidget(QWidget):
                 continue
             status = str(data.get("status") or "")
             project = str(data.get("project") or "")
-            hhmm = str(data.get("timestamp_hhmm") or "")
+            hhmm = local_hhmm(data.get("timestamp_iso")) or str(data.get("timestamp_hhmm") or "")
             agent = str(data.get("agent") or path.stem).lower()
             cwd = str(data.get("cwd") or "")
             source_kind = normalize_kind(data.get("kind"), status)
@@ -2635,7 +2657,9 @@ class StatusWidget(QWidget):
             timestamp = datetime.fromisoformat(timestamp_iso)
         except ValueError:
             return None
-        return datetime.now() - timestamp
+        # A WSL hook feeding this widget writes an offset-aware time (its clock zone may differ).
+        now = datetime.now(timestamp.tzinfo) if timestamp.tzinfo else datetime.now()
+        return now - timestamp
 
     def should_hide_status(self, kind: StatusKind, _status: str, age: timedelta) -> bool:
         # Legacy text has already been normalized into `kind` by the loader.

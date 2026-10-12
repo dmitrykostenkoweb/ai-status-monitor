@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -402,6 +404,117 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(self.installer.pip_version("python3"), (22, 0, 2))
         with mock.patch.object(self.installer.subprocess, "run", side_effect=FileNotFoundError):
             self.assertEqual(self.installer.pip_version("python3"), ())
+
+
+class WslBridgeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.installer = load_installer()
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.messages: list[str] = []
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_detects_wsl(self) -> None:
+        osrelease = self.root / "osrelease"
+        osrelease.write_text("5.15.153.1-microsoft-standard-WSL2\n")
+        self.assertTrue(platform_support.is_wsl({}, osrelease))
+        self.assertTrue(platform_support.is_wsl({"WSL_DISTRO_NAME": "Ubuntu"}, self.root / "missing"))
+        osrelease.write_text("6.8.0-45-generic\n")
+        self.assertFalse(platform_support.is_wsl({}, osrelease))
+        self.assertFalse(platform_support.is_wsl({}, self.root / "missing"))
+
+    def test_windows_mount(self) -> None:
+        self.assertTrue(platform_support.is_windows_mount("/mnt/c/Users/p/AppData/Local/ai-cli-status-monitor/cache"))
+        self.assertTrue(platform_support.is_windows_mount(Path("/mnt/d/x")))
+        self.assertFalse(platform_support.is_windows_mount("/mnt/data/x"))
+        self.assertFalse(platform_support.is_windows_mount("/home/p/.cache/ai-cli-status-monitor"))
+        self.assertFalse(platform_support.is_windows_mount("/mnt"))
+
+    def test_windows_profile_lookup(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            out = "C:\\Users\\p.wojtyra\r\n" if command[0] == "cmd.exe" else "/mnt/c/Users/p.wojtyra\n"
+            return subprocess.CompletedProcess(command, 0, stdout=out)
+
+        profile = platform_support.wsl_windows_profile(runner)
+        self.assertEqual(profile, Path("/mnt/c/Users/p.wojtyra"))
+        self.assertEqual(calls[1], ["wslpath", "-u", "C:\\Users\\p.wojtyra"])
+        self.assertEqual(platform_support.wsl_windows_cache_dir(profile),
+                         Path("/mnt/c/Users/p.wojtyra/AppData/Local/ai-cli-status-monitor/cache"))
+
+        def unexpanded(command, **_kwargs):
+            return subprocess.CompletedProcess(command, 0, stdout="%USERPROFILE%\r\n")
+
+        self.assertIsNone(platform_support.wsl_windows_profile(unexpanded))
+
+        def missing(command, **_kwargs):
+            raise FileNotFoundError(command[0])
+
+        self.assertIsNone(platform_support.wsl_windows_profile(missing))
+
+    def resolve(self, cache: Path, mode: str = "auto", fresh: bool = True, environ=None, wsl: bool = True):
+        profile = self.root / "profile"
+        with mock.patch.object(self.installer, "PLATFORM", "linux"):
+            return self.installer.resolve_windows_bridge(
+                cache, mode, fresh=fresh, environ=environ or {}, wsl=wsl,
+                profile_lookup=lambda: profile, report=self.messages.append,
+            )
+
+    def test_bridge_auto_needs_wsl_and_an_installed_windows_widget(self) -> None:
+        linux_cache = Path("/home/p/.cache/ai-cli-status-monitor")
+        windows_cache = platform_support.wsl_windows_cache_dir(self.root / "profile")
+        self.assertIsNone(self.resolve(linux_cache, wsl=False))
+        self.assertIsNone(self.resolve(linux_cache))  # no Windows install yet
+        self.assertTrue(any("no Windows widget found" in message for message in self.messages))
+        windows_cache.parent.mkdir(parents=True)
+        self.assertEqual(self.resolve(linux_cache), windows_cache)
+        # An existing Linux-widget install is never switched behind the user's back...
+        self.assertIsNone(self.resolve(linux_cache, fresh=False))
+        # ...unless asked, and never when told not to.
+        self.assertEqual(self.resolve(linux_cache, "on", fresh=False), windows_cache)
+        self.assertIsNone(self.resolve(linux_cache, "off"))
+
+    def test_bridge_keeps_a_cache_dir_already_on_windows(self) -> None:
+        bridged = Path("/mnt/c/Users/p/AppData/Local/ai-cli-status-monitor/cache")
+        self.assertEqual(self.resolve(bridged, fresh=False), bridged)
+        explicit = Path("/home/p/custom-cache")
+        self.assertIsNone(self.resolve(explicit, "on", environ={"AI_STATUS_CACHE_DIR": str(explicit)}))
+
+    def test_point_cache_at_rewrites_existing_env_with_backup(self) -> None:
+        runtime = self.root / ".env"
+        runtime.write_text("AI_STATUS_CACHE_DIR=/home/p/.cache/x\nAI_STATUS_MAX_ROWS=7\n", encoding="utf-8")
+        target = Path("/mnt/c/Users/p/AppData/Local/ai-cli-status-monitor/cache")
+        self.installer.point_cache_at(runtime, target, report=self.messages.append)
+        text = runtime.read_text(encoding="utf-8")
+        self.assertIn(f"AI_STATUS_CACHE_DIR={target}", text)
+        self.assertIn("AI_STATUS_MAX_ROWS=7", text)
+        self.assertEqual(len(list(self.root.glob(".env.bak.*"))), 1)
+
+    def test_parse_args(self) -> None:
+        args = self.installer.parse_args([])
+        self.assertEqual((args.hooks_only, args.windows_widget), (False, "auto"))
+        self.assertEqual(self.installer.parse_args(["--windows-widget"]).windows_widget, "on")
+        self.assertEqual(self.installer.parse_args(["--no-windows-widget"]).windows_widget, "off")
+        self.assertTrue(self.installer.parse_args(["--hooks-only"]).hooks_only)
+
+    def test_bridged_hook_writes_no_linux_pids_and_an_aware_time(self) -> None:
+        loader = importlib.machinery.SourceFileLoader("ai_status_hook", str(ROOT / "bin" / "ai-agent-status-hook"))
+        spec = importlib.util.spec_from_loader("ai_status_hook", loader)
+        hook = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(os.environ, {"AI_STATUS_CACHE_DIR": str(self.root / "cache")}):
+            loader.exec_module(hook)
+        payload = {"hook_event_name": "Stop", "session_id": "s", "cwd": "/home/p/proj"}
+        local = hook.build_status("claude", payload, self.root / "p.json")
+        self.assertTrue(local["client_pids"])
+        with mock.patch.object(hook.platform_support, "PLATFORM", "linux"), \
+                mock.patch.object(hook.platform_support, "is_windows_mount", return_value=True):
+            bridged = hook.build_status("claude", payload, self.root / "p.json")
+        self.assertEqual(bridged["client_pids"], [])
+        self.assertIsNotNone(datetime.fromisoformat(bridged["timestamp_iso"]).tzinfo)
 
 
 if __name__ == "__main__":

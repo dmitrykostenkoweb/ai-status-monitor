@@ -310,7 +310,13 @@ class KlipyKeyCheckTests(unittest.TestCase):
         self.assertTrue(stickers.KLIPY_GUIDE_WEBSITE.startswith("https://github.com/"))
         self.assertTrue(stickers.KLIPY_PARTNER_URL.startswith("https://partner.klipy.com"))
         self.assertIn("KLIPY", stickers.KLIPY_GUIDE_DESCRIPTION)
-        self.assertLess(len(stickers.KLIPY_GUIDE_DESCRIPTION), 1000)
+        self.assertLessEqual(len(stickers.KLIPY_GUIDE_DESCRIPTION), stickers.KLIPY_GUIDE_DESCRIPTION_MAX)
+        self.assertLessEqual(stickers.KLIPY_GUIDE_DESCRIPTION_MAX, 50)
+
+    def test_klipy_key_name_follows_the_platform(self) -> None:
+        self.assertEqual(stickers.klipy_guide_key_name("windows"), "AI-Status-Monitor-Windows")
+        self.assertEqual(stickers.klipy_guide_key_name("macos"), "AI-Status-Monitor-macOS")
+        self.assertEqual(stickers.klipy_guide_key_name("linux"), "AI-Status-Monitor-Linux")
 
 
 class StickerSourceTests(unittest.TestCase):
