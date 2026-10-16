@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import ssl
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -540,3 +542,107 @@ def quote_command(argv: Sequence[str], platform: str | None = None) -> str:
     import shlex
 
     return " ".join(shlex.quote(arg) for arg in argv)
+
+
+# ----------------------------- HTTPS trust store -----------------------------
+
+# python.org's macOS Python ships its own OpenSSL with an empty trust store until the user
+# runs "Install Certificates.command"; every HTTPS request then fails certificate checks.
+MACOS_TRUST_KEYCHAINS = (
+    "/System/Library/Keychains/SystemRootCertificates.keychain",
+    "/Library/Keychains/System.keychain",  # admin-installed (e.g. corporate proxy) roots
+)
+PEM_END = "-----END CERTIFICATE-----"
+
+
+def macos_keychain_certificates(runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> str:
+    """PEM text of the macOS system root certificates, or "" when ``security`` fails."""
+    chunks: list[str] = []
+    for keychain in MACOS_TRUST_KEYCHAINS:
+        try:
+            result = runner(
+                ["security", "find-certificate", "-a", "-p", keychain],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=10, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode == 0 and isinstance(result.stdout, str):
+            chunks.append(result.stdout)
+    return "".join(chunks)
+
+
+def https_context(
+    platform: str | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> ssl.SSLContext:
+    """A verifying SSL context; on macOS it falls back to the Keychain's root certificates."""
+    context = ssl.create_default_context()
+    if (platform or PLATFORM) != MACOS or context.cert_store_stats().get("x509_ca"):
+        return context
+    pem = macos_keychain_certificates(runner)
+    if not pem:
+        return context
+    try:
+        context.load_verify_locations(cadata=pem)
+    except (ssl.SSLError, ValueError):
+        # One certificate OpenSSL cannot parse must not discard the rest.
+        for block in pem.split(PEM_END):
+            if "BEGIN CERTIFICATE" in block:
+                try:
+                    context.load_verify_locations(cadata=block.strip() + "\n" + PEM_END + "\n")
+                except (ssl.SSLError, ValueError):
+                    pass
+    return context
+
+
+def install_https_opener(platform: str | None = None) -> None:
+    """Make every ``urllib.request.urlopen`` without an explicit context use ``https_context``."""
+    if (platform or PLATFORM) != MACOS:
+        return
+    try:
+        handler = urllib.request.HTTPSHandler(context=https_context(platform))
+    except (OSError, ssl.SSLError, ValueError):
+        return
+    urllib.request.install_opener(urllib.request.build_opener(handler))
+
+
+# ----------------------------- macOS Dock -----------------------------
+
+NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
+
+
+def hide_from_macos_dock(platform: str | None = None) -> bool:
+    """Run as a macOS accessory app: no Dock icon (labelled "Python"), no app menu.
+
+    The widget windows stay out of the taskbar on every OS; on macOS a bare interpreter
+    still gets a Dock tile named after Python.app. Call once the Qt application exists
+    (it loads AppKit). Returns True when the policy was applied.
+    """
+    if (platform or PLATFORM) != MACOS:
+        return False
+    try:
+        import ctypes
+        import ctypes.util
+
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc") or "/usr/lib/libobjc.A.dylib")
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        # objc_msgSend must be called through a prototype matching each message (arm64 ABI).
+        send_id = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(
+            ctypes.cast(objc.objc_msgSend, ctypes.c_void_p).value
+        )
+        send_long = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long)(
+            ctypes.cast(objc.objc_msgSend, ctypes.c_void_p).value
+        )
+        ns_application = objc.objc_getClass(b"NSApplication")
+        if not ns_application:
+            return False
+        app = send_id(ns_application, objc.sel_registerName(b"sharedApplication"))
+        if not app:
+            return False
+        return bool(send_long(app, objc.sel_registerName(b"setActivationPolicy:"),
+                              NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY))
+    except Exception:
+        return False

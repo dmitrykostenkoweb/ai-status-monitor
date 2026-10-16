@@ -258,6 +258,28 @@ class KeychainTests(unittest.TestCase):
             raise FileNotFoundError("security")
         self.assertIsNone(_claude_keychain_token(missing))
 
+    def test_reads_hex_encoded_keychain_secret(self) -> None:
+        payload = json.dumps({"claudeAiOauth": {"accessToken": "tok"}}).encode().hex()
+        runner = lambda command, **_k: subprocess.CompletedProcess(command, 0, stdout=payload + "\n")  # noqa: E731
+        self.assertEqual(_claude_keychain_token(runner), "tok")
+
+    def test_https_context_adds_keychain_roots_only_on_macos(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 1, stdout="")
+
+        platform_support.https_context(platform_support.LINUX, runner)
+        self.assertEqual(calls, [])
+        with mock.patch.object(platform_support.ssl.SSLContext, "cert_store_stats", return_value={"x509_ca": 0}):
+            context = platform_support.https_context(platform_support.MACOS, runner)
+        self.assertEqual([command[:3] for command in calls], [["security", "find-certificate", "-a"]] * 2)
+        self.assertEqual(context.verify_mode, platform_support.ssl.CERT_REQUIRED)
+
+    def test_dock_hiding_is_macos_only(self) -> None:
+        self.assertFalse(platform_support.hide_from_macos_dock(platform_support.LINUX))
+
 
 class InstallerTests(unittest.TestCase):
     def setUp(self) -> None:

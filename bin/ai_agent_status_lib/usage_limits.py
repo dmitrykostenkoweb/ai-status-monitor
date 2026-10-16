@@ -9,7 +9,9 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import ssl
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +21,8 @@ from ai_agent_status_lib import platform_support
 
 
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+# The OAuth endpoints reject Claude Code's subscription token without this beta flag.
+CLAUDE_OAUTH_BETA = "oauth-2025-04-20"
 FABLE_MODEL_NAME = "fable"
 
 
@@ -413,7 +417,15 @@ def _claude_keychain_token(runner: Any = subprocess.run) -> str | None:
         return None
     if result.returncode != 0:
         return None
-    return _claude_token_from_json(result.stdout.strip())
+    raw = result.stdout.strip()
+    token = _claude_token_from_json(raw)
+    if token is None and raw and len(raw) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in raw):
+        # `security -w` prints the secret as hex when it is not plain text.
+        try:
+            token = _claude_token_from_json(bytes.fromhex(raw).decode("utf-8"))
+        except ValueError:
+            return None
+    return token
 
 
 def collect_claude_usage(
@@ -423,31 +435,47 @@ def collect_claude_usage(
     timeout: float = 4.0,
     opener: Any = urllib.request.urlopen,
 ) -> list[UsageLimit]:
+    """Claude's limits; raises ``UsageSourceError`` with a short, secret-free reason."""
     token = _claude_access_token(credentials or claude_credentials_path())
     if token is None and credentials is None and platform_support.PLATFORM == platform_support.MACOS:
         token = _claude_keychain_token()
+        if token is None:
+            raise UsageSourceError(f'no Claude login in the Keychain ("{CLAUDE_KEYCHAIN_SERVICE}")')
     if token is None:
-        raise UsageSourceError("Claude usage unavailable")
+        raise UsageSourceError("no Claude login (.credentials.json)")
 
     request = urllib.request.Request(
         CLAUDE_USAGE_URL,
         headers={
             "Authorization": f"Bearer {token}",
             "anthropic-version": "2023-06-01",
+            "anthropic-beta": CLAUDE_OAUTH_BETA,
             "User-Agent": "ai-cli-status-monitor",
         },
     )
     try:
         with opener(request, timeout=timeout) as response:
             payload = json.loads(response.read(65_536).decode("utf-8"))
-        limits = parse_claude_usage(payload, fetched_at=fetched_at)
-        if not limits:
-            raise UsageSourceError("Claude usage unavailable")
-        return limits
-    except UsageSourceError:
-        raise
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            raise UsageSourceError(f"HTTP {error.code}: Claude login expired or rejected") from None
+        raise UsageSourceError(f"HTTP {error.code}") from None
+    except urllib.error.URLError as error:
+        if isinstance(error.reason, ssl.SSLCertVerificationError):
+            raise UsageSourceError("TLS certificate check failed (Python has no CA certificates)") from None
+        raise UsageSourceError("network error") from None
+    except ssl.SSLCertVerificationError:
+        raise UsageSourceError("TLS certificate check failed (Python has no CA certificates)") from None
+    except (OSError, TimeoutError):
+        raise UsageSourceError("network error") from None
+    except (ValueError, UnicodeDecodeError):
+        raise UsageSourceError("unexpected response") from None
     except Exception:
-        raise UsageSourceError("Claude usage unavailable") from None
+        raise UsageSourceError("unavailable") from None
+    limits = parse_claude_usage(payload, fetched_at=fetched_at)
+    if not limits:
+        raise UsageSourceError("no limits in the response")
+    return limits
 
 
 def _tail_lines(path: Path, max_lines: int, max_bytes: int = 262_144) -> list[str]:
@@ -622,15 +650,19 @@ def refresh_usage(
     ))
     for provider in selected_providers:
         collector = collectors[provider]
+        reason = "unavailable"
         try:
             collected = collector()
+        except UsageSourceError as error:
+            collected = []
+            reason = str(error) or reason
         except Exception:
             collected = []
         normalized = _sanitized_providers({provider: collected})[provider]
         if normalized:
             providers[provider] = normalized
         else:
-            errors[provider] = "unavailable"
+            errors[provider] = reason
 
     if persist:
         try:

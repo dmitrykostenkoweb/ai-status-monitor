@@ -14,6 +14,7 @@ from ai_agent_status_lib import autostart  # noqa: E402
 from ai_agent_status_lib import platform_support  # noqa: E402
 from ai_agent_status_lib import process_control  # noqa: E402
 from ai_agent_status_lib import updates  # noqa: E402
+from ai_agent_status_lib import usage_limits  # noqa: E402
 from ai_agent_status_lib.env_config import format_agents  # noqa: E402
 from ai_agent_status_lib.env_config import load_settings  # noqa: E402
 
@@ -130,6 +131,7 @@ def latest_status_age(agent: str) -> timedelta | None:
 
 
 def main() -> int:
+    platform_support.install_https_opener()
     if SETTINGS.env_file.exists():
         ok(f"Environment config: {SETTINGS.env_file}")
     else:
@@ -213,6 +215,13 @@ def main() -> int:
             warn(f"PySide6 missing for {detail}: re-run the installer (it sets up a private venv)")
             if PLATFORM == platform_support.LINUX:
                 warn("Linux packages the installer and Qt need: sudo apt install python3-venv libxcb-cursor0 wmctrl")
+
+    if "claude" in SETTINGS.agents:
+        try:
+            usage_limits.collect_claude_usage()
+            ok("Claude usage limits readable")
+        except usage_limits.UsageSourceError as error:
+            warn(f"Claude usage limits unavailable: {error}")
 
     age = latest_status_age("codex")
     if age is None:
