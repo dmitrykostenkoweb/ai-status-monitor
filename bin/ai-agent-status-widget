@@ -248,6 +248,7 @@ def ensure_app() -> QApplication:
         if APP_ICON.is_file():
             app.setWindowIcon(QIcon(str(APP_ICON)))  # dialogs / Alt-Tab, instead of Python's icon
         app.setQuitOnLastWindowClosed(False)
+        platform_support.hide_from_macos_dock()  # else a Dock tile labelled "Python"
         app.setStyle("Fusion")
         load_fonts()
         app.setFont(body_font(13))
@@ -3040,9 +3041,12 @@ class StatusWidget(QWidget):
         self.usage_refreshing = False
         self.usage_refreshing_providers = set()
         self.render_usage_limits()
-        unavailable = sorted(snapshot.get("errors", {}))
-        if unavailable:
-            log(f"usage unavailable for: {', '.join(unavailable)}")
+        errors = snapshot.get("errors", {})
+        if errors:
+            log("usage unavailable for: " + ", ".join(
+                provider if reason == "unavailable" else f"{provider} ({reason})"
+                for provider, reason in sorted(errors.items())
+            ))
         return False
 
     def finish_demo_usage_refresh(self) -> bool:
@@ -3825,6 +3829,7 @@ def main() -> int:
     for warning in CONFIG_WARNINGS:
         log(f"configuration: {warning}")
     PID_FILE.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    platform_support.install_https_opener()
     app = ensure_app()
     widget = StatusWidget(demo=args.demo)
     widget.show()

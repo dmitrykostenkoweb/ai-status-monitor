@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from ai_agent_status_lib import platform_support  # noqa: E402
 from ai_agent_status_lib import updates  # noqa: E402
 from ai_agent_status_lib.env_config import load_settings  # noqa: E402
 
@@ -38,6 +39,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Update ai-cli-status-monitor from GitHub.")
     parser.add_argument("--check", action="store_true", help="only report whether an update is available")
     args = parser.parse_args()
+    platform_support.install_https_opener()
 
     if args.check:
         local = updates.installed_version()

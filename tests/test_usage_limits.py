@@ -3,9 +3,12 @@ from __future__ import annotations
 import io
 import json
 import os
+import ssl
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -345,7 +348,7 @@ class ClaudeCollectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             credentials = Path(directory) / ".credentials.json"
 
-            with self.assertRaisesRegex(UsageSourceError, "Claude usage unavailable"):
+            with self.assertRaisesRegex(UsageSourceError, r"^no Claude login \(\.credentials\.json\)$"):
                 collect_claude_usage(credentials, fetched_at=FETCHED_AT)
 
             self.assertFalse(credentials.exists())
@@ -368,7 +371,7 @@ class ClaudeCollectorTests(unittest.TestCase):
                 collect_claude_usage(credentials, fetched_at=FETCHED_AT, opener=timeout_opener)
 
         self.assertNotIn(secret, str(caught.exception))
-        self.assertEqual(str(caught.exception), "Claude usage unavailable")
+        self.assertEqual(str(caught.exception), "network error")
 
     def test_collects_valid_usage_through_injected_http_transport(self) -> None:
         response_payload = {
@@ -417,8 +420,46 @@ class ClaudeCollectorTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(UsageSourceError, "^Claude usage unavailable$"):
+            with self.assertRaisesRegex(UsageSourceError, "^unexpected response$"):
                 collect_claude_usage(credentials, fetched_at=FETCHED_AT, opener=opener)
+
+    def collect_with(self, opener: object) -> UsageSourceError:
+        with tempfile.TemporaryDirectory() as directory:
+            credentials = Path(directory) / ".credentials.json"
+            credentials.write_text(
+                json.dumps({"claudeAiOauth": {"accessToken": "oauth-secret-token"}}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(UsageSourceError) as caught:
+                collect_claude_usage(credentials, fetched_at=FETCHED_AT, opener=opener)
+        self.assertNotIn("oauth-secret-token", str(caught.exception))
+        return caught.exception
+
+    def test_sends_oauth_beta_header(self) -> None:
+        seen: dict[str, str] = {}
+
+        def opener(request: urllib.request.Request, *, timeout: float) -> FakeHttpResponse:
+            seen.update({key.lower(): value for key, value in request.header_items()})
+            return FakeHttpResponse(b"{}")
+
+        self.collect_with(opener)
+        self.assertEqual(seen.get("anthropic-beta"), "oauth-2025-04-20")
+
+    def test_failure_reasons_name_the_cause(self) -> None:
+        def rejected(request: urllib.request.Request, *, timeout: float) -> FakeHttpResponse:
+            raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+        def no_ca(_request: object, *, timeout: float) -> FakeHttpResponse:
+            raise urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed"))
+
+        def offline(_request: object, *, timeout: float) -> FakeHttpResponse:
+            raise urllib.error.URLError(OSError("no route"))
+
+        self.assertIn("HTTP 401", str(self.collect_with(rejected)))
+        self.assertIn("TLS certificate", str(self.collect_with(no_ca)))
+        self.assertEqual(str(self.collect_with(offline)), "network error")
+        self.assertEqual(str(self.collect_with(lambda _r, *, timeout: FakeHttpResponse(b"{}"))),
+                         "no limits in the response")
 
 
 class UsageCacheTests(unittest.TestCase):
@@ -498,7 +539,7 @@ class UsageRefreshTests(unittest.TestCase):
 
     def test_provider_failure_keeps_cache_while_other_provider_updates(self) -> None:
         def failed_claude() -> list[dict[str, object]]:
-            raise UsageSourceError("Claude usage unavailable")
+            raise UsageSourceError("HTTP 401: Claude login expired or rejected")
 
         def successful_codex() -> list[dict[str, object]]:
             return [self.limit("codex", "Weekly", 7.0)]
@@ -520,7 +561,7 @@ class UsageRefreshTests(unittest.TestCase):
         self.assertTrue(snapshot["providers"]["claude"][0]["stale"])
         self.assertEqual(snapshot["providers"]["codex"][0]["used_percent"], 7.0)
         self.assertFalse(snapshot["providers"]["codex"][0]["stale"])
-        self.assertEqual(snapshot["errors"], {"claude": "unavailable"})
+        self.assertEqual(snapshot["errors"], {"claude": "HTTP 401: Claude login expired or rejected"})
         self.assertEqual(persisted["codex"][0]["used_percent"], 7.0)
 
     def test_targeted_refresh_preserves_other_provider(self) -> None:
